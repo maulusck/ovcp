@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenVPN server (managed by ovcp)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/openvpn --config /var/lib/ovcp/server.conf
+ExecReload=/bin/kill -USR1 $MAINPID
+# socket dir root:ovcp 0750 — directory perms guard the mgmt socket
+Group=ovcp
+RuntimeDirectory=ovcp
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=2
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_SETGID CAP_SETUID
+DeviceAllow=/dev/net/tun rw
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ovcp /run/ovcp
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

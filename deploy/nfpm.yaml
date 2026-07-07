@@ -1,0 +1,19 @@
+name: ovcp
+arch: amd64
+platform: linux
+version: ${VERSION}
+maintainer: OVCP
+description: OpenVPN Control Plane — web UI and native PKI for OpenVPN
+license: MIT
+depends: [openvpn]
+scripts:
+  postinstall: deploy/postinstall.sh
+contents:
+  - src: bin/ovcp
+    dst: /usr/local/bin/ovcp
+  - src: deploy/systemd/ovcp.service
+    dst: /usr/lib/systemd/system/ovcp.service
+  - src: deploy/systemd/openvpn-ovcp.service
+    dst: /usr/lib/systemd/system/openvpn-ovcp.service
+  - src: docs/ovcp.8
+    dst: /usr/share/man/man8/ovcp.8

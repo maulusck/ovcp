@@ -1,0 +1,162 @@
+// Package api: HTTPS-only REST/JSON admin API + embedded UI.
+package api
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"io/fs"
+	"net/http"
+	"strings"
+
+	"github.com/ovcp/ovcp/internal/auth"
+	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/ovpnconf"
+	"github.com/ovcp/ovcp/internal/pki"
+	"github.com/ovcp/ovcp/internal/store"
+)
+
+type Server struct {
+	Store         *store.Store
+	Auth          *auth.Service
+	PKI           *pki.PKI
+	Mgmt          *controller.Client
+	Reloader      controller.Reloader
+	ConfigPath    string // rendered server.conf
+	TLSCrypt      string // tls-crypt key path
+	DefaultRemote string // OVCP_SERVER_CN / server cert CN; default client remote
+	UI            fs.FS  // built frontend; nil = API only
+}
+
+const (
+	sessionCookie = "ovcp_session"
+	csrfCookie    = "ovcp_csrf"
+	csrfHeader    = "X-OVCP-CSRF"
+)
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	// public
+	mux.HandleFunc("POST /api/login", s.handleLogin)
+	// authenticated
+	mux.Handle("POST /api/logout", s.wrap(auth.RoleReadonly, s.handleLogout))
+	mux.Handle("GET /api/me", s.wrap(auth.RoleReadonly, s.handleMe))
+	mux.Handle("GET /api/status", s.wrap(auth.RoleReadonly, s.handleStatus))
+	mux.Handle("GET /api/certs", s.wrap(auth.RoleReadonly, s.handleCertList))
+	mux.Handle("GET /api/config", s.wrap(auth.RoleReadonly, s.handleConfigGet))
+	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))
+	mux.Handle("POST /api/clients/kill", s.wrap(auth.RoleOperator, s.handleKill))
+	mux.Handle("POST /api/certs", s.wrap(auth.RoleOperator, s.handleIssue))
+	mux.Handle("POST /api/certs/revoke", s.wrap(auth.RoleOperator, s.handleRevoke))
+	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
+	mux.Handle("PUT /api/config", s.wrap(auth.RoleAdmin, s.handleConfigPut))
+	mux.Handle("POST /api/reload", s.wrap(auth.RoleAdmin, s.handleReload))
+	mux.Handle("POST /api/restart", s.wrap(auth.RoleAdmin, s.handleRestart))
+	mux.Handle("GET /api/certs/download", s.wrap(auth.RoleReadonly, s.handleCertDownload))
+	if s.UI != nil {
+		mux.Handle("/", spa(s.UI))
+	}
+	return secureHeaders(mux)
+}
+
+type handler func(w http.ResponseWriter, r *http.Request, u *store.User)
+
+// wrap = session auth + CSRF (mutating verbs) + RBAC.
+func (s *Server) wrap(required auth.Role, h handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie(sessionCookie)
+		if err != nil {
+			jsonErr(w, 401, "not authenticated")
+			return
+		}
+		u, err := s.Auth.Validate(c.Value)
+		if err != nil || u == nil {
+			jsonErr(w, 401, "not authenticated")
+			return
+		}
+		if r.Method != http.MethodGet {
+			cc, err := r.Cookie(csrfCookie)
+			if err != nil || cc.Value == "" || r.Header.Get(csrfHeader) != cc.Value {
+				jsonErr(w, 403, "csrf check failed")
+				return
+			}
+		}
+		if !auth.Role(u.Role).Can(required) {
+			jsonErr(w, 403, "insufficient role")
+			return
+		}
+		h(w, r, u)
+	})
+}
+
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Strict-Transport-Security", "max-age=31536000")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// spa serves the embedded UI, falling back to index.html for client routes.
+func spa(ui fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(ui))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p == "" {
+			p = "index.html"
+		}
+		if _, err := fs.Stat(ui, p); err != nil {
+			r.URL.Path = "/"
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+}
+
+// --- helpers ---
+
+func jsonOK(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func jsonErr(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func decode(r *http.Request, v any) bool {
+	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20)).Decode(v) == nil
+}
+
+func randToken() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func clientIP(r *http.Request) string {
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	return host
+}
+
+// LoadConfig reads persisted server config (settings key) or defaults.
+func (s *Server) LoadConfig() ovpnconf.Config {
+	cfg := ovpnconf.Default()
+	if raw, err := s.Store.GetSetting("server_config"); err == nil && raw != "" {
+		json.Unmarshal([]byte(raw), &cfg)
+	}
+	return cfg
+}
+
+func (s *Server) saveConfig(cfg ovpnconf.Config) error {
+	raw, _ := json.Marshal(cfg)
+	return s.Store.SetSetting("server_config", string(raw))
+}

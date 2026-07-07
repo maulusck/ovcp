@@ -1,0 +1,53 @@
+# k8s 1.29+: ovcp as native sidecar (initContainer restartPolicy: Always)
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: ovcp }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ovcp } }
+  template:
+    metadata: { labels: { app: ovcp } }
+    spec:
+      initContainers:
+        - name: app
+          image: ovcp:latest
+          restartPolicy: Always
+          env:
+            - { name: OVCP_PLATFORM, value: k8s }
+            - { name: OVCP_LISTEN, value: 0.0.0.0:8443 }
+          ports: [{ containerPort: 8443 }]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/ovcp }
+            - { name: run, mountPath: /run/ovcp }
+      containers:
+        - name: openvpn
+          image: ovcp:latest
+          args: [openvpn]
+          securityContext:
+            capabilities: { add: [NET_ADMIN] }
+          ports: [{ containerPort: 1194, protocol: UDP }]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/ovcp }
+            - { name: run, mountPath: /run/ovcp }
+            - { name: tun, mountPath: /dev/net/tun }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: ovcp-data }
+        - { name: run, emptyDir: {} }
+        - name: tun
+          hostPath: { path: /dev/net/tun }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: ovcp-data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 1Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ovcp-vpn }
+spec:
+  type: LoadBalancer
+  selector: { app: ovcp }
+  ports: [{ port: 1194, protocol: UDP }]

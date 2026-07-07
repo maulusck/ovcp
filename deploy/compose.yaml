@@ -1,0 +1,23 @@
+# one image, two roles.
+# first run: docker compose -f deploy/compose.yaml run --rm -it \
+#   -e OVCP_SERVER_CN=vpn.example.com app init -server-cn vpn.example.com
+services:
+  openvpn:
+    build: { context: .., dockerfile: Containerfile }
+    command: [openvpn]
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun]
+    ports: ["1194:1194/udp"]
+    volumes: [data:/var/lib/ovcp, run:/run/ovcp]
+    environment: { OVCP_PLATFORM: compose }
+  app:
+    build: { context: .., dockerfile: Containerfile }
+    restart: unless-stopped
+    depends_on: [openvpn]
+    ports: ["127.0.0.1:8443:8443"]
+    volumes: [data:/var/lib/ovcp, run:/run/ovcp]
+    environment: { OVCP_PLATFORM: compose }
+volumes:
+  data:
+  run:
