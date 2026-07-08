@@ -251,9 +251,8 @@ func main() {
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 		listen := fs.String("listen", envOr("OVCP_LISTEN", "127.0.0.1:8443"), "admin UI listen addr(s), comma-separated")
 		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
-		unit := fs.String("unit", envOr("OVCP_SYSTEMD_UNIT", "openvpn@server"), "systemd unit")
 		fs.Parse(args[1:])
-		runServe(*dataDir, *listen, *sock, *unit, p)
+		runServe(*dataDir, *listen, *sock, p)
 
 	case "status":
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
@@ -287,17 +286,11 @@ func main() {
 	case "reload", "restart":
 		fs := flag.NewFlagSet(args[0], flag.ExitOnError)
 		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
-		unit := fs.String("unit", envOr("OVCP_SYSTEMD_UNIT", "openvpn@server"), "systemd unit")
 		fs.Parse(args[1:])
-		// standalone child-signal only makes sense inside `serve`; from the
-		// CLI the openvpn process is never our child — use mgmt/systemd.
+		// from the CLI the openvpn process is never our child; always signal
+		// over the mgmt socket.
 		plat := controller.DetectPlatform()
-		var r controller.Reloader
-		if plat == controller.PlatformSystemd {
-			r = &controller.SystemdReloader{Unit: *unit}
-		} else {
-			r = &controller.MgmtSignalReloader{C: controller.NewClient(*sock)}
-		}
+		r := controller.Reloader(&controller.MgmtSignalReloader{C: controller.NewClient(*sock)})
 		if args[0] == "reload" {
 			die(r.Reload())
 		} else {
@@ -407,7 +400,7 @@ func main() {
 	}
 }
 
-func runServe(dataDir, listen, sock, unit string, p *pki.PKI) {
+func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	s, err := store.Open(filepath.Join(dataDir, "ovcp.db"))
 	die(err)
 	defer s.Close()
@@ -541,7 +534,7 @@ func runServe(dataDir, listen, sock, unit string, p *pki.PKI) {
 			os.Exit(1)
 		}()
 	} else {
-		srv.Reloader = controller.NewReloader(plat, mgmt, unit, childPID, respawn)
+		srv.Reloader = controller.NewReloader(plat, mgmt, childPID, respawn)
 	}
 	log.Printf("ovcp %s | platform=%s | admin UI https://{%s}", version, plat, listen)
 	sig := make(chan os.Signal, 1)
@@ -716,11 +709,11 @@ func usage() {
   export    -cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-key-pass PW]
   status    [-sock PATH]               connected clients (mgmt)
   kill      -cn NAME [-sock PATH]      disconnect client
-  reload    [-sock PATH] [-unit U]     soft reload (SIGUSR1: CRL, connections)
-  restart   [-sock PATH] [-unit U]     full restart (port/proto/key changes)
+  reload    [-sock PATH]              soft reload (SIGUSR1: CRL, connections)
+  restart   [-sock PATH]              full restart (SIGHUP: port/proto/key)
   user      add|list|del|disable|enable|passwd|totp[-off]
   audit                                last 50 audit entries
-  serve     [-listen ADDR] [-sock PATH] [-unit U]   run admin UI + API
+  serve     [-listen ADDR] [-sock PATH]   run admin UI + API
   version`)
 	os.Exit(2)
 }

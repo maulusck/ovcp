@@ -1,22 +1,21 @@
 [Unit]
 Description=OVCP admin UI / control plane
-Wants=openvpn-ovcp.service
-After=openvpn-ovcp.service
+# pulls openvpn in on start; the reverse BindsTo restarts it with us
+Wants=ovcp-openvpn.service
+Before=ovcp-openvpn.service
 
 [Service]
-Type=simple
 User=ovcp
 Group=ovcp
 ExecStart=/usr/local/bin/ovcp serve
 Environment=OVCP_DATA=/var/lib/ovcp
 Environment=OVCP_PLATFORM=systemd
-Environment=OVCP_SYSTEMD_UNIT=openvpn-ovcp
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ovcp
 ProtectHome=true
+ReadWritePaths=/var/lib/ovcp
 
 [Install]
 WantedBy=multi-user.target

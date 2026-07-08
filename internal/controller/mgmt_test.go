@@ -105,13 +105,13 @@ func TestDetectPlatformOverride(t *testing.T) {
 
 func TestNewReloader(t *testing.T) {
 	m := NewClient("x")
-	if r := NewReloader(PlatformCompose, m, "", nil, nil); r.Name() != "mgmt-signal" {
+	if r := NewReloader(PlatformCompose, m, nil, nil); r.Name() != "mgmt-signal" {
 		t.Fatal(r.Name())
 	}
-	if r := NewReloader(PlatformSystemd, m, "openvpn@server", nil, nil); r.Name() != "systemd" {
+	if r := NewReloader(PlatformSystemd, m, nil, nil); r.Name() != "systemd" {
 		t.Fatal(r.Name())
 	}
-	if r := NewReloader(PlatformStandalone, m, "", func() int { return 0 }, nil); r.Name() != "child-signal" {
+	if r := NewReloader(PlatformStandalone, m, func() int { return 0 }, nil); r.Name() != "child-signal" {
 		t.Fatal(r.Name())
 	}
 }

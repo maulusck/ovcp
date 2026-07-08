@@ -3,7 +3,6 @@ package controller
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"syscall"
 )
@@ -28,19 +27,17 @@ func (r *MgmtSignalReloader) Reload() error  { return r.C.Signal("SIGUSR1") }
 func (r *MgmtSignalReloader) Restart() error { return r.C.Signal("SIGTERM") }
 func (r *MgmtSignalReloader) Name() string   { return "mgmt-signal" }
 
-// SystemdReloader (host installs).
-type SystemdReloader struct{ Unit string }
+// SystemdReloader signals openvpn over the mgmt socket (unprivileged).
+// SIGUSR1 = soft reload (CRL/connections). Restart = SIGTERM: openvpn
+// exits and the supervisor (container runtime / systemd) restarts it fresh
+// as root, so it can re-read root-owned keys after its own privilege drop.
+// re-read (port/proto/key changes). systemd's Restart= keeps openvpn alive
+// if it ever exits; ovcp never calls systemctl.
+type SystemdReloader struct{ C *Client }
 
-func (r *SystemdReloader) Reload() error  { return r.ctl("reload") }
-func (r *SystemdReloader) Restart() error { return r.ctl("restart") }
+func (r *SystemdReloader) Reload() error  { return r.C.Signal("SIGUSR1") }
+func (r *SystemdReloader) Restart() error { return r.C.Signal("SIGTERM") }
 func (r *SystemdReloader) Name() string   { return "systemd" }
-func (r *SystemdReloader) ctl(verb string) error {
-	out, err := exec.Command("systemctl", verb, r.Unit).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("controller: systemctl %s: %v: %s", verb, err, out)
-	}
-	return nil
-}
 
 // ChildSignalReloader (standalone): we own the openvpn child.
 type ChildSignalReloader struct {
@@ -115,10 +112,10 @@ func inContainer() bool {
 
 // NewReloader returns the impl for a platform. childPID/respawn are only
 // consulted on standalone.
-func NewReloader(p Platform, mgmt *Client, systemdUnit string, childPID func() int, respawn func() error) Reloader {
+func NewReloader(p Platform, mgmt *Client, childPID func() int, respawn func() error) Reloader {
 	switch p {
 	case PlatformSystemd:
-		return &SystemdReloader{Unit: systemdUnit}
+		return &SystemdReloader{C: mgmt}
 	case PlatformCompose, PlatformK8s:
 		return &MgmtSignalReloader{C: mgmt}
 	default:

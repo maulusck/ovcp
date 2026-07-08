@@ -1,23 +1,34 @@
-# one image, two roles.
-# first run: docker compose -f deploy/compose.yaml run --rm -it \
-#   -e OVCP_SERVER_CN=vpn.example.com app init -server-cn vpn.example.com
+# Use compose ONLY to expose the admin UI and the VPN on different network
+# interfaces. For a normal single-host setup, run the image directly
+# (see Containerfile) — one container does everything.
+#
+# setup: cp deploy/.env.example deploy/.env && edit, then: podman compose up -d
+#
+# The app renders the config and manages PKI/UI; openvpn runs the VPN. Here
+# the app must NOT supervise its own openvpn, so it runs in compose mode.
 services:
+  app:
+    build: { context: .., dockerfile: Containerfile }
+    container_name: ovcp-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OVCP_PLATFORM: compose      # serve only; does not spawn openvpn
+    ports: ["8443:8443"] # UI interface
+    volumes: [data:/var/lib/ovcp, run:/run/ovcp]
+
   openvpn:
     build: { context: .., dockerfile: Containerfile }
     command: [openvpn]
+    container_name: ovcp-openvpn
     restart: unless-stopped
+    depends_on: [app]
     cap_add: [NET_ADMIN]
     devices: [/dev/net/tun]
-    ports: ["1194:1194/udp"]
+    ports: ["1194:1194/udp"]  # VPN interface
     volumes: [data:/var/lib/ovcp, run:/run/ovcp]
     environment: { OVCP_PLATFORM: compose }
-  app:
-    build: { context: .., dockerfile: Containerfile }
-    restart: unless-stopped
-    depends_on: [openvpn]
-    ports: ["127.0.0.1:8443:8443"]
-    volumes: [data:/var/lib/ovcp, run:/run/ovcp]
-    environment: { OVCP_PLATFORM: compose }
+
 volumes:
   data:
   run:

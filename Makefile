@@ -2,7 +2,7 @@ BINARY  := ovcp
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build test vet clean install help ui release man image
+.PHONY: all build test vet clean install help ui release man image deb rpm
 
 release: ui build ## UI + binary
 
@@ -11,6 +11,9 @@ CTR := $(shell command -v podman || command -v docker)
 image: ## build all-in-one container image (podman, else docker)
 	@test -n "$(CTR)" || { echo "error: neither podman nor docker found"; exit 1; }
 	$(CTR) build -t ovcp -f Containerfile .
+
+deb rpm: release ## build package (needs nfpm)
+	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@
 
 all: build
 

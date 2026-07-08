@@ -168,7 +168,6 @@
   .login h1 { margin: 0; font-size: 22px; letter-spacing: .12em; }
   .login .sub { margin: 2px 0 18px; color: var(--dim); font-size: 13px; }
   .login button { width: 100%; margin-top: 6px; }
-  .hint { color: var(--amber); font-size: 13px; margin: 0 0 10px; }
 
   header {
     display: flex; align-items: center; gap: 18px; flex-wrap: wrap;

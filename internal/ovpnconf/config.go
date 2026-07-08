@@ -91,9 +91,9 @@ func (c *Config) Render() []byte {
 	// netlink → EPERM → forced session restarts). Requires OpenVPN 2.6+.
 	w("disable-dco")
 	w("data-ciphers %s", c.Cipher)
+	w("data-ciphers-fallback %s", c.Cipher)
 	w("auth SHA256")
 	w("keepalive 10 60")
-	w("persist-key")
 	w("persist-tun")
 	if c.RunAsUser != "" {
 		w("user %s", c.RunAsUser)

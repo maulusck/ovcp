@@ -14,15 +14,21 @@ spec:
           restartPolicy: Always
           env:
             - { name: OVCP_PLATFORM, value: k8s }
-            - { name: OVCP_LISTEN, value: 0.0.0.0:8443 }
+            - { name: OVCP_LISTEN, value: "0.0.0.0:8443" }
+            - { name: OVCP_SERVER_CN, value: vpn.example.com }
+            # first-boot init credentials — use a Secret in production:
+            - name: OVCP_CA_PASSPHRASE
+              valueFrom: { secretKeyRef: { name: ovcp, key: ca-passphrase } }
+            - name: OVCP_USER_PASSWORD
+              valueFrom: { secretKeyRef: { name: ovcp, key: admin-password } }
           ports: [{ containerPort: 8443 }]
           volumeMounts:
             - { name: data, mountPath: /var/lib/ovcp }
             - { name: run, mountPath: /run/ovcp }
       containers:
+        # may restart once on very first boot while the sidecar writes server.conf
         - name: openvpn
-          image: ovcp:latest
-          args: [openvpn]
+          image: ovcp-openvpn:latest
           securityContext:
             capabilities: { add: [NET_ADMIN] }
           ports: [{ containerPort: 1194, protocol: UDP }]

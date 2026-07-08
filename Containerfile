@@ -1,8 +1,13 @@
-# all-in-one image: ovcp + openvpn, supervised by ovcp (standalone mode).
-# run:  docker run -d --cap-add=NET_ADMIN --device /dev/net/tun \
-#         -e OVCP_SERVER_CN=vpn.example.com \
-#         -e OVCP_CA_PASSPHRASE=... -e OVCP_USER_PASSWORD=... \
-#         -p 1194:1194/udp -p 127.0.0.1:8443:8443 -v ovcp:/var/lib/ovcp ovcp
+# OVCP all-in-one image (ovcp + openvpn).
+#
+# Single container (recommended):
+#   podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
+#     -e OVCP_SERVER_CN=vpn.example.com \
+#     -e OVCP_CA_PASSPHRASE=secret -e OVCP_USER_PASSWORD=secret \
+#     -p 1194:1194/udp -p 127.0.0.1:8443:8443 \
+#     -v ovcp:/var/lib/ovcp ovcp
+#
+# Split UI and VPN across interfaces: see deploy/compose.yaml.
 FROM node:22-alpine AS ui
 WORKDIR /src/web/ui
 COPY web/ui/package*.json ./
@@ -29,7 +34,5 @@ ENV OVCP_DATA=/var/lib/ovcp \
     OVCP_OPENVPN_GROUP=nobody
 VOLUME /var/lib/ovcp
 EXPOSE 1194/udp 8443/tcp
-HEALTHCHECK --interval=30s --timeout=3s \
-  CMD wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8443/ || exit 1
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["serve"]

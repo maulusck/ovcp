@@ -45,7 +45,7 @@ tls\-crypt key, writes \fIserver.conf\fR, and creates the initial admin
 user. Idempotent: existing artifacts are kept. Pass \fB\-admin\fR "" to
 skip user creation.
 .TP
-.B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-sock\fR \fIPATH\fR] [\fB\-unit\fR \fIUNIT\fR]
+.B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-sock\fR \fIPATH\fR]
 Run the HTTPS admin UI and REST API (default \fI127.0.0.1:8443\fR, self\-signed
 certificate generated on first run). The supervision platform is
 auto\-detected (standalone, systemd, compose, k8s) and selects how config
@@ -82,27 +82,28 @@ Show currently connected VPN clients via the management socket.
 .B kill \fB\-cn\fR \fINAME\fR [\fB\-sock\fR \fIPATH\fR]
 Disconnect a client immediately.
 .TP
-.B reload [\fB\-sock\fR \fIPATH\fR] [\fB\-unit\fR \fIUNIT\fR]
-Soft reload (SIGUSR1 via management socket, or \fBsystemctl reload\fR on
-systemd). Safe after openvpn drops privileges; picks up the CRL and
-connection\-level changes.
+.B genconfig [\fB\-out\fR \fIPATH\fR] [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-dns\fR \fIIPs\fR]
+Render \fIserver.conf\fR from options (stdout by default). Normally not
+needed:
+.B init
+and
+.B serve
+maintain the file.
 .TP
-.B restart [\fB\-sock\fR \fIPATH\fR] [\fB\-unit\fR \fIUNIT\fR]
-Full restart with fresh privileges: required for port, protocol, subnet
-or key changes. Standalone: the serve process respawns its child; systemd:
-\fBsystemctl restart\fR; compose/k8s: SIGTERM, the supervisor restarts
-the container.
+.B reload [\fB\-sock\fR \fIPATH\fR]
+Soft reload: SIGUSR1 via the management socket. Safe after openvpn drops
+privileges; picks up the CRL and connection\-level changes.
 .TP
-.B user add|list|del|disable|enable|passwd|totp [\fB\-off\fR]
+.B restart [\fB\-sock\fR \fIPATH\fR]
+Full config re\-read for port, protocol, subnet or key changes. Standalone:
+the serve process respawns its child; otherwise SIGHUP via the management
+socket (systemd keeps openvpn alive via \fBRestart=\fR).
+.TP
+.B user add|list|disable|enable|passwd|totp
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
 (certificates, disconnects), \fBreadonly\fR.
 .B user totp
-prints a scannable QR code plus the secret and otpauth:// URL. Web login
-becomes two steps: credentials, then the 6\-digit code;
-\fB\-off\fR disables 2FA. Deleting or disabling a user kills their
-sessions immediately. Web login with 2FA is two steps: password first,
-then the UI asks for the current 6\-digit code (30 s window, \(+-1 step
-of clock skew). Five failures per user+IP lock login for 15 minutes.
+prints an otpauth:// enrollment URL.
 .TP
 .B audit
 Print the last 50 audit entries (logins, issues, revocations, kills,
@@ -131,16 +132,17 @@ OpenVPN management socket path (default \fI/run/ovcp/mgmt.sock\fR).
 .B OVCP_PLATFORM
 Override platform detection: standalone, systemd, compose, k8s.
 .TP
-.B OVCP_SYSTEMD_UNIT
-Unit name used by the systemd reloader (default \fIopenvpn@server\fR;
-the shipped unit uses \fIopenvpn\-ovcp\fR).
-.TP
 .B OVCP_USER
 User to drop to in standalone mode (default: ovcp, else the sudo caller;
 root disables the drop).
 .TP
+.B OVCP_SERVER_CN
+Container first boot: hostname to initialize with (entrypoint runs
+\fBovcp init\fR when the CA is missing).
+.TP
 .B OVCP_CA_PASSPHRASE, OVCP_USER_PASSWORD
-Non\-interactive passphrase/password for automation and tests. Avoid on
+Non\-interactive passphrase/password for automation, tests, and container
+first boot. Avoid on
 shared systems: environment variables can leak.
 .SH FILES
 .TP
@@ -186,7 +188,7 @@ Run under systemd (after installing the package):
 .nf
 .RS
 ovcp init \-server\-cn vpn.example.com
-systemctl enable \-\-now openvpn\-ovcp ovcp
+systemctl enable \-\-now ovcp
 .RE
 .fi
 .SH PRIVILEGES

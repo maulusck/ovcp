@@ -1,5 +1,12 @@
 /bin/
 /web/dist/
-/web/ui/node_modules/
-/.vscode
 *.tar.gz
+bin/
+node_modules/
+.vscode
+deploy/.env
+.env
+nohup.out
+*.tar.gz
+*.deb
+*.rpm

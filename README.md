@@ -65,16 +65,6 @@ takes to reach the UI from connected clients:
 OVCP_LISTEN=127.0.0.1:8443,10.8.0.1:8443   # host + inside the VPN
 ```
 
-## Signing in with 2FA
-
-Enroll from the CLI: `ovcp user totp -name alice` prints a QR code to scan
-(plus the secret for manual entry); `-off` disables it. Login is two steps
-in one form: submit username + password, and if the account has 2FA the
-code field appears — resubmit with the current 6-digit code. Codes rotate
-every 30 s (one step of clock skew is tolerated; check the server clock if
-codes never work). Five failed attempts per user+IP lock login for 15
-minutes.
-
 ## Deployment
 
 Supervision belongs to the platform; ovcp auto-detects it (override with
@@ -86,10 +76,10 @@ the panel dies.
 make release && sudo make install
 sudo install -m644 deploy/systemd/*.service /usr/lib/systemd/system/
 sudo OVCP_DATA=/var/lib/ovcp ovcp init -server-cn vpn.example.com
-sudo systemctl enable --now openvpn-ovcp ovcp
+sudo systemctl enable --now ovcp-openvpn ovcp
 ```
 
-### docker compose (one image, two roles)
+### docker compose
 ```sh
 docker compose -f deploy/compose.yaml build
 docker compose -f deploy/compose.yaml run --rm -it app init -server-cn vpn.example.com
@@ -97,9 +87,10 @@ docker compose -f deploy/compose.yaml up -d
 ```
 
 ### kubernetes (1.29+)
-Two containers in one pod (same image, ovcp as native sidecar), shared
-volume for socket + config: `make image`, push, `kubectl apply -f
-deploy/k8s/ovcp.yaml`, run `init` in the app container once.
+Two containers in one pod, ovcp as a native sidecar, shared volume for
+socket + config: `kubectl apply -f deploy/k8s/ovcp.yaml` (build/push the
+the image (`make image`) first, then run `init` in the app
+container once).
 
 ### SELinux (RHEL/Fedora)
 Confined openvpn can't read the non-standard data dir without labels — run

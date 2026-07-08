@@ -13,7 +13,7 @@ contents:
     dst: /usr/local/bin/ovcp
   - src: deploy/systemd/ovcp.service
     dst: /usr/lib/systemd/system/ovcp.service
-  - src: deploy/systemd/openvpn-ovcp.service
-    dst: /usr/lib/systemd/system/openvpn-ovcp.service
+  - src: deploy/systemd/ovcp-openvpn.service
+    dst: /usr/lib/systemd/system/ovcp-openvpn.service
   - src: docs/ovcp.8
     dst: /usr/share/man/man8/ovcp.8

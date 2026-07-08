@@ -41,7 +41,7 @@ func TestRender(t *testing.T) {
 	out := string(c.Render())
 	for _, want := range []string{
 		"proto udp", "port 1194", "server 10.8.0.0 255.255.255.0",
-		"topology subnet", "dh none", "disable-dco", "data-ciphers AES-256-GCM",
+		"topology subnet", "dh none", "disable-dco", "data-ciphers AES-256-GCM", "data-ciphers-fallback AES-256-GCM",
 		"crl-verify /d/crl.pem", "tls-crypt /d/tc.key",
 		"management /run/ovcp/mgmt.sock unix", "status-version 3",
 		`push "redirect-gateway def1 bypass-dhcp"`,
