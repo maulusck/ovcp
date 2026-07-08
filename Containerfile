@@ -1,13 +1,17 @@
-# OVCP all-in-one image (ovcp + openvpn).
+# OVCP all-in-one image: ovcp supervises openvpn (standalone mode).
 #
-# Single container (recommended):
+# First boot (one-shot init; passphrase/password default to "changeme",
+# override with -e OVCP_CA_PASSPHRASE=... -e OVCP_USER_PASSWORD=...):
+#   podman run --rm -v ovcp:/var/lib/ovcp ovcp init -server-cn vpn.example.com
+#
+# Run:
 #   podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
-#     -e OVCP_SERVER_CN=vpn.example.com \
-#     -e OVCP_CA_PASSPHRASE=secret -e OVCP_USER_PASSWORD=secret \
 #     -p 1194:1194/udp -p 127.0.0.1:8443:8443 \
 #     -v ovcp:/var/lib/ovcp ovcp
 #
-# Split UI and VPN across interfaces: see deploy/compose.yaml.
+# Split UI and VPN across interfaces with -p bind addresses, e.g. UI on the
+# LAN interface, VPN on the WAN interface:
+#   -p 203.0.113.7:1194:1194/udp -p 192.168.1.10:8443:8443
 FROM node:22-alpine AS ui
 WORKDIR /src/web/ui
 COPY web/ui/package*.json ./
@@ -27,12 +31,12 @@ RUN CGO_ENABLED=1 go build -ldflags '-s -w' -o /ovcp ./cmd/ovcp
 FROM alpine:latest
 RUN apk add --no-cache openvpn
 COPY --from=build /ovcp /usr/local/bin/ovcp
-COPY deploy/entrypoint.sh /entrypoint.sh
 ENV OVCP_DATA=/var/lib/ovcp \
     OVCP_LISTEN=0.0.0.0:8443 \
-    OVCP_PLATFORM=standalone \
+    OVCP_CA_PASSPHRASE=changeme \
+    OVCP_USER_PASSWORD=changeme \
     OVCP_OPENVPN_GROUP=nobody
 VOLUME /var/lib/ovcp
 EXPOSE 1194/udp 8443/tcp
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["ovcp"]
 CMD ["serve"]

@@ -1,11 +1,7 @@
 /bin/
 /web/dist/
-*.tar.gz
-bin/
 node_modules/
 .vscode
-deploy/.env
-.env
 nohup.out
 *.tar.gz
 *.deb

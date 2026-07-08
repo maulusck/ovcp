@@ -94,6 +94,9 @@ func (c *Config) Render() []byte {
 	w("data-ciphers-fallback %s", c.Cipher)
 	w("auth SHA256")
 	w("keepalive 10 60")
+	// both persists are required: openvpn drops to nobody and can no longer
+	// re-read the root-owned key on SIGUSR1/SIGHUP restarts without them
+	w("persist-key")
 	w("persist-tun")
 	if c.RunAsUser != "" {
 		w("user %s", c.RunAsUser)

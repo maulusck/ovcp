@@ -67,9 +67,10 @@ OVCP_LISTEN=127.0.0.1:8443,10.8.0.1:8443   # host + inside the VPN
 
 ## Deployment
 
-Supervision belongs to the platform; ovcp auto-detects it (override with
-`OVCP_PLATFORM`). openvpn and ovcp fail independently; the VPN stays up if
-the panel dies.
+Two supervision modes, auto-detected (override with `OVCP_PLATFORM`):
+**systemd** — two units bound together, openvpn and ovcp fail independently,
+the VPN stays up if the panel dies; **standalone** — ovcp spawns and
+supervises openvpn itself (from source, and inside the container).
 
 ### systemd
 ```sh
@@ -79,18 +80,21 @@ sudo OVCP_DATA=/var/lib/ovcp ovcp init -server-cn vpn.example.com
 sudo systemctl enable --now ovcp-openvpn ovcp
 ```
 
-### docker compose
+### container
+One all-in-one image (`make image`): ovcp supervises openvpn inside the
+container, exactly like standalone mode. Init once, then run:
 ```sh
-docker compose -f deploy/compose.yaml build
-docker compose -f deploy/compose.yaml run --rm -it app init -server-cn vpn.example.com
-docker compose -f deploy/compose.yaml up -d
+podman run --rm -v ovcp:/var/lib/ovcp ovcp init -server-cn vpn.example.com
+podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
+  -p 1194:1194/udp -p 127.0.0.1:8443:8443 -v ovcp:/var/lib/ovcp ovcp
 ```
-
-### kubernetes (1.29+)
-Two containers in one pod, ovcp as a native sidecar, shared volume for
-socket + config: `kubectl apply -f deploy/k8s/ovcp.yaml` (build/push the
-the image (`make image`) first, then run `init` in the app
-container once).
+Image defaults `OVCP_CA_PASSPHRASE`/`OVCP_USER_PASSWORD` to `changeme` for
+the one-shot init — override with `-e`. To split the UI and the VPN across
+network interfaces, bind each published port to the right address:
+```sh
+-p 203.0.113.7:1194:1194/udp -p 192.168.1.10:8443:8443
+```
+(docker works the same; the Containerfile is plain OCI.)
 
 ### SELinux (RHEL/Fedora)
 Confined openvpn can't read the non-standard data dir without labels — run
@@ -110,7 +114,7 @@ internal/ovpnconf    validated server.conf generation
 internal/auth        argon2id, sessions, TOTP, rate-limit, RBAC
 internal/api         REST/JSON + embedded UI, HTTPS, CSRF
 web/ui               Svelte 5 sources → web/dist (embedded)
-deploy/              systemd, docker, compose, k8s, nfpm
+deploy/              systemd units, nfpm packaging, selinux.sh
 docs/ovcp.8          man page
 ```
 

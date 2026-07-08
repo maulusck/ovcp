@@ -92,23 +92,19 @@ func TestSocketGone(t *testing.T) {
 }
 
 func TestDetectPlatformOverride(t *testing.T) {
-	t.Setenv("OVCP_PLATFORM", "k8s")
-	if p := DetectPlatform(); p != PlatformK8s {
+	t.Setenv("OVCP_PLATFORM", "systemd")
+	if p := DetectPlatform(); p != PlatformSystemd {
 		t.Fatalf("got %s", p)
 	}
-	t.Setenv("OVCP_PLATFORM", "")
-	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
-	if p := DetectPlatform(); p != PlatformK8s {
+	t.Setenv("OVCP_PLATFORM", "standalone")
+	if p := DetectPlatform(); p != PlatformStandalone {
 		t.Fatalf("got %s", p)
 	}
 }
 
 func TestNewReloader(t *testing.T) {
 	m := NewClient("x")
-	if r := NewReloader(PlatformCompose, m, nil, nil); r.Name() != "mgmt-signal" {
-		t.Fatal(r.Name())
-	}
-	if r := NewReloader(PlatformSystemd, m, nil, nil); r.Name() != "systemd" {
+	if r := NewReloader(PlatformSystemd, m, nil, nil); r.Name() != "mgmt-signal" {
 		t.Fatal(r.Name())
 	}
 	if r := NewReloader(PlatformStandalone, m, func() int { return 0 }, nil); r.Name() != "child-signal" {

@@ -288,9 +288,14 @@ func main() {
 		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
 		fs.Parse(args[1:])
 		// from the CLI the openvpn process is never our child; always signal
-		// over the mgmt socket.
+		// over the mgmt socket. Under systemd, restart = SIGTERM and the
+		// unit's Restart=always respawns openvpn fresh as root; standalone
+		// there is no supervisor, so restart = SIGHUP (in-process).
 		plat := controller.DetectPlatform()
-		r := controller.Reloader(&controller.MgmtSignalReloader{C: controller.NewClient(*sock)})
+		var r controller.Reloader = &controller.MgmtHUPReloader{C: controller.NewClient(*sock)}
+		if plat == controller.PlatformSystemd {
+			r = &controller.MgmtSignalReloader{C: controller.NewClient(*sock)}
+		}
 		if args[0] == "reload" {
 			die(r.Reload())
 		} else {
@@ -521,10 +526,11 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 		dropped = dropPrivileges(dataDir)
 	}
 	if dropped {
-		// can no longer signal or respawn the root child directly:
-		// signal via mgmt socket; if openvpn dies, exit and let the
-		// caller/supervisor restart both (nginx would call this a day).
-		srv.Reloader = &controller.MgmtSignalReloader{C: mgmt}
+		// can no longer signal or respawn the root child directly. Reload
+		// and restart both go through the mgmt socket; restart is SIGHUP
+		// (in-process, no supervisor needed — see MgmtHUPReloader). If
+		// openvpn genuinely dies, exit so the operator notices.
+		srv.Reloader = &controller.MgmtHUPReloader{C: mgmt}
 		go func() {
 			child.mu.Lock()
 			done := child.done
@@ -709,8 +715,8 @@ func usage() {
   export    -cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-key-pass PW]
   status    [-sock PATH]               connected clients (mgmt)
   kill      -cn NAME [-sock PATH]      disconnect client
-  reload    [-sock PATH]              soft reload (SIGUSR1: CRL, connections)
-  restart   [-sock PATH]              full restart (SIGHUP: port/proto/key)
+  reload    [-sock PATH]              soft reload (CRL, connections)
+  restart   [-sock PATH]              full restart (port/proto changes)
   user      add|list|del|disable|enable|passwd|totp[-off]
   audit                                last 50 audit entries
   serve     [-listen ADDR] [-sock PATH]   run admin UI + API

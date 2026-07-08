@@ -8,7 +8,9 @@ Wants=network-online.target
 
 [Service]
 ExecStart=/usr/sbin/openvpn --config /var/lib/ovcp/server.conf
-Restart=on-failure
+# always, not on-failure: ovcp's "restart" is a SIGTERM (clean exit 0)
+# through the mgmt socket; systemd must respawn openvpn fresh as root.
+Restart=always
 RestartSec=2
 AmbientCapabilities=CAP_NET_ADMIN
 DeviceAllow=/dev/net/tun rw

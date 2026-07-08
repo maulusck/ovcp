@@ -13,11 +13,11 @@ certificate authority (no easy\-rsa), client profile export, server
 configuration, and a web admin UI. It talks to the running
 .BR openvpn (8)
 process exclusively over its management \fIunix socket\fR and coordinates
-with it through files in the shared data directory; process supervision
-belongs to the platform (systemd, compose, kubelet), except in standalone
-mode where
+with it through files in the shared data directory. Under systemd,
+openvpn runs as its own unit and supervision belongs to systemd; in
+standalone mode (from source, or inside the container)
 .B ovcp serve
-spawns openvpn itself for development use.
+spawns and supervises openvpn itself.
 .PP
 The CA private key is stored encrypted (argon2id + AES\-256\-GCM). Every
 signing operation (issue, revoke) requires the CA passphrase, which is
@@ -48,7 +48,7 @@ skip user creation.
 .B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-sock\fR \fIPATH\fR]
 Run the HTTPS admin UI and REST API (default \fI127.0.0.1:8443\fR, self\-signed
 certificate generated on first run). The supervision platform is
-auto\-detected (standalone, systemd, compose, k8s) and selects how config
+auto\-detected (standalone, systemd) and selects how config
 reloads are delivered. In standalone mode an
 .B openvpn
 child is spawned from \fIserver.conf\fR and its log written to
@@ -95,9 +95,11 @@ Soft reload: SIGUSR1 via the management socket. Safe after openvpn drops
 privileges; picks up the CRL and connection\-level changes.
 .TP
 .B restart [\fB\-sock\fR \fIPATH\fR]
-Full config re\-read for port, protocol, subnet or key changes. Standalone:
-the serve process respawns its child; otherwise SIGHUP via the management
-socket (systemd keeps openvpn alive via \fBRestart=\fR).
+Full config re\-read for port, protocol or subnet changes. Standalone:
+the serve process respawns its child, or, after its privilege drop, sends
+SIGHUP for an in\-process restart (persist\-key keeps the key in memory).
+Under systemd: SIGTERM via the management socket; \fBRestart=always\fR
+respawns openvpn fresh as root, which also picks up a rotated server key.
 .TP
 .B user add|list|disable|enable|passwd|totp
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
@@ -130,19 +132,19 @@ connected clients) may be bound before the tun interface exists
 OpenVPN management socket path (default \fI/run/ovcp/mgmt.sock\fR).
 .TP
 .B OVCP_PLATFORM
-Override platform detection: standalone, systemd, compose, k8s.
+Override platform detection: standalone, systemd.
 .TP
 .B OVCP_USER
 User to drop to in standalone mode (default: ovcp, else the sudo caller;
 root disables the drop).
 .TP
 .B OVCP_SERVER_CN
-Container first boot: hostname to initialize with (entrypoint runs
-\fBovcp init\fR when the CA is missing).
+Default client \fBremote\fR for \fBexport\fR and CN for the admin UI
+certificate (falls back to the VPN server certificate's CN).
 .TP
 .B OVCP_CA_PASSPHRASE, OVCP_USER_PASSWORD
 Non\-interactive passphrase/password for automation, tests, and container
-first boot. Avoid on
+init (the image defaults both to \fIchangeme\fR). Avoid on
 shared systems: environment variables can leak.
 .SH FILES
 .TP

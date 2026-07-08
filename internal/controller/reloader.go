@@ -3,7 +3,6 @@ package controller
 import (
 	"fmt"
 	"os"
-	"strings"
 	"syscall"
 )
 
@@ -19,27 +18,30 @@ type Reloader interface {
 	Name() string
 }
 
-// MgmtSignalReloader (compose, k8s): signals via mgmt socket.
-// Restart sends SIGTERM; the platform supervisor restarts the container.
+// MgmtSignalReloader signals openvpn over the mgmt socket (unprivileged).
+// SIGUSR1 = soft reload (CRL/connections). Restart sends SIGTERM: openvpn
+// exits and its supervisor (systemd Restart=always) starts it fresh as
+// root, so it can re-read root-owned keys after its own privilege drop.
+// Also used standalone after ovcp drops privileges and can no longer
+// signal the root child directly.
 type MgmtSignalReloader struct{ C *Client }
 
 func (r *MgmtSignalReloader) Reload() error  { return r.C.Signal("SIGUSR1") }
 func (r *MgmtSignalReloader) Restart() error { return r.C.Signal("SIGTERM") }
 func (r *MgmtSignalReloader) Name() string   { return "mgmt-signal" }
 
-// SystemdReloader signals openvpn over the mgmt socket (unprivileged).
-// SIGUSR1 = soft reload (CRL/connections). Restart = SIGTERM: openvpn
-// exits and the supervisor (container runtime / systemd) restarts it fresh
-// as root, so it can re-read root-owned keys after its own privilege drop.
-// re-read (port/proto/key changes). systemd's Restart= keeps openvpn alive
-// if it ever exits; ovcp never calls systemctl.
-type SystemdReloader struct{ C *Client }
+// MgmtHUPReloader: standalone after ovcp dropped privileges, where no
+// supervisor exists to respawn openvpn. Restart sends SIGHUP: openvpn
+// restarts in-process (re-reads config, re-binds sockets) while keeping
+// key material in memory (persist-key), so it never needs root again.
+// Caveat: a rotated server key requires restarting ovcp itself.
+type MgmtHUPReloader struct{ C *Client }
 
-func (r *SystemdReloader) Reload() error  { return r.C.Signal("SIGUSR1") }
-func (r *SystemdReloader) Restart() error { return r.C.Signal("SIGTERM") }
-func (r *SystemdReloader) Name() string   { return "systemd" }
+func (r *MgmtHUPReloader) Reload() error  { return r.C.Signal("SIGUSR1") }
+func (r *MgmtHUPReloader) Restart() error { return r.C.Signal("SIGHUP") }
+func (r *MgmtHUPReloader) Name() string   { return "mgmt-hup" }
 
-// ChildSignalReloader (standalone): we own the openvpn child.
+// ChildSignalReloader (standalone, incl. containers): we own the openvpn child.
 type ChildSignalReloader struct {
 	PID     func() int
 	Respawn func() error // kill + start fresh child (root privileges again)
@@ -63,10 +65,8 @@ func (r *ChildSignalReloader) Name() string { return "child-signal" }
 type Platform string
 
 const (
-	PlatformStandalone Platform = "standalone"
-	PlatformSystemd    Platform = "systemd"
-	PlatformCompose    Platform = "compose"
-	PlatformK8s        Platform = "k8s"
+	PlatformStandalone Platform = "standalone" // ovcp supervises openvpn (host or container)
+	PlatformSystemd    Platform = "systemd"    // ovcp + openvpn as separate units
 )
 
 // DetectPlatform picks the supervision mode at startup. Override: OVCP_PLATFORM.
@@ -76,16 +76,6 @@ func DetectPlatform() Platform {
 		return PlatformStandalone
 	case "systemd":
 		return PlatformSystemd
-	case "compose":
-		return PlatformCompose
-	case "k8s":
-		return PlatformK8s
-	}
-	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
-		return PlatformK8s
-	}
-	if inContainer() {
-		return PlatformCompose
 	}
 	if _, err := os.Stat("/run/systemd/system"); err == nil && os.Getppid() == 1 {
 		return PlatformSystemd
@@ -93,32 +83,11 @@ func DetectPlatform() Platform {
 	return PlatformStandalone
 }
 
-func inContainer() bool {
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-	if _, err := os.Stat("/run/.containerenv"); err == nil { // podman
-		return true
-	}
-	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		s := string(b)
-		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") ||
-			strings.Contains(s, "kubepods") || strings.Contains(s, "libpod") {
-			return true
-		}
-	}
-	return false
-}
-
 // NewReloader returns the impl for a platform. childPID/respawn are only
 // consulted on standalone.
 func NewReloader(p Platform, mgmt *Client, childPID func() int, respawn func() error) Reloader {
-	switch p {
-	case PlatformSystemd:
-		return &SystemdReloader{C: mgmt}
-	case PlatformCompose, PlatformK8s:
+	if p == PlatformSystemd {
 		return &MgmtSignalReloader{C: mgmt}
-	default:
-		return &ChildSignalReloader{PID: childPID, Respawn: respawn}
 	}
+	return &ChildSignalReloader{PID: childPID, Respawn: respawn}
 }
