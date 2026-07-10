@@ -19,11 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
-	"os/exec"
 	"os/signal"
-	"os/user"
-	"strconv"
-	"sync"
 	"syscall"
 
 	"github.com/mdp/qrterminal/v3"
@@ -283,25 +279,21 @@ func main() {
 		s.Audit("cli", "kill", "cn="+*cn)
 		fmt.Println("killed", *cn)
 
-	case "reload", "restart":
-		fs := flag.NewFlagSet(args[0], flag.ExitOnError)
-		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
+	case "vpn":
+		fs := flag.NewFlagSet("vpn", flag.ExitOnError)
+		ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 		fs.Parse(args[1:])
-		// from the CLI the openvpn process is never our child; always signal
-		// over the mgmt socket. Under systemd, restart = SIGTERM and the
-		// unit's Restart=always respawns openvpn fresh as root; standalone
-		// there is no supervisor, so restart = SIGHUP (in-process).
-		plat := controller.DetectPlatform()
-		var r controller.Reloader = &controller.MgmtHUPReloader{C: controller.NewClient(*sock)}
-		if plat == controller.PlatformSystemd {
-			r = &controller.MgmtSignalReloader{C: controller.NewClient(*sock)}
+		op := fs.Arg(0)
+		switch op {
+		case "start", "stop", "restart", "reconnect":
+		default:
+			die(fmt.Errorf("usage: ovcp vpn start|stop|restart|reconnect"))
 		}
-		if args[0] == "reload" {
-			die(r.Reload())
-		} else {
-			die(r.Restart())
-		}
-		fmt.Printf("%sed (platform=%s via %s)\n", args[0], plat, r.Name())
+		die(controller.Control(*ctrl, op))
+		s := openStore()
+		defer s.Close()
+		s.Audit("cli", "vpn_"+op, "")
+		fmt.Println("vpn", op, "ok")
 
 	case "user":
 		if len(args) < 2 {
@@ -406,98 +398,32 @@ func main() {
 }
 
 func runServe(dataDir, listen, sock string, p *pki.PKI) {
+	if os.Geteuid() != 0 {
+		log.Print("warn: not root; ovcp owns the PKI and starts openvpn, both need root")
+	}
 	s, err := store.Open(filepath.Join(dataDir, "ovcp.db"))
 	die(err)
 	defer s.Close()
 
-	mgmt := controller.NewClient(sock)
-	plat := controller.DetectPlatform()
-
+	sup := newSupervisor(dataDir)
 	srv := &api.Server{
-		Store: s, Auth: auth.NewService(s), PKI: p, Mgmt: mgmt,
-		ConfigPath: filepath.Join(dataDir, "server.conf"),
+		Store: s, Auth: auth.NewService(s), PKI: p,
+		Mgmt:       controller.NewClient(sock),
+		VPN:        sup,
+		ConfigPath: dataPaths(dataDir).ServerConf,
 		TLSCrypt:   dataPaths(dataDir).TLSCrypt,
 		UI:         web.Dist(),
 	}
 	srv.DefaultRemote = adminCertCN(dataDir)
 
 	die(preflight(dataDir))
-	// render server.conf from persisted settings (paths server-owned)
+	// render server.conf from persisted settings (paths are controller-owned)
 	cfg := srv.LoadConfig()
 	fillPaths(&cfg, dataDir, sock)
 	raw, _ := json.Marshal(cfg)
 	die(s.SetSetting("server_config", string(raw)))
 	die(cfg.WriteAtomic(srv.ConfigPath))
 
-	// standalone: we own the openvpn child (dev/test convenience)
-	var child struct {
-		mu   sync.Mutex
-		cmd  *exec.Cmd
-		done chan struct{}
-	}
-	spawn := func() error {
-		bin, err := exec.LookPath("openvpn")
-		if err != nil {
-			return fmt.Errorf("openvpn not found on PATH (required in standalone mode)")
-		}
-		os.MkdirAll(filepath.Dir(sock), 0o755)
-		lf, err := os.OpenFile(filepath.Join(dataDir, "openvpn.log"),
-			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
-		if err != nil {
-			return err
-		}
-		cmd := exec.Command(bin, "--config", srv.ConfigPath)
-		cmd.Stdout, cmd.Stderr = lf, lf
-		if err := cmd.Start(); err != nil {
-			return err
-		}
-		done := make(chan struct{})
-		go func() { cmd.Wait(); close(done) }()
-		child.mu.Lock()
-		child.cmd, child.done = cmd, done
-		child.mu.Unlock()
-		log.Printf("openvpn started (pid %d)", cmd.Process.Pid)
-		return nil
-	}
-	childPID := func() int {
-		child.mu.Lock()
-		defer child.mu.Unlock()
-		if child.cmd == nil {
-			return 0
-		}
-		return child.cmd.Process.Pid
-	}
-	respawn := func() error {
-		child.mu.Lock()
-		old := child.cmd
-		child.mu.Unlock()
-		if old != nil {
-			old.Process.Signal(syscall.SIGTERM)
-			done := make(chan struct{})
-			go func() { old.Process.Wait(); close(done) }()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				old.Process.Kill()
-			}
-		}
-		return spawn()
-	}
-	if plat == controller.PlatformStandalone {
-		if os.Geteuid() != 0 {
-			log.Print("warn: not root; openvpn needs root or CAP_NET_ADMIN (try sudo)")
-		}
-		die(spawn())
-		defer func() {
-			if pid := childPID(); pid > 0 {
-				// after a privilege drop the direct signal fails (EPERM):
-				// fall back to the management socket
-				if syscall.Kill(pid, syscall.SIGTERM) != nil {
-					mgmt.Signal("SIGTERM")
-				}
-			}
-		}()
-	}
 	crt, key, err := api.EnsureAdminTLS(filepath.Join(dataDir, "admin-tls"), adminCertCN(dataDir))
 	die(err)
 	hs := &http.Server{Handler: srv.Handler()}
@@ -521,32 +447,38 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 			}
 		}(addr, ln)
 	}
-	dropped := false
-	if plat == controller.PlatformStandalone {
-		dropped = dropPrivileges(dataDir)
+
+	// bring the worker up as a reaped foreground child, and expose the
+	// control socket so `ovcp vpn <op>` can drive it while we run.
+	ctl, err := controller.ServeControl(ctrlSock(), sup)
+	die(err)
+	defer ctl.Close()
+	if err := sup.Start(); err != nil {
+		log.Printf("warn: openvpn start: %v", err)
 	}
-	if dropped {
-		// can no longer signal or respawn the root child directly. Reload
-		// and restart both go through the mgmt socket; restart is SIGHUP
-		// (in-process, no supervisor needed — see MgmtHUPReloader). If
-		// openvpn genuinely dies, exit so the operator notices.
-		srv.Reloader = &controller.MgmtHUPReloader{C: mgmt}
-		go func() {
-			child.mu.Lock()
-			done := child.done
-			child.mu.Unlock()
-			<-done
-			log.Print("openvpn exited; shutting down")
-			os.Exit(1)
-		}()
-	} else {
-		srv.Reloader = controller.NewReloader(plat, mgmt, childPID, respawn)
-	}
-	log.Printf("ovcp %s | platform=%s | admin UI https://{%s}", version, plat, listen)
+	log.Printf("ovcp %s | admin UI https://{%s}", version, listen)
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+	ctl.Close()
+	if err := sup.Stop(); err != nil {
+		log.Printf("warn: openvpn stop: %v", err)
+	}
 	hs.Close()
+}
+
+// ctrlSock is the serve control socket path (CLI ↔ serve for vpn ops).
+func ctrlSock() string {
+	return envOr("OVCP_CTRL_SOCK", "/run/ovcp/control.sock")
+}
+
+// newSupervisor wires the single openvpn worker controller from data paths.
+func newSupervisor(dataDir string) *controller.Supervisor {
+	return &controller.Supervisor{
+		ConfigPath: dataPaths(dataDir).ServerConf,
+		LogPath:    filepath.Join(dataDir, "openvpn.log"),
+	}
 }
 
 type paths struct {
@@ -591,47 +523,10 @@ func preflight(dataDir string) error {
 }
 
 // adminCertCN: OVCP_SERVER_CN env, else the VPN server cert's CN.
-// dropPrivileges: nginx model. Root is needed only to start openvpn; once
-// the child is running and the listeners are bound, become an unprivileged
-// user. Target: $OVCP_USER > "ovcp" system user > the sudo caller.
-// Returns true if privileges were dropped.
-func dropPrivileges(dataDir string) bool {
-	if os.Geteuid() != 0 {
-		return false
-	}
-	name := os.Getenv("OVCP_USER")
-	if name == "root" {
-		return false
-	}
-	var u *user.User
-	var err error
-	if name != "" {
-		u, err = user.Lookup(name)
-	} else if u, err = user.Lookup("ovcp"); err != nil {
-		if s := os.Getenv("SUDO_UID"); s != "" {
-			u, err = user.LookupId(s)
-		}
-	}
-	if err != nil || u == nil || u.Uid == "0" {
-		log.Print("warn: staying root (no ovcp user, not under sudo; set OVCP_USER to drop)")
-		return false
-	}
-	uid, _ := strconv.Atoi(u.Uid)
-	gid, _ := strconv.Atoi(u.Gid)
-	// dev convenience: the data dir may have been created by root
-	filepath.WalkDir(dataDir, func(p string, _ os.DirEntry, err error) error {
-		if err == nil {
-			os.Chown(p, uid, gid)
-		}
-		return nil
-	})
-	die2(unix.Setgroups([]int{gid}), "setgroups")
-	die2(unix.Setgid(gid), "setgid")
-	die2(unix.Setuid(uid), "setuid")
-	log.Printf("privileges dropped to %s (uid %d)", u.Username, uid)
-	return true
-}
-
+//
+// Note: ovcp runs as root and is the sole owner of the PKI (0600 root:root),
+// so it never drops privileges. A future unprivileged IPC worker will be a
+// separate process that talks to this one — not a privilege drop here.
 func adminCertCN(dataDir string) string {
 	if v := os.Getenv("OVCP_SERVER_CN"); v != "" {
 		return v
@@ -715,8 +610,7 @@ func usage() {
   export    -cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-key-pass PW]
   status    [-sock PATH]               connected clients (mgmt)
   kill      -cn NAME [-sock PATH]      disconnect client
-  reload    [-sock PATH]              soft reload (CRL, connections)
-  restart   [-sock PATH]              full restart (port/proto changes)
+  vpn       start|stop|restart|reconnect   manage the openvpn worker
   user      add|list|del|disable|enable|passwd|totp[-off]
   audit                                last 50 audit entries
   serve     [-listen ADDR] [-sock PATH]   run admin UI + API

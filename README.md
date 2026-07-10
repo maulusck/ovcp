@@ -5,7 +5,7 @@ easy-rsa), client `.ovpn` export, audit log. One static Go binary with the
 Svelte UI embedded. OpenVPN itself is an external dependency, controlled
 only via its management unix socket.
 
-## Quick start (standalone / dev)
+## Quick start (dev)
 
 ```sh
 make release              # builds UI + bin/ovcp
@@ -17,7 +17,7 @@ bin/ovcp init -server-cn vpn.example.com
 # → prompts for the admin user's password
 
 bin/ovcp serve
-# → spawns openvpn from data/server.conf (standalone mode)
+# → starts openvpn from data/server.conf (ovcp owns the process)
 # → admin UI: https://127.0.0.1:8443  (self-signed cert)
 
 bin/ovcp export -cn alice -remote vpn.example.com > alice.ovpn
@@ -43,18 +43,18 @@ Full reference: `make man` (or `man ovcp` once installed).
 
 ## Privileges & exposure
 
-**ovcp never runs elevated.** openvpn needs root (or CAP_NET_ADMIN) only to
-start — it drops to `nobody` by itself. Who provides that start-up privilege
-depends on how you run it:
+**ovcp runs as root.** It is the sole owner of the PKI and config
+(`0600 root:root`), so those files are secure by default — no drop, no chown
+dance, no per-mode privilege juggling. ovcp starts openvpn itself as a
+foreground worker (reaped the instant it exits, so no zombies even when
+ovcp is PID 1 in a container); openvpn drops to `nobody` on its own after
+startup. (A
+future unprivileged IPC worker will be a *separate* process, not a privilege
+drop inside ovcp.)
 
-| Mode | openvpn privileges | ovcp runs as |
-|---|---|---|
-| systemd | its own unit, as root, self-drops | `ovcp` system user (created by the package) |
-| container | container root + `--cap-add NET_ADMIN` (the container is the sandbox) | root in the container |
-| standalone (dev) | inherited from your `sudo` | drops after spawn: `$OVCP_USER` > `ovcp` user > sudo caller (nginx model) |
-
-The management socket lives in `/run/ovcp`, root:ovcp `0750` under systemd —
-directory permissions are the only guard needed.
+The openvpn management socket and ovcp's control socket live in `/run/ovcp`
+(`0750`, the control socket itself `0600`); directory permissions are the
+only guard needed.
 
 **Interfaces:** `OVCP_LISTEN` (or `-listen`) takes a comma-separated list.
 Every listener is the same HTTPS+auth+CSRF stack. Binding the VPN-side
@@ -67,22 +67,31 @@ OVCP_LISTEN=127.0.0.1:8443,10.8.0.1:8443   # host + inside the VPN
 
 ## Deployment
 
-Two supervision modes, auto-detected (override with `OVCP_PLATFORM`):
-**systemd** — two units bound together, openvpn and ovcp fail independently,
-the VPN stays up if the panel dies; **standalone** — ovcp spawns and
-supervises openvpn itself (from source, and inside the container).
+One runtime, everywhere: ovcp runs as root and owns the openvpn worker
+(fork/exec + signals — no SIGHUP, no in-place reload). openvpn is a plain
+foreground child: a goroutine sits in `wait()` and reaps it on exit, so no
+zombies accumulate across restarts, and `Pdeathsig` ties its lifetime to
+ovcp's — it can never outlive the controller. If ovcp is restarted, its
+`serve` process brings openvpn back up.
+
+Lifecycle is driven the same way from the UI and the CLI:
+`ovcp vpn start|stop|restart|reconnect`. The CLI reaches the running `serve`
+over a root-only unix control socket (serve owns the process; the CLI is just
+a remote for it). Restart is a full stop + fresh start (required for any
+config, key, or CRL change); reconnect is a soft `SIGUSR1` session reset.
 
 ### systemd
+A single unit runs ovcp as root; ovcp starts and stops openvpn itself.
 ```sh
 make release && sudo make install
-sudo install -m644 deploy/systemd/*.service /usr/lib/systemd/system/
+sudo install -m644 deploy/systemd/ovcp.service /usr/lib/systemd/system/
 sudo OVCP_DATA=/var/lib/ovcp ovcp init -server-cn vpn.example.com
-sudo systemctl enable --now ovcp-openvpn ovcp
+sudo systemctl enable --now ovcp
 ```
 
 ### container
-One all-in-one image (`make image`): ovcp supervises openvpn inside the
-container, exactly like standalone mode. Init once, then run:
+One all-in-one image (`make image`): ovcp (as root) owns the PKI and starts
+openvpn inside the container. Init once, then run:
 ```sh
 podman run --rm -v ovcp:/var/lib/ovcp ovcp init -server-cn vpn.example.com
 podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
@@ -109,7 +118,7 @@ Confined openvpn can't read the non-standard data dir without labels — run
 cmd/ovcp             CLI + serve entrypoint
 internal/pki         CA, issue/revoke, CRL, .ovpn bundles, tls-crypt
 internal/store       SQLite (metadata only — never private keys)
-internal/controller  mgmt-socket client, Reloader (platform-specific)
+internal/controller  openvpn Supervisor (reaped child) + control socket; mgmt client
 internal/ovpnconf    validated server.conf generation
 internal/auth        argon2id, sessions, TOTP, rate-limit, RBAC
 internal/api         REST/JSON + embedded UI, HTTPS, CSRF

@@ -1,7 +1,6 @@
 #!/bin/sh
-# create the unprivileged service user and hand it the data dir
+# ovcp runs as root and owns the data dir outright (PKI keys are 0600 root:root).
 set -e
-getent passwd ovcp >/dev/null || useradd -r -s /usr/sbin/nologin -d /var/lib/ovcp ovcp
 mkdir -p /var/lib/ovcp
-chown ovcp:ovcp /var/lib/ovcp
-chmod 750 /var/lib/ovcp
+chown root:root /var/lib/ovcp
+chmod 700 /var/lib/ovcp

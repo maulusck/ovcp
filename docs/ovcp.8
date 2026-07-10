@@ -12,12 +12,12 @@ is a single static binary that manages one OpenVPN server: a built\-in
 certificate authority (no easy\-rsa), client profile export, server
 configuration, and a web admin UI. It talks to the running
 .BR openvpn (8)
-process exclusively over its management \fIunix socket\fR and coordinates
-with it through files in the shared data directory. Under systemd,
-openvpn runs as its own unit and supervision belongs to systemd; in
-standalone mode (from source, or inside the container)
-.B ovcp serve
-spawns and supervises openvpn itself.
+process over its management \fIunix socket\fR (status and disconnects) and
+owns everything else through files in its data directory.
+.B ovcp
+runs as root, is the sole owner of the PKI and configuration, and starts
+openvpn itself as a reaped foreground child \(en the same on the host, under
+systemd, and inside the container.
 .PP
 The CA private key is stored encrypted (argon2id + AES\-256\-GCM). Every
 signing operation (issue, revoke) requires the CA passphrase, which is
@@ -47,12 +47,13 @@ skip user creation.
 .TP
 .B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-sock\fR \fIPATH\fR]
 Run the HTTPS admin UI and REST API (default \fI127.0.0.1:8443\fR, self\-signed
-certificate generated on first run). The supervision platform is
-auto\-detected (standalone, systemd) and selects how config
-reloads are delivered. In standalone mode an
+certificate generated on first run). Starts the
 .B openvpn
-child is spawned from \fIserver.conf\fR and its log written to
-\fIopenvpn.log\fR in the data directory. Refuses to start with an
+worker from \fIserver.conf\fR as a foreground child (reaped on exit \(en no
+zombies) with its log in \fIopenvpn.log\fR, and stops it on clean shutdown.
+Exposes a root\-only control socket so a separate
+.B ovcp vpn
+invocation can drive the worker. Refuses to start with an
 actionable error if
 .B ovcp init
 has not been run.
@@ -90,16 +91,21 @@ and
 .B serve
 maintain the file.
 .TP
-.B reload [\fB\-sock\fR \fIPATH\fR]
-Soft reload: SIGUSR1 via the management socket. Safe after openvpn drops
-privileges; picks up the CRL and connection\-level changes.
-.TP
-.B restart [\fB\-sock\fR \fIPATH\fR]
-Full config re\-read for port, protocol or subnet changes. Standalone:
-the serve process respawns its child, or, after its privilege drop, sends
-SIGHUP for an in\-process restart (persist\-key keeps the key in memory).
-Under systemd: SIGTERM via the management socket; \fBRestart=always\fR
-respawns openvpn fresh as root, which also picks up a rotated server key.
+.B vpn start|stop|restart|reconnect
+Manage the openvpn worker owned by a running
+.B serve
+(over the control socket, see \fBOVCP_CTRL_SOCK\fR).
+.B start
+launches it (idempotent),
+.B stop
+sends SIGTERM,
+.B restart
+is a full stop + fresh start \(en required for any configuration, key, or
+CRL change \(en and
+.B reconnect
+sends SIGUSR1 for a soft session reset (runtime recovery, no process
+replacement). SIGHUP / in\-place reload is intentionally not supported: a
+fresh restart re\-reads every root\-owned file, which SIGHUP cannot.
 .TP
 .B user add|list|disable|enable|passwd|totp
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
@@ -131,12 +137,9 @@ connected clients) may be bound before the tun interface exists
 .B OVCP_MGMT_SOCK
 OpenVPN management socket path (default \fI/run/ovcp/mgmt.sock\fR).
 .TP
-.B OVCP_PLATFORM
-Override platform detection: standalone, systemd.
-.TP
-.B OVCP_USER
-User to drop to in standalone mode (default: ovcp, else the sudo caller;
-root disables the drop).
+.B OVCP_CTRL_SOCK
+ovcp control socket for \fBvpn\fR subcommands (default
+\fI/run/ovcp/control.sock\fR); the CLI talks to a running \fBserve\fR here.
 .TP
 .B OVCP_SERVER_CN
 Default client \fBremote\fR for \fBexport\fR and CN for the admin UI
@@ -170,8 +173,9 @@ Private keys are never stored in the database.
 .I /var/lib/ovcp/admin\-tls/
 Self\-signed certificate for the admin UI.
 .TP
-.I /run/ovcp/mgmt.sock
-OpenVPN management socket (unix only, never TCP).
+.I /run/ovcp/mgmt.sock, /run/ovcp/control.sock
+OpenVPN management socket (unix only, never TCP) and ovcp's root\-only
+(0600) control socket for \fBvpn\fR lifecycle ops.
 .SH EXAMPLES
 Issue and download a profile for a phone, valid two years:
 .nf
@@ -195,15 +199,15 @@ systemctl enable \-\-now ovcp
 .fi
 .SH PRIVILEGES
 .B ovcp
-itself never requires root. openvpn needs root or CAP_NET_ADMIN only at
-startup and drops to nobody on its own. Under systemd the package runs
-ovcp as the unprivileged \fIovcp\fR user and guards the management
-socket with directory permissions on \fI/run/ovcp\fR (root:ovcp 0750).
-In containers, run with \-\-cap\-add NET_ADMIN. Standalone (development) mode follows the nginx model: start with sudo,
-openvpn is spawned, then ovcp drops to \fB$OVCP_USER\fR, the \fIovcp\fR
-system user, or the sudo caller (first match). Once dropped, reload goes
-through the management socket and, if openvpn exits, ovcp exits too so the
-caller can restart both. Set \fBOVCP_USER=root\fR to opt out.
+runs as root and is the sole owner of the PKI and configuration
+(\fI0600 root:root\fR), so those files are secure by default \(en there is
+no privilege drop and no per\-mode juggling. It starts openvpn, which needs
+root or CAP_NET_ADMIN at startup and then drops to \fInobody\fR on its own.
+In containers, run with \-\-cap\-add NET_ADMIN; the runtime dir
+\fI/run/ovcp\fR (0750) holds the management and control sockets. openvpn
+runs as a foreground child of ovcp and cannot outlive it (Pdeathsig).
+A future unprivileged IPC worker will be a separate process, not a drop
+inside ovcp.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

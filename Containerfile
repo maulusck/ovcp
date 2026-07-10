@@ -1,4 +1,4 @@
-# OVCP all-in-one image: ovcp supervises openvpn (standalone mode).
+# OVCP all-in-one image: ovcp (as root) owns the PKI and starts openvpn.
 #
 # First boot (one-shot init; passphrase/password default to "changeme",
 # override with -e OVCP_CA_PASSPHRASE=... -e OVCP_USER_PASSWORD=...):

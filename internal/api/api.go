@@ -21,7 +21,7 @@ type Server struct {
 	Auth          *auth.Service
 	PKI           *pki.PKI
 	Mgmt          *controller.Client
-	Reloader      controller.Reloader
+	VPN           controller.Lifecycle
 	ConfigPath    string // rendered server.conf
 	TLSCrypt      string // tls-crypt key path
 	DefaultRemote string // OVCP_SERVER_CN / server cert CN; default client remote
@@ -50,8 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/certs/revoke", s.wrap(auth.RoleOperator, s.handleRevoke))
 	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
 	mux.Handle("PUT /api/config", s.wrap(auth.RoleAdmin, s.handleConfigPut))
-	mux.Handle("POST /api/reload", s.wrap(auth.RoleAdmin, s.handleReload))
-	mux.Handle("POST /api/restart", s.wrap(auth.RoleAdmin, s.handleRestart))
+	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleVPN))
 	mux.Handle("GET /api/certs/download", s.wrap(auth.RoleReadonly, s.handleCertDownload))
 	if s.UI != nil {
 		mux.Handle("/", spa(s.UI))

@@ -1,8 +1,10 @@
 // Package controller talks to openvpn via its management unix socket.
 //
-// Reconnect tolerance: the mgmt interface accepts one client at a time and
-// the socket can vanish/reappear whenever the platform restarts openvpn.
-// We therefore dial per operation with a short timeout and hold no state.
+// The mgmt interface accepts one client at a time and the socket can
+// vanish/reappear whenever the controller restarts openvpn. We therefore
+// dial per operation with a short timeout and hold no state. It is used
+// only for read/query commands (status, kill); lifecycle signals are sent
+// straight to the pid by the Supervisor.
 package controller
 
 import (
@@ -98,11 +100,6 @@ func (c *Client) Status() ([]VPNClient, error) {
 // Kill disconnects all sessions for a CN (mgmt `kill`).
 func (c *Client) Kill(cn string) error {
 	return c.simple("kill " + cn)
-}
-
-// Signal sends a signal to the openvpn process via mgmt (`signal SIGHUP`).
-func (c *Client) Signal(sig string) error {
-	return c.simple("signal " + sig)
 }
 
 // Ping verifies the mgmt socket is reachable.

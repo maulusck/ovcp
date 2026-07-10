@@ -242,22 +242,29 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, u *stor
 	jsonOK(w, in)
 }
 
-func (s *Server) handleReload(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if err := s.Reloader.Reload(); err != nil {
+// handleVPN drives the openvpn worker: start|stop|restart|reconnect.
+func (s *Server) handleVPN(w http.ResponseWriter, r *http.Request, u *store.User) {
+	op := r.PathValue("op")
+	var err error
+	switch op {
+	case "start":
+		err = s.VPN.Start()
+	case "stop":
+		err = s.VPN.Stop()
+	case "restart":
+		err = s.VPN.Restart()
+	case "reconnect":
+		err = s.VPN.Reconnect()
+	default:
+		jsonErr(w, 404, "unknown vpn operation")
+		return
+	}
+	if err != nil {
 		jsonErr(w, 502, err.Error())
 		return
 	}
-	s.Store.Audit(u.Username, "reload", "via="+s.Reloader.Name())
-	jsonOK(w, map[string]string{"via": s.Reloader.Name()})
-}
-
-func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if err := s.Reloader.Restart(); err != nil {
-		jsonErr(w, 502, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "restart", "via="+s.Reloader.Name())
-	jsonOK(w, map[string]string{"via": s.Reloader.Name()})
+	s.Store.Audit(u.Username, "vpn_"+op, "")
+	jsonOK(w, map[string]string{"op": op})
 }
 
 // handleCertDownload returns the (public) certificate PEM for any issued cert.

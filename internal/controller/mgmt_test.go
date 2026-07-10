@@ -47,8 +47,6 @@ func fakeMgmt(t *testing.T) string {
 						c.Write([]byte("SUCCESS: common name 'alice' found, 1 client(s) killed\r\n"))
 					case strings.HasPrefix(cmd, "kill "):
 						c.Write([]byte("ERROR: common name not found\r\n"))
-					case strings.HasPrefix(cmd, "signal "):
-						c.Write([]byte("SUCCESS: signal SIGHUP thrown\r\n"))
 					}
 				}
 			}(c)
@@ -57,7 +55,7 @@ func fakeMgmt(t *testing.T) string {
 	return sock
 }
 
-func TestStatusKillSignal(t *testing.T) {
+func TestStatusKill(t *testing.T) {
 	c := NewClient(fakeMgmt(t))
 	if err := c.Ping(); err != nil {
 		t.Fatal(err)
@@ -76,9 +74,6 @@ func TestStatusKillSignal(t *testing.T) {
 	if err := c.Kill("nobody"); err == nil {
 		t.Fatal("want error for unknown cn")
 	}
-	if err := c.Signal("SIGHUP"); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestSocketGone(t *testing.T) {
@@ -88,26 +83,5 @@ func TestSocketGone(t *testing.T) {
 	}
 	if _, err := c.Status(); err == nil {
 		t.Fatal("want dial error")
-	}
-}
-
-func TestDetectPlatformOverride(t *testing.T) {
-	t.Setenv("OVCP_PLATFORM", "systemd")
-	if p := DetectPlatform(); p != PlatformSystemd {
-		t.Fatalf("got %s", p)
-	}
-	t.Setenv("OVCP_PLATFORM", "standalone")
-	if p := DetectPlatform(); p != PlatformStandalone {
-		t.Fatalf("got %s", p)
-	}
-}
-
-func TestNewReloader(t *testing.T) {
-	m := NewClient("x")
-	if r := NewReloader(PlatformSystemd, m, nil, nil); r.Name() != "mgmt-signal" {
-		t.Fatal(r.Name())
-	}
-	if r := NewReloader(PlatformStandalone, m, func() int { return 0 }, nil); r.Name() != "child-signal" {
-		t.Fatal(r.Name())
 	}
 }

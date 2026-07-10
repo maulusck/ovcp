@@ -22,28 +22,26 @@
       cfg.DNS = dns.split(',').map(s => s.trim()).filter(Boolean)
       cfg.Port = +cfg.Port
       cfg = await api('PUT', '/config', cfg)
-      ok = 'Saved. Use Restart to apply port/protocol/subnet changes.'
+      ok = 'Saved. Use Restart to apply configuration changes.'
     } catch (x) { err = x.error }
   }
 
-  async function reload() {
+  // Config and CRL changes require a full Restart (fresh root process re-reads
+  // the keys); Reconnect only soft-resets live sessions for recovery.
+  async function vpn(op, confirmMsg, recoverMs, done) {
+    if (confirmMsg && !confirm(confirmMsg)) return
     err = ''; ok = ''
     try {
-      const d = await api('POST', '/reload')
-      expectRecovery(15000)
-      ok = `Reload signal sent (${d.via}). Picks up CRL and connection settings.`
+      await api('POST', '/vpn/' + op)
+      if (recoverMs) expectRecovery(recoverMs)
+      ok = done
     } catch (x) { err = x.error }
   }
 
-  async function restart() {
-    if (!confirm('Restart OpenVPN? Connected clients will briefly drop.')) return
-    err = ''; ok = ''
-    try {
-      const d = await api('POST', '/restart')
-      expectRecovery(30000)
-      ok = `Restarting (${d.via}). Applies port, protocol, subnet and key changes.`
-    } catch (x) { err = x.error }
-  }
+  const start     = () => vpn('start', null, 30000, 'Start requested.')
+  const stop      = () => vpn('stop', 'Stop OpenVPN? All tunnels disconnect.', 0, 'Stopped. All tunnels disconnected.')
+  const restart   = () => vpn('restart', 'Restart OpenVPN? Connected clients will briefly drop.', 30000, 'Restarting. Applies all configuration changes.')
+  const reconnect = () => vpn('reconnect', null, 15000, 'Reconnect signal sent. Live sessions reset.')
 </script>
 
 <div class="card">
@@ -85,8 +83,10 @@
       {#if isAdmin}
         <div class="row">
           <button type="submit">Save configuration</button>
-          <button type="button" class="ghost" onclick={reload}>Reload</button>
+          <button type="button" class="ghost" onclick={start}>Start</button>
+          <button type="button" class="ghost" onclick={stop}>Stop</button>
           <button type="button" class="ghost" onclick={restart}>Restart</button>
+          <button type="button" class="ghost" onclick={reconnect}>Reconnect</button>
         </div>
       {:else}
         <p class="muted">Read-only: your role can view but not change settings.</p>

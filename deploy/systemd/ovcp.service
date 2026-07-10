@@ -1,18 +1,19 @@
 [Unit]
-Description=OVCP admin UI / control plane
-# pulls openvpn in on start; the reverse BindsTo restarts it with us
-Wants=ovcp-openvpn.service
-Before=ovcp-openvpn.service
+Description=OVCP — OpenVPN control plane (owns PKI, config and the openvpn worker)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=ovcp
-Group=ovcp
+# ovcp runs as root: it is the sole owner of the PKI (0600 root:root) and
+# starts openvpn itself as a detached worker. One unit, one process tree.
 ExecStart=/usr/local/bin/ovcp serve
 Environment=OVCP_DATA=/var/lib/ovcp
-Environment=OVCP_PLATFORM=systemd
 Restart=on-failure
 RestartSec=2
-NoNewPrivileges=true
+# openvpn (spawned by ovcp) needs the tun device and net admin
+DeviceAllow=/dev/net/tun rw
+RuntimeDirectory=ovcp
+RuntimeDirectoryMode=0750
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/ovcp

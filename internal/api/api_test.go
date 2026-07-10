@@ -42,18 +42,19 @@ func setup(t *testing.T) *env {
 	s.AddUser("viewer", h2, "readonly")
 	srv := &Server{Store: s, Auth: a, PKI: p,
 		Mgmt:       controller.NewClient(filepath.Join(dir, "no.sock")),
-		Reloader:   &fakeReloader{},
+		VPN:        &fakeVPN{},
 		ConfigPath: filepath.Join(dir, "server.conf"),
 		TLSCrypt:   filepath.Join(dir, "tc.key"),
 	}
 	return &env{ts: httptest.NewServer(srv.Handler()), t: t}
 }
 
-type fakeReloader struct{ n int }
+type fakeVPN struct{ n int }
 
-func (f *fakeReloader) Reload() error  { f.n++; return nil }
-func (f *fakeReloader) Restart() error { f.n++; return nil }
-func (f *fakeReloader) Name() string   { return "fake" }
+func (f *fakeVPN) Start() error     { f.n++; return nil }
+func (f *fakeVPN) Stop() error      { f.n++; return nil }
+func (f *fakeVPN) Restart() error   { f.n++; return nil }
+func (f *fakeVPN) Reconnect() error { f.n++; return nil }
 
 func (e *env) login(user string) {
 	body, _ := json.Marshal(map[string]string{"Username": user, "Password": "hunter22hunter22"})
@@ -120,8 +121,8 @@ func TestRBAC(t *testing.T) {
 	if r := e.req("POST", "/api/certs", `{"CN":"x","Passphrase":"p"}`, true); r.StatusCode != 403 {
 		t.Fatal("readonly issue must 403, got", r.Status)
 	}
-	if r := e.req("POST", "/api/reload", "", true); r.StatusCode != 403 {
-		t.Fatal("readonly reload must 403, got", r.Status)
+	if r := e.req("POST", "/api/vpn/restart", "", true); r.StatusCode != 403 {
+		t.Fatal("readonly vpn op must 403, got", r.Status)
 	}
 }
 
@@ -168,7 +169,7 @@ func TestConfigPutValidation(t *testing.T) {
 	if r := e.req("PUT", "/api/config", `{"Proto":"tcp","Port":443}`, true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
-	if r := e.req("POST", "/api/reload", "", true); r.StatusCode != 200 {
+	if r := e.req("POST", "/api/vpn/restart", "", true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
 }
