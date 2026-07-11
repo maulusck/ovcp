@@ -2,22 +2,13 @@
   import { api, fmtBytes } from './api.js'
   import { vpn, pollOnce } from './status.svelte.js'
   let { canOperate } = $props()
-  let clients = $state([])
   let err = $state('')
 
-  async function refresh() {
-    const d = await pollOnce()
-    clients = d.clients || []
-  }
-  $effect(() => {
-    refresh()
-    const t = setInterval(refresh, 3000)
-    return () => clearInterval(t)
-  })
-
+  // no local poll loop: App.svelte already polls status app-wide (for the
+  // header pill) and caches the full client list on the shared vpn state.
   async function kill(cn) {
     if (!confirm(`Disconnect ${cn}?`)) return
-    try { await api('POST', '/clients/kill', { CN: cn }); refresh() }
+    try { await api('POST', '/clients/kill', { CN: cn }); pollOnce() }
     catch (x) { err = x.error }
   }
 </script>
@@ -29,7 +20,7 @@
     <p class="muted">OpenVPN is restarting…</p>
   {:else if !vpn.up}
     <p class="muted">VPN is not reachable over the management socket.</p>
-  {:else if clients.length === 0}
+  {:else if vpn.clientList.length === 0}
     <p class="muted">No clients connected.</p>
   {:else}
     <table>
@@ -39,7 +30,7 @@
         {#if canOperate}<th></th>{/if}
       </tr></thead>
       <tbody>
-        {#each clients as c}
+        {#each vpn.clientList as c}
           <tr>
             <td>{c.CN}</td>
             <td>{c.RealAddress}</td>
