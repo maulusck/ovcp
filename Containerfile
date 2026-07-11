@@ -12,14 +12,14 @@
 # Split UI and VPN across interfaces with -p bind addresses, e.g. UI on the
 # LAN interface, VPN on the WAN interface:
 #   -p 203.0.113.7:1194:1194/udp -p 192.168.1.10:8443:8443
-FROM node:22-alpine AS ui
+FROM docker.io/library/node:22-alpine AS ui
 WORKDIR /src/web/ui
 COPY web/ui/package*.json ./
 RUN npm ci
 COPY web/ui .
 RUN npm run build
 
-FROM golang:1.22-alpine AS build
+FROM docker.io/library/golang:1.22-alpine AS build
 RUN apk add --no-cache gcc musl-dev
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -28,7 +28,7 @@ COPY . .
 COPY --from=ui /src/web/dist ./web/dist
 RUN CGO_ENABLED=1 go build -ldflags '-s -w' -o /ovcp ./cmd/ovcp
 
-FROM alpine:latest
+FROM docker.io/library/alpine:latest
 RUN apk add --no-cache openvpn
 COPY --from=build /ovcp /usr/bin/ovcp
 ENV OVCP_DATA=/var/lib/ovcp \
