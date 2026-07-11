@@ -154,7 +154,7 @@
 <style>
   .server-card { margin-bottom: 18px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 14px; }
-  .check { display: flex; align-items: center; gap: 8px; }
+  .check { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   .check input { width: auto; }
   .row { display: flex; gap: 10px; margin-top: 6px; }
   .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }

@@ -2,6 +2,7 @@
   import { api } from './api.js'
   import { vpn, pollOnce } from './status.svelte.js'
   import { theme, setTheme, THEMES } from './theme.svelte.js'
+  import Logo from './Logo.svelte'
   import Dashboard from './Dashboard.svelte'
   import Certs from './Certs.svelte'
   import Settings from './Settings.svelte'
@@ -65,7 +66,10 @@
 {#if !user}
   <main class="gate">
     <form class="card login" onsubmit={doLogin}>
-      <h1>OVCP</h1>
+      <div class="login-head">
+        <h1>OVCP</h1>
+        <Logo size={36} />
+      </div>
       <p class="sub">OpenVPN Control Plane</p>
       {#if step === 'creds'}
         <label>Username
@@ -88,23 +92,7 @@
 {:else}
   <header>
     <div class="brand">
-      <svg class="glyph" viewBox="0.22 -0.01 599.63 582.58" width="18" height="18" aria-hidden="true">
-        <path fill="currentColor" d="M599.85 297.43C599.85 133.16 465.63-.01 300.03-.01 134.5-.01.22 133.16.22 297.43c0 109.12 59.43 204.21 147.69 256.04l19.22-127.5c-28.48-31.45-45.96-72.91-45.96-118.52 0-98 80.1-177.47 178.86-177.47 98.83 0 178.87 79.47 178.87 177.47 0 46.02-17.69 87.77-46.58 119.21l19.14 127.23c88.67-51.7 148.39-147 148.39-256.46z"/>
-        <defs><path id="spike" d="M12 3 13 9.4 12 8.1 11 9.4Z"/></defs>
-        <g transform="translate(300 405) scale(10) translate(-12 -12)">
-          <g fill="currentColor">
-            <use href="#spike"/>
-            <use href="#spike" transform="rotate(45 12 12)"/>
-            <use href="#spike" transform="rotate(90 12 12)"/>
-            <use href="#spike" transform="rotate(135 12 12)"/>
-            <use href="#spike" transform="rotate(180 12 12)"/>
-            <use href="#spike" transform="rotate(225 12 12)"/>
-            <use href="#spike" transform="rotate(270 12 12)"/>
-            <use href="#spike" transform="rotate(315 12 12)"/>
-          </g>
-          <rect x="10.6" y="10.6" width="2.8" height="2.8" fill="currentColor" transform="rotate(45 12 12)"/>
-        </g>
-      </svg>
+      <Logo />
       <strong>OVCP</strong>
       <span class="pill {vpn.phase}" title={phaseText} role="status">
         <i></i>{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? 'restarting' : 'vpn down'}
@@ -206,6 +194,7 @@
 
   .gate { min-height: 100vh; display: grid; place-items: center; }
   .login { width: min(340px, 92vw); }
+  .login-head { display: flex; align-items: center; justify-content: space-between; }
   .login h1 { margin: 0; font-size: 22px; letter-spacing: .12em; }
   .login .sub { margin: 2px 0 18px; color: var(--dim); font-size: 13px; }
   .login button { width: 100%; margin-top: 6px; }
@@ -216,7 +205,6 @@
   }
   .brand { display: flex; align-items: center; gap: 12px; }
   .brand strong { letter-spacing: .12em; }
-  .glyph { color: var(--amber); }
 
   .pill {
     display: inline-flex; align-items: center; gap: 7px;
