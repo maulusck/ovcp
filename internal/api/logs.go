@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/store"
@@ -21,7 +22,9 @@ const (
 // tailLines returns up to n trailing lines of path, reading at most the last
 // tailMaxBytes so an unbounded log file can't blow up memory. A missing file
 // is not an error — it just means the process hasn't logged anything yet.
-func tailLines(path string, n int) ([]string, error) {
+// Lines matching skip (nil = none) are dropped before the n-line cap is
+// applied, so noise doesn't crowd real content out of the tail.
+func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return []string{}, nil
@@ -37,7 +40,11 @@ func tailLines(path string, n int) ([]string, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
-		lines = append(lines, sc.Text())
+		line := sc.Text()
+		if skip != nil && skip(line) {
+			continue
+		}
+		lines = append(lines, line)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
@@ -48,11 +55,25 @@ func tailLines(path string, n int) ([]string, error) {
 	return lines, nil
 }
 
+// isStatusPollLine matches the "status 3" command openvpn logs on its
+// management socket every time the app polls VPN status (every few seconds,
+// see App.svelte). It's not connection noise (that's gone now that the
+// mgmt client holds one connection instead of dialing per poll) — it's a
+// real command echo, just one that fires often enough to drown out
+// everything else in a 200-line tail.
+func isStatusPollLine(line string) bool {
+	return strings.Contains(line, `MANAGEMENT: CMD 'status 3'`)
+}
+
 // logHandler builds a GET handler tailing <DataDir>/filename; shared by the
 // openvpn.log and ovcp.log routes so the tailing logic exists exactly once.
 func (s *Server) logHandler(filename string) handler {
+	var skip func(string) bool
+	if filename == "openvpn.log" {
+		skip = isStatusPollLine
+	}
 	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
-		lines, err := tailLines(filepath.Join(s.DataDir, filename), tailLineLimit)
+		lines, err := tailLines(filepath.Join(s.DataDir, filename), tailLineLimit, skip)
 		if err != nil {
 			jsonErr(w, 500, err.Error())
 			return

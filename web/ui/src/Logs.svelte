@@ -146,7 +146,7 @@
 </div>
 
 <div class="logs-grid">
-  <details class="card" bind:open={openState.audit} bind:this={cards.audit}>
+  <details class="card" style="order: {openState.audit ? 0 : 1}" bind:open={openState.audit} bind:this={cards.audit}>
     <summary>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
@@ -172,7 +172,7 @@
   </details>
 
   {#each LOGS as l}
-    <details class="card" bind:open={openState[l.id]} bind:this={cards[l.id]}>
+    <details class="card" style="order: {openState[l.id] ? 0 : 1}" bind:open={openState[l.id]} bind:this={cards[l.id]}>
       <summary>{l.title}</summary>
       {#if lines[l.id].length === 0}
         <p class="muted">No log yet.</p>
@@ -198,7 +198,10 @@
   /* grid, not CSS columns: columns rebalance every card across the page
      while a box is being resized (the "bouncing" bug); in a grid each card
      stays in its cell and a drag only grows its own row. min(420px, 100%)
-     keeps narrow screens from overflowing horizontally. */
+     keeps narrow screens from overflowing horizontally. Card order is set
+     inline per-card from openState (expanded first, collapsed trail at the
+     end) — grid honors `order` for auto-placement, so no drag/drop needed
+     to keep open boxes up top. */
   .logs-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
     gap: 22px; align-items: start;

@@ -5,12 +5,16 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
-// fakeMgmt emulates the openvpn management interface on a unix socket.
-func fakeMgmt(t *testing.T) string {
+// fakeMgmt emulates the openvpn management interface on a unix socket and
+// returns the socket path plus a count of accepted connections, so tests
+// can assert on connection reuse vs reconnects.
+func fakeMgmt(t *testing.T) (string, *int32) {
 	t.Helper()
+	var accepts int32
 	sock := filepath.Join(t.TempDir(), "mgmt.sock")
 	l, err := net.Listen("unix", sock)
 	if err != nil {
@@ -23,6 +27,7 @@ func fakeMgmt(t *testing.T) string {
 			if err != nil {
 				return
 			}
+			atomic.AddInt32(&accepts, 1)
 			go func(c net.Conn) {
 				defer c.Close()
 				c.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
@@ -52,11 +57,12 @@ func fakeMgmt(t *testing.T) string {
 			}(c)
 		}
 	}()
-	return sock
+	return sock, &accepts
 }
 
 func TestStatusKill(t *testing.T) {
-	c := NewClient(fakeMgmt(t))
+	sock, _ := fakeMgmt(t)
+	c := NewClient(sock)
 	cl, err := c.Status()
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +87,62 @@ func TestSocketGone(t *testing.T) {
 }
 
 func TestKillRejectsInjection(t *testing.T) {
-	c := NewClient(fakeMgmt(t))
+	sock, _ := fakeMgmt(t)
+	c := NewClient(sock)
 	if err := c.Kill("alice\nsignal SIGTERM"); err == nil {
 		t.Fatal("want error for cn containing newline")
+	}
+}
+
+// TestConnectionReused is the point of holding a persistent mgmt
+// connection: repeated Status() calls must not open a new connection each
+// time (that's what spammed openvpn.log with connect/disconnect lines).
+func TestConnectionReused(t *testing.T) {
+	sock, accepts := fakeMgmt(t)
+	c := NewClient(sock)
+	for i := 0; i < 3; i++ {
+		if _, err := c.Status(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := atomic.LoadInt32(accepts); got != 1 {
+		t.Fatalf("accepts = %d, want 1 (connection should be reused)", got)
+	}
+}
+
+// TestAppErrorKeepsConnection ensures a well-formed "ERROR: ..." reply
+// (a successful round trip, just a rejected command) doesn't trigger a
+// reconnect — only actual connection failures should.
+func TestAppErrorKeepsConnection(t *testing.T) {
+	sock, accepts := fakeMgmt(t)
+	c := NewClient(sock)
+	if err := c.Kill("nobody"); err == nil {
+		t.Fatal("want error for unknown cn")
+	}
+	if _, err := c.Status(); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(accepts); got != 1 {
+		t.Fatalf("accepts = %d, want 1 (app-level error should not reconnect)", got)
+	}
+}
+
+// TestReconnectsAfterDrop ensures a dead held connection (e.g. openvpn
+// restarted) self-heals: the next call transparently redials and succeeds.
+func TestReconnectsAfterDrop(t *testing.T) {
+	sock, accepts := fakeMgmt(t)
+	c := NewClient(sock)
+	if _, err := c.Status(); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.conn.Close() // simulate the peer going away
+	c.mu.Unlock()
+
+	if _, err := c.Status(); err != nil {
+		t.Fatalf("expected transparent reconnect, got error: %v", err)
+	}
+	if got := atomic.LoadInt32(accepts); got != 2 {
+		t.Fatalf("accepts = %d, want 2 (one reconnect after drop)", got)
 	}
 }
