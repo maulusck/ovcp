@@ -48,9 +48,19 @@ Full reference: `make man` (or `man ovcp` once installed).
 dance, no per-mode privilege juggling. ovcp starts openvpn itself as a
 foreground worker (reaped the instant it exits, so no zombies even when
 ovcp is PID 1 in a container); openvpn drops to `nobody` on its own after
-startup. (A
-future unprivileged IPC worker will be a *separate* process, not a privilege
-drop inside ovcp.)
+startup.
+
+A privilege-separated admin UI (root supervisor + non-root HTTP worker) was
+considered and deliberately not built: for this tool's actual threat model —
+a personal VPN's own admin panel, loopback by default, already behind
+auth+CSRF+RBAC+TOTP — an attacker who reaches it at all has already breached
+the VPN; the marginal win over that didn't justify a second process, an IPC
+protocol, and the failure modes that come with them. Instead, the shipped
+[systemd unit](deploy/systemd/ovcp.service) sandboxes the *whole* unit
+(`ProtectSystem=strict`, `NoNewPrivileges`, `MemoryDenyWriteExecute`, no
+kernel/module/log tampering, no new setuid binaries) — root inside the unit
+can't touch the rest of the host even though it's still root. Native
+platform containment instead of an app-level privilege split.
 
 The openvpn management socket and ovcp's control socket live in `/run/ovcp`
 (`0750`, the control socket itself `0600`); directory permissions are the

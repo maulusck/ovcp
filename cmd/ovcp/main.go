@@ -22,7 +22,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mdp/qrterminal/v3"
+	"rsc.io/qr"
 
 	"github.com/ovcp/ovcp/internal/api"
 	"github.com/ovcp/ovcp/internal/auth"
@@ -495,10 +495,7 @@ func main() {
 			die(s.SetUserTOTP(*name, sec))
 			s.Audit("cli", "user_totp_enroll", "name="+*name)
 			url := auth.TOTPProvisioningURL(sec, *name)
-			qrterminal.GenerateWithConfig(url, qrterminal.Config{
-				Writer: os.Stdout, Level: qrterminal.L,
-				BlackChar: qrterminal.BLACK, WhiteChar: qrterminal.WHITE, QuietZone: 1,
-			})
+			printQR(url)
 			fmt.Println("scan with your authenticator, or enter manually:")
 			fmt.Println("  secret:", sec)
 			fmt.Println("  url:   ", url)
@@ -716,6 +713,28 @@ func readSecret(label, env string, confirm bool) []byte {
 		die(fmt.Errorf("%s too short (min 8)", label))
 	}
 	return v
+}
+
+// printQR renders a QR code as terminal background-color blocks (the one
+// thing qrterminal added over rsc.io/qr itself — not worth a dependency).
+func printQR(text string) {
+	code, err := qr.Encode(text, qr.L)
+	if err != nil {
+		return
+	}
+	const black, white = "\033[40m  \033[0m", "\033[47m  \033[0m"
+	fmt.Println(strings.Repeat(white, code.Size+2))
+	for y := 0; y <= code.Size; y++ {
+		fmt.Print(white)
+		for x := 0; x <= code.Size; x++ {
+			if code.Black(x, y) {
+				fmt.Print(black)
+			} else {
+				fmt.Print(white)
+			}
+		}
+		fmt.Println()
+	}
 }
 
 func envOr(k, def string) string {

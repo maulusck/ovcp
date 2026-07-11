@@ -17,6 +17,21 @@ RuntimeDirectoryMode=0750
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/ovcp
+# root stays root (openvpn needs it), but strip everything a compromised
+# process inside the unit doesn't need: no kernel/module/log tampering, no
+# new setuid binaries, no privilege gain via exec, no writable+exec memory.
+# NoNewPrivileges doesn't block openvpn's own setuid() privilege drop (that's
+# a voluntary self-demotion, not a gain via exec).
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+NoNewPrivileges=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target
