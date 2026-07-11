@@ -79,12 +79,15 @@
 </div>
 
 <style>
-  .logs-head { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .logs-head { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 14px; }
   .poll-pick { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
   .poll-pick select { width: auto; }
-  .logs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; align-items: start; }
+  /* CSS columns (not grid) so panels reflow natively when a <details> is
+     toggled — a closed panel frees its space immediately, no JS layout code. */
+  .logs-grid { column-width: 420px; column-gap: 22px; }
+  .logs-grid :global(.card) { break-inside: avoid; margin-bottom: 22px; }
   summary { cursor: pointer; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
-  details[open] summary { margin-bottom: 12px; }
+  details[open] summary { margin-bottom: 14px; }
   .logbox {
     font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all;
     max-height: 420px; overflow-y: auto; margin: 0; color: var(--text);
