@@ -99,12 +99,12 @@ func TestTOTPFlow(t *testing.T) {
 
 func TestTOTPProvisioningURL(t *testing.T) {
 	if u := TOTPProvisioningURL("SECRET", "eve", "vpn.example.com"); u !=
-		"otpauth://totp/vpn.example.com:eve?secret=SECRET&issuer=vpn.example.com" {
+		"otpauth://totp/OVCP%20%28vpn.example.com%29:eve?secret=SECRET&issuer=OVCP+%28vpn.example.com%29" {
 		t.Fatalf("got %q", u)
 	}
 	if u := TOTPProvisioningURL("SECRET", "eve", ""); u !=
 		"otpauth://totp/OVCP:eve?secret=SECRET&issuer=OVCP" {
-		t.Fatalf("empty issuer should fall back to OVCP, got %q", u)
+		t.Fatalf("empty fqdn should fall back to plain OVCP, got %q", u)
 	}
 }
 
