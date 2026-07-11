@@ -114,7 +114,11 @@
           <option value={t.name} style="background:{t.bg}; color:{t.fg}">{t.label}</option>
         {/each}
       </select>
-      <span>{user.username} · {user.role}</span>
+      <div class="account" title="{user.username} — {user.role}">
+        <span class="avatar">{user.username[0].toUpperCase()}</span>
+        <span class="acct-name">{user.username}</span>
+        <span class="role-pill role-{user.role}">{user.role}</span>
+      </div>
       <button class="ghost" onclick={doLogout}>Sign out</button>
     </div>
   </header>
@@ -234,6 +238,19 @@
   nav button.active { color: var(--text); background: var(--ink); }
   .who { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--dim); }
   .theme-pick { width: auto; padding: 5px 8px; font-size: 12px; }
+  .account { display: flex; align-items: center; gap: 8px; }
+  .avatar {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+    background: var(--amber); color: var(--ink); font-weight: 700; font-size: 12px;
+  }
+  .acct-name { color: var(--text); font-weight: 600; }
+  .role-pill {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--dim);
+  }
+  .role-pill.role-admin { color: var(--amber); border-color: var(--amber); }
+  .role-pill.role-operator { color: var(--ok); border-color: var(--ok); }
   main { padding: 18px; max-width: 1100px; margin: 0 auto; }
   @media (prefers-reduced-motion: reduce) { :global(*) { transition: none !important; animation: none !important; } }
 </style>
