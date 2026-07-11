@@ -2,13 +2,20 @@
   import { tick } from 'svelte'
   import { api } from './api.js'
   let { isAdmin } = $props()
+
+  // the two plain-text log panels are identical except for these fields;
+  // the audit panel stays bespoke (it's a table, newest-first, no autoscroll).
+  const LOGS = [
+    { id: 'openvpn', title: 'OpenVPN log', file: 'openvpn.log' },
+    { id: 'ovcp', title: 'OVCP log', file: 'ovcp.log' },
+  ]
+  let lines = $state({ openvpn: [], ovcp: [] })
   let entries = $state([])
-  let ovpnLines = $state([])
-  let ovcpLines = $state([])
-  let ovpnBox = $state(), ovcpBox = $state()
-  let auditCard = $state(), ovpnCard = $state(), ovcpCard = $state()
+  let boxes = $state({}) // id -> scroll container ('audit' included)
+  let cards = $state({}) // id -> <details> element, for Maximize
   let debugOn = $state(false)
   let err = $state('')
+
   const POLL_KEY = 'ovcp_logs_poll'
   let pollSec = $state(Number(localStorage.getItem(POLL_KEY) ?? 15))
   const AUTOSCROLL_KEY = 'ovcp_logs_autoscroll'
@@ -18,25 +25,34 @@
     { audit: true, openvpn: false, ovcp: false },
     JSON.parse(localStorage.getItem(OPEN_KEY) || '{}')))
 
-  async function scrollToBottom(el) {
-    if (!autoscroll || !el) return
-    await tick()
-    el.scrollTop = el.scrollHeight
+  // clamp a box's height to its content: CSS fit-content doesn't work in the
+  // vertical axis in Firefox, so measure instead. Keeps a short log from
+  // showing dead space (on load) and a resize drag from stretching past the
+  // end of the log (clamped again on pointerup).
+  function fitToContent(el) {
+    if (!el) return
+    const cur = el.offsetHeight
+    el.style.height = 'auto'
+    el.style.height = Math.min(cur, el.offsetHeight) + 'px'
   }
 
+  async function loadLog(id) {
+    try {
+      lines[id] = (await api('GET', '/logs/' + id)).lines
+      await tick()
+      const el = boxes[id]
+      fitToContent(el)
+      if (autoscroll && el) el.scrollTop = el.scrollHeight
+    } catch (x) { err = x.error }
+  }
   async function loadAudit() {
-    try { entries = await api('GET', '/audit') } catch (x) { err = x.error }
-  }
-  async function loadOpenVPN() {
-    try { ovpnLines = (await api('GET', '/logs/openvpn')).lines; scrollToBottom(ovpnBox) } catch (x) { err = x.error }
-  }
-  async function loadOVCP() {
-    try { ovcpLines = (await api('GET', '/logs/ovcp')).lines; scrollToBottom(ovcpBox) } catch (x) { err = x.error }
+    try { entries = await api('GET', '/audit'); await tick(); fitToContent(boxes.audit) }
+    catch (x) { err = x.error }
   }
   async function loadDebug() {
     try { debugOn = (await api('GET', '/debug')).debug } catch (x) { err = x.error }
   }
-  function refresh() { loadAudit(); loadOpenVPN(); loadOVCP(); loadDebug() }
+  function refresh() { loadAudit(); LOGS.forEach((l) => loadLog(l.id)); loadDebug() }
   refresh()
 
   async function toggleDebug(e) {
@@ -70,17 +86,16 @@
 
   // native Fullscreen API for "maximize" — no custom overlay/z-index CSS,
   // Esc-to-exit and restore both come from the browser for free.
-  let maximized = $state(null) // 'audit' | 'openvpn' | 'ovcp' | null
-  function toggleMaximize(el) {
+  let maximized = $state(null) // panel id | null
+  function toggleMaximize(id) {
+    const el = cards[id]
     if (!el) return
     if (document.fullscreenElement === el) document.exitFullscreen()
     else el.requestFullscreen()
   }
   $effect(() => {
-    function onChange() {
-      const el = document.fullscreenElement
-      maximized = el === auditCard ? 'audit' : el === ovpnCard ? 'openvpn' : el === ovcpCard ? 'ovcp' : null
-    }
+    const onChange = () =>
+      (maximized = Object.keys(cards).find((k) => cards[k] === document.fullscreenElement) ?? null)
     document.addEventListener('fullscreenchange', onChange)
     return () => document.removeEventListener('fullscreenchange', onChange)
   })
@@ -91,10 +106,22 @@
     const t = setInterval(refresh, pollSec * 1000)
     return () => clearInterval(t)
   })
-
   $effect(() => { localStorage.setItem(AUTOSCROLL_KEY, autoscroll ? '1' : '0') })
   $effect(() => { localStorage.setItem(OPEN_KEY, JSON.stringify(openState)) })
 </script>
+
+{#snippet actions(id, filename, text)}
+  <div class="panel-actions">
+    <button type="button" class="ghost" onclick={() => copyText(id, text())}>
+      {copied === id ? 'Copied' : 'Copy'}
+    </button>
+    <button type="button" class="ghost" title="Downloads what's shown here — for complete files, use Download all logs"
+      onclick={() => downloadText(filename, text())}>Download</button>
+    <button type="button" class="ghost" onclick={() => toggleMaximize(id)}>
+      {maximized === id ? 'Restore' : 'Maximize'}
+    </button>
+  </div>
+{/snippet}
 
 <div class="logs-head">
   {#if err}<p class="err">{err}</p>{/if}
@@ -119,21 +146,14 @@
 </div>
 
 <div class="logs-grid">
-  <details class="card" bind:open={openState.audit} bind:this={auditCard}>
+  <details class="card" bind:open={openState.audit} bind:this={cards.audit}>
     <summary>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
     {:else}
-      <div class="panel-actions">
-        <button type="button" class="ghost" onclick={() => copyText('audit', auditText())}>
-          {copied === 'audit' ? 'Copied' : 'Copy'}
-        </button>
-        <button type="button" class="ghost" onclick={() => downloadText('audit.log', auditText())}>Download</button>
-        <button type="button" class="ghost" onclick={() => toggleMaximize(auditCard)}>
-          {maximized === 'audit' ? 'Restore' : 'Maximize'}
-        </button>
-      </div>
-      <div class="table-wrap">
+      {@render actions('audit', 'audit.log', auditText)}
+      <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
+      <div class="scrollbox" bind:this={boxes.audit} onpointerup={(e) => fitToContent(e.currentTarget)}>
         <table>
           <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
           <tbody>
@@ -151,43 +171,18 @@
     {/if}
   </details>
 
-  <details class="card" bind:open={openState.openvpn} bind:this={ovpnCard}>
-    <summary>OpenVPN log</summary>
-    {#if ovpnLines.length === 0}
-      <p class="muted">No log yet.</p>
-    {:else}
-      <div class="panel-actions">
-        <button type="button" class="ghost" onclick={() => copyText('openvpn', ovpnLines.join('\n'))}>
-          {copied === 'openvpn' ? 'Copied' : 'Copy'}
-        </button>
-        <button type="button" class="ghost" title="Downloads what's shown here (last 200 lines) — for the complete file, use Download all logs"
-          onclick={() => downloadText('openvpn.log', ovpnLines.join('\n'))}>Download</button>
-        <button type="button" class="ghost" onclick={() => toggleMaximize(ovpnCard)}>
-          {maximized === 'openvpn' ? 'Restore' : 'Maximize'}
-        </button>
-      </div>
-      <pre class="logbox" bind:this={ovpnBox}>{ovpnLines.join('\n')}</pre>
-    {/if}
-  </details>
-
-  <details class="card" bind:open={openState.ovcp} bind:this={ovcpCard}>
-    <summary>OVCP log</summary>
-    {#if ovcpLines.length === 0}
-      <p class="muted">No log yet.</p>
-    {:else}
-      <div class="panel-actions">
-        <button type="button" class="ghost" onclick={() => copyText('ovcp', ovcpLines.join('\n'))}>
-          {copied === 'ovcp' ? 'Copied' : 'Copy'}
-        </button>
-        <button type="button" class="ghost" title="Downloads what's shown here (last 200 lines) — for the complete file, use Download all logs"
-          onclick={() => downloadText('ovcp.log', ovcpLines.join('\n'))}>Download</button>
-        <button type="button" class="ghost" onclick={() => toggleMaximize(ovcpCard)}>
-          {maximized === 'ovcp' ? 'Restore' : 'Maximize'}
-        </button>
-      </div>
-      <pre class="logbox" bind:this={ovcpBox}>{ovcpLines.join('\n')}</pre>
-    {/if}
-  </details>
+  {#each LOGS as l}
+    <details class="card" bind:open={openState[l.id]} bind:this={cards[l.id]}>
+      <summary>{l.title}</summary>
+      {#if lines[l.id].length === 0}
+        <p class="muted">No log yet.</p>
+      {:else}
+        {@render actions(l.id, l.file, () => lines[l.id].join('\n'))}
+        <pre class="scrollbox logbox" bind:this={boxes[l.id]}
+          onpointerup={(e) => fitToContent(e.currentTarget)}>{lines[l.id].join('\n')}</pre>
+      {/if}
+    </details>
+  {/each}
 </div>
 
 <style>
@@ -200,28 +195,34 @@
   .poll-pick select { padding: 3px 6px; font-size: 12px; }
   .logs-head button.ghost, .panel-actions button.ghost { padding: 3px 10px; font-size: 12px; }
   .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
-  /* CSS columns (not grid) so panels reflow natively when a <details> is
-     toggled — a closed panel frees its space immediately, no JS layout code. */
-  .logs-grid { column-width: 420px; column-gap: 22px; }
-  .logs-grid :global(.card) { break-inside: avoid; margin-bottom: 22px; padding: 10px 14px; }
+  /* grid, not CSS columns: columns rebalance every card across the page
+     while a box is being resized (the "bouncing" bug); in a grid each card
+     stays in its cell and a drag only grows its own row. min(420px, 100%)
+     keeps narrow screens from overflowing horizontally. */
+  .logs-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+    gap: 22px; align-items: start;
+  }
+  .logs-grid :global(.card) { padding: 10px 14px; }
   summary { cursor: pointer; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
   details[open] summary { margin-bottom: 14px; }
-  /* compact by default; native resize handle (drag the corner) covers
-     "let me make it bigger" without any drag-handler JS or min/max logic —
-     the browser already clamps against min-height/max-height for us.
-     fit-content caps both ends at the log's actual content size: a short
-     log starts smaller than 260px, and dragging can't stretch it past its
-     own content (min() also keeps a huge log capped at 80vh either way). */
-  .logbox, .table-wrap {
-    height: min(260px, fit-content); min-height: 80px; max-height: min(80vh, fit-content);
+  /* compact by default (260px cap, shorter if the log is shorter — see
+     fitToContent, which does what CSS fit-content can't cross-browser);
+     the native resize handle can grow a box up to 80vh, and fitToContent
+     snaps a drag back down to the content height on release. */
+  .scrollbox {
+    height: 260px; min-height: 60px; max-height: 80vh;
     overflow: auto; resize: vertical; cursor: grab;
   }
   .logbox {
     font-family: var(--mono); font-size: 12px; line-height: 1.4; white-space: pre-wrap;
     word-break: break-all; margin: 0; color: var(--text);
   }
-  /* Maximize = native Fullscreen API on the .card; give the scroll boxes
-     the freed-up viewport space instead of staying capped at 260px. */
+  /* Maximize = native Fullscreen API on the .card; give the scroll box the
+     freed-up viewport space instead of staying capped. */
   .card:fullscreen { padding: 18px; overflow: auto; }
-  .card:fullscreen .logbox, .card:fullscreen .table-wrap { max-height: calc(100vh - 100px); resize: none; }
+  .card:fullscreen .scrollbox {
+    /* !important so fullscreen wins over the inline height set by drags/fitToContent */
+    height: auto !important; max-height: calc(100vh - 100px); resize: none;
+  }
 </style>
