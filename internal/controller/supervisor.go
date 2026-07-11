@@ -58,6 +58,16 @@ func (s *Supervisor) Running() bool {
 	return r
 }
 
+// Pid returns the current openvpn pid, or 0 when not running.
+func (s *Supervisor) Pid() int {
+	s.stMu.Lock()
+	defer s.stMu.Unlock()
+	if !s.running || s.cmd == nil || s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
+}
+
 func (s *Supervisor) Start() error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()

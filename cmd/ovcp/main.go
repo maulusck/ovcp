@@ -253,16 +253,30 @@ func main() {
 	case "status":
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
 		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
+		ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 		fs.Parse(args[1:])
+		// process line first (from serve); if serve/openvpn is down, there
+		// are no clients to list, so stop here.
+		r, err := controller.Control(*ctrl, "status")
+		if err != nil {
+			fmt.Println("OpenVPN: unknown —", err)
+			return
+		}
+		if r.Pid == 0 {
+			fmt.Println("OpenVPN: stopped")
+			return
+		}
+		fmt.Printf("OpenVPN: running (pid %d)\n", r.Pid)
 		cl, err := controller.NewClient(*sock).Status()
-		die(err)
+		if err != nil {
+			fmt.Println("Clients: unavailable —", err)
+			return
+		}
+		fmt.Printf("Clients: %d connected\n", len(cl))
 		for _, c := range cl {
-			fmt.Printf("%-20s %-22s %-12s rx %d tx %d since %s\n",
+			fmt.Printf("  %-20s %-22s %-12s rx %d tx %d since %s\n",
 				c.CN, c.RealAddress, c.VirtualAddress, c.BytesRecv, c.BytesSent,
 				c.ConnectedSince.Format(time.RFC3339))
-		}
-		if len(cl) == 0 {
-			fmt.Println("no clients connected")
 		}
 
 	case "kill":
@@ -285,15 +299,35 @@ func main() {
 		fs.Parse(args[1:])
 		op := fs.Arg(0)
 		switch op {
-		case "start", "stop", "restart", "reconnect":
+		case "start", "stop", "restart", "reconnect", "status":
 		default:
-			die(fmt.Errorf("usage: ovcp vpn start|stop|restart|reconnect"))
+			die(fmt.Errorf("usage: ovcp vpn start|stop|restart|reconnect|status"))
 		}
-		die(controller.Control(*ctrl, op))
-		s := openStore()
-		defer s.Close()
-		s.Audit("cli", "vpn_"+op, "")
-		fmt.Println("vpn", op, "ok")
+		r, err := controller.Control(*ctrl, op)
+		die(err)
+		if op != "status" { // status is read-only, don't audit
+			s := openStore()
+			s.Audit("cli", "vpn_"+op, fmt.Sprintf("pid=%d", r.Pid))
+			s.Close()
+		}
+		switch {
+		case op == "status" && r.Pid == 0:
+			fmt.Println("vpn stopped")
+		case op == "status":
+			fmt.Printf("vpn running (pid %d)\n", r.Pid)
+		case op == "start" && !r.Changed:
+			fmt.Printf("vpn already started (pid %d)\n", r.Pid)
+		case op == "start":
+			fmt.Printf("vpn started (pid %d)\n", r.Pid)
+		case op == "stop" && !r.Changed:
+			fmt.Println("vpn already stopped")
+		case op == "stop":
+			fmt.Println("vpn stopped")
+		case op == "restart":
+			fmt.Printf("vpn restarted (pid %d)\n", r.Pid)
+		case op == "reconnect":
+			fmt.Printf("vpn reconnect sent (pid %d)\n", r.Pid)
+		}
 
 	case "user":
 		if len(args) < 2 {
@@ -608,9 +642,9 @@ func usage() {
   revoke    -serial HEX                revoke + regenerate CRL
   list                                 list certificates
   export    -cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-key-pass PW]
-  status    [-sock PATH]               connected clients (mgmt)
+  status                               VPN process + connected clients
   kill      -cn NAME [-sock PATH]      disconnect client
-  vpn       start|stop|restart|reconnect   manage the openvpn worker
+  vpn       start|stop|restart|reconnect|status   manage/inspect the openvpn worker
   user      add|list|del|disable|enable|passwd|totp[-off]
   audit                                last 50 audit entries
   serve     [-listen ADDR] [-sock PATH]   run admin UI + API

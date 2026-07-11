@@ -16,6 +16,15 @@ type Lifecycle interface {
 	Stop() error
 	Restart() error
 	Reconnect() error
+	Pid() int // 0 when not running
+}
+
+// ControlResult is what a control op reports back: the openvpn pid afterwards
+// (0 if stopped) and whether this op actually changed the process (a fresh
+// spawn, a replacement, or a stop) versus a no-op.
+type ControlResult struct {
+	Pid     int
+	Changed bool
 }
 
 // ServeControl exposes lc over a root-only unix socket so a separate
@@ -51,8 +60,11 @@ func serveControlConn(c net.Conn, lc Lifecycle) {
 	if err != nil {
 		return
 	}
+	op := strings.TrimSpace(line)
+	before := lc.Pid()
 	var opErr error
-	switch strings.TrimSpace(line) {
+	switch op {
+	case "status": // read-only
 	case "start":
 		opErr = lc.Start()
 	case "stop":
@@ -69,28 +81,36 @@ func serveControlConn(c net.Conn, lc Lifecycle) {
 		fmt.Fprintf(c, "ERR %s\n", opErr)
 		return
 	}
-	fmt.Fprintln(c, "OK")
+	after := lc.Pid()
+	changed := "nochange"
+	if before != after {
+		changed = "changed"
+	}
+	fmt.Fprintf(c, "OK %d %s\n", after, changed)
 }
 
-// Control sends one lifecycle op to a running serve process and reports the
-// result. It is the client half used by the CLI.
-func Control(sockPath, op string) error {
+// Control sends one op to a running serve process and returns the resulting
+// pid/changed state. It is the client half used by the CLI.
+func Control(sockPath, op string) (ControlResult, error) {
+	var r ControlResult
 	c, err := net.DialTimeout("unix", sockPath, 3*time.Second)
 	if err != nil {
-		return fmt.Errorf("controller: ovcp serve not reachable at %s (is it running?): %w", sockPath, err)
+		return r, fmt.Errorf("controller: ovcp serve not reachable at %s (is it running?): %w", sockPath, err)
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(65 * time.Second))
 	if _, err := fmt.Fprintf(c, "%s\n", op); err != nil {
-		return err
+		return r, err
 	}
 	resp, _ := bufio.NewReader(c).ReadString('\n')
-	switch resp = strings.TrimSpace(resp); {
-	case resp == "OK":
-		return nil
-	case strings.HasPrefix(resp, "ERR "):
-		return fmt.Errorf("%s", strings.TrimPrefix(resp, "ERR "))
-	default:
-		return fmt.Errorf("controller: unexpected control response %q", resp)
+	resp = strings.TrimSpace(resp)
+	if strings.HasPrefix(resp, "ERR ") {
+		return r, fmt.Errorf("%s", strings.TrimPrefix(resp, "ERR "))
 	}
+	var changed string
+	if _, err := fmt.Sscanf(resp, "OK %d %s", &r.Pid, &changed); err != nil {
+		return r, fmt.Errorf("controller: unexpected control response %q", resp)
+	}
+	r.Changed = changed == "changed"
+	return r, nil
 }

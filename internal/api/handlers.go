@@ -264,7 +264,7 @@ func (s *Server) handleVPN(w http.ResponseWriter, r *http.Request, u *store.User
 		return
 	}
 	s.Store.Audit(u.Username, "vpn_"+op, "")
-	jsonOK(w, map[string]string{"op": op})
+	jsonOK(w, map[string]any{"op": op, "pid": s.VPN.Pid()})
 }
 
 // handleCertDownload returns the (public) certificate PEM for any issued cert.

@@ -55,6 +55,7 @@ func (f *fakeVPN) Start() error     { f.n++; return nil }
 func (f *fakeVPN) Stop() error      { f.n++; return nil }
 func (f *fakeVPN) Restart() error   { f.n++; return nil }
 func (f *fakeVPN) Reconnect() error { f.n++; return nil }
+func (f *fakeVPN) Pid() int         { return 4242 }
 
 func (e *env) login(user string) {
 	body, _ := json.Marshal(map[string]string{"Username": user, "Password": "hunter22hunter22"})

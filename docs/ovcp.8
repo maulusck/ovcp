@@ -77,8 +77,10 @@ on its next handshake (\fBcrl\-verify\fR is always configured).
 .B list
 List issued certificates with status (valid, REVOKED, expired).
 .TP
-.B status [\fB\-sock\fR \fIPATH\fR]
-Show currently connected VPN clients via the management socket.
+.B status [\fB\-sock\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR]
+Overview: whether the openvpn worker is running (with its pid, via the
+control socket) and, if so, the connected clients (via the management
+socket).
 .TP
 .B kill \fB\-cn\fR \fINAME\fR [\fB\-sock\fR \fIPATH\fR]
 Disconnect a client immediately.
@@ -91,21 +93,26 @@ and
 .B serve
 maintain the file.
 .TP
-.B vpn start|stop|restart|reconnect
-Manage the openvpn worker owned by a running
+.B vpn start|stop|restart|reconnect|status
+Manage or inspect the openvpn worker owned by a running
 .B serve
 (over the control socket, see \fBOVCP_CTRL_SOCK\fR).
 .B start
 launches it (idempotent),
 .B stop
 sends SIGTERM,
+.B status
+reports whether it is running,
 .B restart
 is a full stop + fresh start \(en required for any configuration, key, or
 CRL change \(en and
 .B reconnect
 sends SIGUSR1 for a soft session reset (runtime recovery, no process
 replacement). SIGHUP / in\-place reload is intentionally not supported: a
-fresh restart re\-reads every root\-owned file, which SIGHUP cannot.
+fresh restart re\-reads every root\-owned file, which SIGHUP cannot. Each
+op prints the resulting openvpn pid, so a repeated
+.B start
+reports \(lqalready started\(rq rather than spawning a second process.
 .TP
 .B user add|list|disable|enable|passwd|totp
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
