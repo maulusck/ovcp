@@ -10,12 +10,6 @@
   import Logs from './Logs.svelte'
   import Docs from './Docs.svelte'
 
-  let user = $state(null)
-  let tab = $state('dashboard')
-  let login = $state({ username: '', password: '', totp: '' })
-  let step = $state('creds') // creds | totp
-  let err = $state('')
-
   const tabs = [
     ['dashboard', 'Dashboard'],
     ['certs', 'Certificates'],
@@ -24,6 +18,15 @@
     ['logs', 'Logs'],
     ['docs', 'Docs'],
   ]
+
+  const TAB_KEY = 'ovcp_tab'
+  const savedTab = localStorage.getItem(TAB_KEY)
+
+  let user = $state(null)
+  let tab = $state(tabs.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
+  let login = $state({ username: '', password: '', totp: '' })
+  let step = $state('creds') // creds | totp
+  let err = $state('')
 
   async function boot() {
     try { user = await api('GET', '/me') } catch { user = null }
@@ -37,6 +40,8 @@
     const t = setInterval(pollOnce, 3000)
     return () => clearInterval(t)
   })
+
+  $effect(() => { localStorage.setItem(TAB_KEY, tab) })
 
   async function doLogin(e) {
     e.preventDefault()

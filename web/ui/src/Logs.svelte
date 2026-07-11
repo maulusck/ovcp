@@ -6,7 +6,8 @@
   let ovcpLines = $state([])
   let debugOn = $state(false)
   let err = $state('')
-  let pollSec = $state(15)
+  const POLL_KEY = 'ovcp_logs_poll'
+  let pollSec = $state(Number(localStorage.getItem(POLL_KEY) ?? 15))
 
   async function loadAudit() {
     try { entries = await api('GET', '/audit') } catch (x) { err = x.error }
@@ -30,6 +31,7 @@
   }
 
   $effect(() => {
+    localStorage.setItem(POLL_KEY, pollSec)
     if (!pollSec) return
     const t = setInterval(refresh, pollSec * 1000)
     return () => clearInterval(t)
