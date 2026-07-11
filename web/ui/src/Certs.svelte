@@ -60,19 +60,19 @@
   <form class="card issue" onsubmit={exportBundle}>
     <h2>Issue client profile</h2>
     <div class="grid">
-      <label>Common name
+      <label>Common name <span class="req">*</span>
         <input bind:value={form.cn} required placeholder="alice-laptop" />
       </label>
-      <label>Server address *
+      <label>Server address
         <input bind:value={form.remote} placeholder="defaults to server CN" />
       </label>
       <label>Valid for (days)
         <input type="number" bind:value={form.days} min="1" max="3650" />
       </label>
-      <label>CA passphrase
+      <label>CA passphrase <span class="req">*</span>
         <input type="password" bind:value={form.passphrase} required />
       </label>
-      <label>Profile password *
+      <label>Profile password
         <input type="password" bind:value={form.keypass} />
       </label>
     </div>
@@ -123,6 +123,7 @@
 <style>
   .issue { margin-bottom: 18px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
+  .req { color: var(--bad); }
   .small { font-size: 12px; margin: 8px 0 0; }
   .ok { color: var(--ok); font-size: 13px; }
   .rv { color: var(--bad); }
