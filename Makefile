@@ -2,7 +2,7 @@ BINARY  := ovcp
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build test vet clean install help ui release man image deb rpm
+.PHONY: build test vet clean install help ui release man image deb rpm
 
 release: ui build ## UI + binary
 
@@ -15,13 +15,15 @@ image: ## build all-in-one container image (podman, else docker)
 deb rpm: release ## build package (needs nfpm)
 	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@
 
-all: build
-
 help: ## show targets
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z][a-z0-9_ -]*:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
 
-ui: ## build svelte UI into web/dist
-	cd web/ui && npm install && npm run build
+web/ui/node_modules: web/ui/package.json web/ui/package-lock.json
+	cd web/ui && npm ci
+	@touch $@
+
+ui: web/ui/node_modules ## build svelte UI into web/dist
+	cd web/ui && npm run build
 
 build: ## build bin/ovcp (CGO for sqlite)
 	CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
@@ -32,8 +34,8 @@ test: ## run all tests
 vet: ## go vet
 	go vet ./...
 
-clean: ## remove bin/
-	rm -rf bin
+clean: ## remove build output (bin/, web/dist/)
+	rm -rf bin web/dist
 
 install: build ## install binary + man page
 	install -m 0755 bin/$(BINARY) /usr/bin/$(BINARY)
