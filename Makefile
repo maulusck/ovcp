@@ -22,8 +22,10 @@ web/ui/node_modules: web/ui/package.json web/ui/package-lock.json
 	cd web/ui && npm ci
 	@touch $@
 
-ui: web/ui/node_modules ## build svelte UI into web/dist
+ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the in-app Docs tab)
 	cd web/ui && npm run build
+	@command -v mandoc >/dev/null || { echo "error: mandoc not found (renders docs/ovcp.8 for the UI's Docs tab)"; exit 1; }
+	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 
 build: ## build bin/ovcp (CGO for sqlite)
 	CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp

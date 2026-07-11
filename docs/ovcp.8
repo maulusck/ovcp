@@ -23,6 +23,31 @@ The CA private key is stored encrypted (argon2id + AES\-256\-GCM). Every
 signing operation (issue, revoke) requires the CA passphrase, which is
 used in memory and never persisted: compromise of the host alone does not
 compromise the CA.
+.PP
+This page is also rendered into the web UI's \fBDocs\fR tab at build time
+(\fBmandoc\fR, see \fImake ui\fR) \(en one source, readable with or without
+a terminal.
+.SH SECURITY
+Tier\-2 CA model: the CA private key is encrypted at rest (argon2id +
+AES\-256\-GCM); every signing operation (\fBissue\fR, \fBrevoke\fR) requires
+the operator passphrase, used in memory and never persisted.
+\fBrotate\-ca\fR re\-encrypts it under a new passphrase without reissuing
+anything.
+.PP
+Client private keys are embedded in the exported profile once and never
+stored server\-side (no escrow): a lost profile means revoke + reissue, not
+recovery. Certificates (public) are kept and downloadable anytime. Optionally
+protect a profile's embedded key with its own password
+(\fB\-key\-pass\fR / the web UI's field); OpenVPN prompts for it on connect.
+.PP
+The management socket is unix\-only, never TCP. The admin UI is HTTPS\-only
+(self\-signed certificate, regenerated automatically if it expires or the
+CN changes), loopback by default, with signed sessions (HttpOnly, Secure,
+SameSite=Strict cookies), CSRF tokens on every mutating request, RBAC
+(\fBadmin\fR / \fBoperator\fR / \fBreadonly\fR, see \fBuser\fR), optional
+TOTP 2FA, rate\-limited logins (locks out a username+IP pair after repeated
+failures, self\-clears after the window passes), and a full audit log
+(\fBaudit\fR).
 .SH QUICK START
 .nf
 .RS
@@ -251,11 +276,12 @@ ovcp list
 ovcp revoke \-serial 682b2da83f4d...
 .RE
 .fi
-Run under systemd (after installing the package):
+Serve the admin UI on the host loopback and again inside the VPN itself, so
+it's reachable through the tunnel without ever exposing it publicly (works
+even before tun0 exists \(en see \fBIP_FREEBIND\fR under \fBOVCP_LISTEN\fR):
 .nf
 .RS
-ovcp init \-server\-cn vpn.example.com
-systemctl enable \-\-now ovcp
+OVCP_LISTEN=127.0.0.1:8443,10.8.0.1:8443 ovcp serve
 .RE
 .fi
 .SH PRIVILEGES
@@ -276,6 +302,40 @@ tool's threat model. The shipped systemd unit sandboxes the whole process
 instead (\fBProtectSystem=strict\fR, \fBNoNewPrivileges\fR,
 \fBMemoryDenyWriteExecute\fR, and more) \(en native containment, not an
 app\-level privilege split.
+.SH DEPLOYMENT
+One runtime, everywhere: ovcp owns the openvpn worker (fork/exec + signals,
+no SIGHUP, no in\-place reload) the same way on bare metal, under systemd,
+and inside a container. If ovcp restarts, its \fBserve\fR process brings
+openvpn back up.
+.SS systemd
+A single unit runs ovcp as root; ovcp starts and stops openvpn itself.
+.nf
+.RS
+make release && sudo make install
+sudo install \-m644 deploy/systemd/ovcp.service /usr/lib/systemd/system/
+sudo OVCP_DATA=/var/lib/ovcp ovcp init \-server\-cn vpn.example.com
+sudo systemctl enable \-\-now ovcp
+.RE
+.fi
+.SS container
+One all\-in\-one image (\fBmake image\fR): ovcp (as root) owns the PKI and
+starts openvpn inside the container. Init once, then run:
+.nf
+.RS
+podman run \-\-rm \-v ovcp:/var/lib/ovcp ovcp init \-server\-cn vpn.example.com
+podman run \-d \-\-cap\-add=NET_ADMIN \-\-device /dev/net/tun \e
+  \-p 1194:1194/udp \-p 127.0.0.1:8443:8443 \-v ovcp:/var/lib/ovcp ovcp
+.RE
+.fi
+The image defaults \fBOVCP_CA_PASSPHRASE\fR/\fBOVCP_USER_PASSWORD\fR to
+\fIchangeme\fR for the one\-shot init \(en override with \fB\-e\fR. To split
+the UI and the VPN across network interfaces, bind each published port to
+the right address, e.g.
+\fB\-p 203.0.113.7:1194:1194/udp \-p 192.168.1.10:8443:8443\fR. docker works
+the same; the Containerfile is plain OCI.
+.SS packages
+.B nfpm package \-f deploy/nfpm.yaml \-p deb
+(or \fB\-p rpm\fR) after \fBmake release\fR.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

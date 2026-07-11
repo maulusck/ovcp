@@ -26,153 +26,20 @@ bin/ovcp export -cn alice -remote vpn.example.com > alice.ovpn
 If `serve` says `not initialized, missing: ...` — run `ovcp init` first;
 it is idempotent and fills in whatever is missing.
 
-Full reference: `make man` (or `man ovcp` once installed).
+## Full reference
 
-## Security model (tier 2 CA)
+`man ovcp` (`make man` to preview before installing) is the complete,
+maintained reference: every command and flag, the security model, the
+privilege model (and why it's *not* privilege-separated), every environment
+variable, every file ovcp reads or writes, and deployment recipes for
+systemd, containers, SELinux, and distro packages. This README stays a
+pitch and a quick start; nothing below duplicates it, so it can't drift out
+of sync with it.
 
-- CA key encrypted at rest (argon2id + AES-256-GCM); **every** sign/revoke
-  requires the operator passphrase; it is never persisted. Rotate it anytime
-  with `ovcp rotate-ca` — re-encrypts the key in place, no certs reissued.
-- Client private keys are embedded in the exported profile once and never
-  stored server-side (no escrow): lost profile = revoke + reissue.
-  Certificates (public) are stored and downloadable anytime. Optionally
-  protect the profile's key with a password (`-key-pass` / UI field);
-  OpenVPN prompts for it on connect.
-- Management socket is unix-only. Admin UI is HTTPS-only, loopback by
-  default, with sessions, CSRF, RBAC (admin/operator/readonly), optional
-  TOTP 2FA, login rate-limiting, and a full audit log.
-
-## Privileges & exposure
-
-**ovcp runs as root.** It is the sole owner of the PKI and config
-(`0600 root:root`), so those files are secure by default — no drop, no chown
-dance, no per-mode privilege juggling. ovcp starts openvpn itself as a
-foreground worker (reaped the instant it exits, so no zombies even when
-ovcp is PID 1 in a container); openvpn drops to `nobody` on its own after
-startup.
-
-A privilege-separated admin UI (root supervisor + non-root HTTP worker) was
-considered and deliberately not built: for this tool's actual threat model —
-a personal VPN's own admin panel, loopback by default, already behind
-auth+CSRF+RBAC+TOTP — an attacker who reaches it at all has already breached
-the VPN; the marginal win over that didn't justify a second process, an IPC
-protocol, and the failure modes that come with them. Instead, the shipped
-[systemd unit](deploy/systemd/ovcp.service) sandboxes the *whole* unit
-(`ProtectSystem=strict`, `NoNewPrivileges`, `MemoryDenyWriteExecute`, no
-kernel/module/log tampering, no new setuid binaries) — root inside the unit
-can't touch the rest of the host even though it's still root. Native
-platform containment instead of an app-level privilege split.
-
-The openvpn management socket and ovcp's control socket live in `/run/ovcp`
-(`0750`, the control socket itself `0600`); directory permissions are the
-only guard needed.
-
-**Interfaces:** `OVCP_LISTEN` (or `-listen`) takes a comma-separated list.
-Every listener is the same HTTPS+auth+CSRF stack. Binding the VPN-side
-address works even before tun0 exists (`IP_FREEBIND`), so this is all it
-takes to reach the UI from connected clients:
-
-```sh
-OVCP_LISTEN=127.0.0.1:8443,10.8.0.1:8443   # host + inside the VPN
-```
-
-## Environment variables
-
-`OVCP_DATA` is the source of truth for where ovcp keeps everything —
-every path in this doc (PKI, database, config, logs) is relative to it.
-`-data` overrides it for one invocation; unset either way, it's
-`/var/lib/ovcp`. The rest are optional, sane-default, mostly for automation:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `OVCP_DATA` | `/var/lib/ovcp` | Data directory — everything else lives under here. |
-| `OVCP_LISTEN` | `127.0.0.1:8443` | Admin UI listen address(es), comma-separated. |
-| `OVCP_MGMT_SOCK` | `/run/ovcp/mgmt.sock` | OpenVPN management socket path. |
-| `OVCP_CTRL_SOCK` | `/run/ovcp/control.sock` | ovcp's own control socket — `vpn`/`debug` subcommands talk to a running `serve` here. |
-| `OVCP_SERVER_CN` | server cert's CN | Default client `remote` for `export`, and CN for the admin UI's self-signed cert. |
-| `OVCP_CA_PASSPHRASE` | — | Non-interactive CA passphrase (`issue`/`revoke`/`rotate-ca`/`renew-server`/`export`). |
-| `OVCP_CA_NEW_PASSPHRASE` | — | Non-interactive new passphrase for `rotate-ca`. |
-| `OVCP_USER_PASSWORD` | — | Non-interactive password for `init`/`user add`/`user passwd`. |
-| `OVCP_BACKUP_PASSPHRASE` | — | Non-interactive passphrase for `backup create`/`backup restore`. |
-| `OVCP_OPENVPN_USER` | `nobody` | Unprivileged account openvpn drops to after startup. |
-| `OVCP_OPENVPN_GROUP` | `nogroup` | Same, for the group — the container image sets this to `nobody`, since Alpine has no `nogroup`. |
-
-The passphrase/password variables exist for automation only (container
-init, tests, CI) — avoid them on shared systems, since environment
-variables are visible to anything that can read a process's `/proc/<pid>/environ`.
-
-## Deployment
-
-One runtime, everywhere: ovcp runs as root and owns the openvpn worker
-(fork/exec + signals — no SIGHUP, no in-place reload). openvpn is a plain
-foreground child: a goroutine sits in `wait()` and reaps it on exit, so no
-zombies accumulate across restarts, and `Pdeathsig` ties its lifetime to
-ovcp's — it can never outlive the controller. If ovcp is restarted, its
-`serve` process brings openvpn back up.
-
-Lifecycle is driven the same way from the UI and the CLI:
-`ovcp vpn start|stop|restart|reconnect`. The CLI reaches the running `serve`
-over a root-only unix control socket (serve owns the process; the CLI is just
-a remote for it). Restart is a full stop + fresh start (required for any
-config, key, or CRL change); reconnect is a soft `SIGUSR1` session reset.
-
-### systemd
-A single unit runs ovcp as root; ovcp starts and stops openvpn itself.
-```sh
-make release && sudo make install
-sudo install -m644 deploy/systemd/ovcp.service /usr/lib/systemd/system/
-sudo OVCP_DATA=/var/lib/ovcp ovcp init -server-cn vpn.example.com
-sudo systemctl enable --now ovcp
-```
-
-### container
-One all-in-one image (`make image`): ovcp (as root) owns the PKI and starts
-openvpn inside the container. Init once, then run:
-```sh
-podman run --rm -v ovcp:/var/lib/ovcp ovcp init -server-cn vpn.example.com
-podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
-  -p 1194:1194/udp -p 127.0.0.1:8443:8443 -v ovcp:/var/lib/ovcp ovcp
-```
-Image defaults `OVCP_CA_PASSPHRASE`/`OVCP_USER_PASSWORD` to `changeme` for
-the one-shot init — override with `-e`. To split the UI and the VPN across
-network interfaces, bind each published port to the right address:
-```sh
--p 203.0.113.7:1194:1194/udp -p 192.168.1.10:8443:8443
-```
-(docker works the same; the Containerfile is plain OCI.)
-
-### SELinux (RHEL/Fedora)
-Confined openvpn can't read the non-standard data dir without labels — run
-`sudo deploy/selinux.sh` once (respects `OVCP_DATA`). ovcp itself needs no policy.
-
-### packages
-`nfpm package -f deploy/nfpm.yaml -p deb` (or `-p rpm`) after `make release`.
-
-## Backup & restore
-
-```sh
-bin/ovcp backup create              # prompts for a backup passphrase (twice)
-# → ovcp-backup-<timestamp>.ovcpbak, an encrypted archive: CA, CRL, tls-crypt
-#   key, server.conf, database. Unreadable without the passphrase — write it
-#   down, it's never stored anywhere and can't be recovered.
-
-bin/ovcp -data /var/lib/ovcp backup restore ovcp-backup-<timestamp>.ovcpbak
-OVCP_SERVER_CN=vpn.example.com bin/ovcp renew-server   # issue a fresh server cert
-bin/ovcp vpn start
-```
-
-Deliberately excludes the openvpn server certificate and private key: clients
-trust the CA chain and a CN match, never a pinned server cert, so restore
-just issues a fresh one from the restored CA instead of ever letting the
-server's private key leave the machine. Client private keys were never
-stored here either (no escrow) — nothing lost for existing clients across a
-restore.
-
-`backup create` is also in the web UI (Settings, admin role). `backup
-restore` is CLI-only by design: it's an offline, disaster-recovery operation
-against a data directory, not something to expose over HTTP on a possibly-
-live server. Refuses to touch an already-initialized data directory unless
-you pass `-force`.
+The same page is also in the web UI's **Docs** tab (`mandoc` renders
+`docs/ovcp.8` at build time into `web/dist/docs.html`, embedded in the
+binary like the rest of the UI) — no terminal needed to read it, one source
+either way.
 
 ## Layout
 
@@ -197,3 +64,7 @@ make help
 go test ./...
 cd web/ui && npm run dev   # UI dev server (proxy API manually or run serve)
 ```
+
+Building the UI (`make ui`/`make release`) needs `mandoc` on `PATH` — it
+renders `docs/ovcp.8` into the Docs tab. Already in the container build
+stage; install it locally too (`apk add mandoc` / `apt install mandoc`).

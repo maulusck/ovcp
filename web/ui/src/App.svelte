@@ -7,6 +7,7 @@
   import Certs from './Certs.svelte'
   import Settings from './Settings.svelte'
   import Audit from './Audit.svelte'
+  import Docs from './Docs.svelte'
 
   let user = $state(null)
   let tab = $state('dashboard')
@@ -19,6 +20,7 @@
     ['certs', 'Certificates'],
     ['settings', 'Settings'],
     ['audit', 'Audit'],
+    ['docs', 'Docs'],
   ]
 
   async function boot() {
@@ -121,8 +123,10 @@
       <Certs {canOperate} />
     {:else if tab === 'settings'}
       <Settings {isAdmin} />
-    {:else}
+    {:else if tab === 'audit'}
       <Audit />
+    {:else}
+      <Docs />
     {/if}
   </main>
 {/if}

@@ -20,12 +20,13 @@ COPY web/ui .
 RUN npm run build
 
 FROM docker.io/library/golang:1.22-alpine AS build
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache gcc musl-dev mandoc
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=ui /src/web/dist ./web/dist
+RUN mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 RUN CGO_ENABLED=1 go build -ldflags '-s -w' -o /ovcp ./cmd/ovcp
 
 FROM docker.io/library/alpine:latest
