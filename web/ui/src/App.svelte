@@ -132,7 +132,7 @@
     {:else if tab === 'users'}
       <Users {isAdmin} me={user.username} />
     {:else if tab === 'logs'}
-      <Logs />
+      <Logs {isAdmin} />
     {:else}
       <Docs />
     {/if}

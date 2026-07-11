@@ -1,8 +1,10 @@
 <script>
   import { api } from './api.js'
+  let { isAdmin } = $props()
   let entries = $state([])
   let ovpnLines = $state([])
   let ovcpLines = $state([])
+  let debugOn = $state(false)
   let err = $state('')
   let pollSec = $state(15)
 
@@ -15,8 +17,17 @@
   async function loadOVCP() {
     try { ovcpLines = (await api('GET', '/logs/ovcp')).lines } catch (x) { err = x.error }
   }
-  function refresh() { loadAudit(); loadOpenVPN(); loadOVCP() }
+  async function loadDebug() {
+    try { debugOn = (await api('GET', '/debug')).debug } catch (x) { err = x.error }
+  }
+  function refresh() { loadAudit(); loadOpenVPN(); loadOVCP(); loadDebug() }
   refresh()
+
+  async function toggleDebug(e) {
+    const want = e.target.checked
+    try { debugOn = (await api('POST', '/debug', { Debug: want })).debug }
+    catch (x) { err = x.error; e.target.checked = !want }
+  }
 
   $effect(() => {
     if (!pollSec) return
@@ -27,6 +38,10 @@
 
 <div class="logs-head">
   {#if err}<p class="err">{err}</p>{/if}
+  <label class="poll-pick" title={isAdmin ? 'Verbose logging for troubleshooting' : 'Admin only'}>
+    Debug logging
+    <input type="checkbox" checked={debugOn} disabled={!isAdmin} onchange={toggleDebug} />
+  </label>
   <label class="poll-pick">Auto-refresh
     <select bind:value={pollSec}>
       <option value={0}>Off</option>
@@ -81,7 +96,7 @@
 <style>
   .logs-head { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 14px; }
   .poll-pick { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
-  .poll-pick select { width: auto; }
+  .poll-pick select, .poll-pick input { width: auto; }
   /* CSS columns (not grid) so panels reflow natively when a <details> is
      toggled — a closed panel frees its space immediately, no JS layout code. */
   .logs-grid { column-width: 420px; column-gap: 22px; }

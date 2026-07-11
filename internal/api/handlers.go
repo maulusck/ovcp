@@ -494,6 +494,29 @@ func (s *Server) handleUserTOTPOff(w http.ResponseWriter, r *http.Request, u *st
 	jsonOK(w, map[string]bool{"ok": true})
 }
 
+func (s *Server) handleDebugGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	jsonOK(w, map[string]bool{"debug": s.DebugLevel.Level() <= slog.LevelDebug})
+}
+
+// handleDebugSet mirrors `ovcp debug on|off`, flipping the same shared
+// *slog.LevelVar the control-socket handler uses — one source of truth.
+func (s *Server) handleDebugSet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ Debug bool }
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	action := "off"
+	if in.Debug {
+		s.DebugLevel.Set(slog.LevelDebug)
+		action = "on"
+	} else {
+		s.DebugLevel.Set(slog.LevelInfo)
+	}
+	s.Store.Audit(u.Username, "debug_"+action, "")
+	jsonOK(w, map[string]bool{"debug": in.Debug})
+}
+
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *store.User) {
 	tail, err := s.Store.AuditTail(200)
 	if err != nil {

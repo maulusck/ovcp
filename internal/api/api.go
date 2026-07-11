@@ -24,13 +24,14 @@ type Server struct {
 	PKI           *pki.PKI
 	Mgmt          *controller.Client
 	VPN           controller.Lifecycle
-	DataDir       string // data directory root (backup source)
-	ConfigPath    string // rendered server.conf
-	TLSCrypt      string // tls-crypt key path
-	ServerCert    string // openvpn server cert path (renew-server target)
-	ServerKey     string // openvpn server key path (renew-server target)
-	DefaultRemote string // OVCP_SERVER_CN / server cert CN; default client remote
-	UI            fs.FS  // built frontend; nil = API only
+	DataDir       string         // data directory root (backup source)
+	ConfigPath    string         // rendered server.conf
+	TLSCrypt      string         // tls-crypt key path
+	ServerCert    string         // openvpn server cert path (renew-server target)
+	ServerKey     string         // openvpn server key path (renew-server target)
+	DefaultRemote string         // OVCP_SERVER_CN / server cert CN; default client remote
+	UI            fs.FS          // built frontend; nil = API only
+	DebugLevel    *slog.LevelVar // shared with `ovcp debug on|off`'s control-socket handler
 }
 
 const (
@@ -53,6 +54,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))
 	mux.Handle("GET /api/logs/openvpn", s.wrap(auth.RoleReadonly, s.logHandler("openvpn.log")))
 	mux.Handle("GET /api/logs/ovcp", s.wrap(auth.RoleReadonly, s.logHandler("ovcp.log")))
+	mux.Handle("GET /api/debug", s.wrap(auth.RoleReadonly, s.handleDebugGet))
+	mux.Handle("POST /api/debug", s.wrap(auth.RoleAdmin, s.handleDebugSet))
 	mux.Handle("POST /api/clients/kill", s.wrap(auth.RoleOperator, s.handleKill))
 	mux.Handle("POST /api/certs", s.wrap(auth.RoleOperator, s.handleIssue))
 	mux.Handle("POST /api/certs/revoke", s.wrap(auth.RoleOperator, s.handleRevoke))

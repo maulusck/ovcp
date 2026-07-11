@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -55,6 +56,7 @@ func setup(t *testing.T) *env {
 		ServerCert:    filepath.Join(dir, "server.crt"),
 		ServerKey:     filepath.Join(dir, "server.key"),
 		DefaultRemote: "vpn.example.com",
+		DebugLevel:    new(slog.LevelVar),
 	}
 	return &env{ts: httptest.NewServer(srv.Handler()), t: t, dir: dir}
 }
@@ -233,5 +235,37 @@ func TestConfigPutValidation(t *testing.T) {
 	}
 	if r := e.req("POST", "/api/vpn/restart", "", true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
+	}
+}
+
+func TestDebugToggle(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+	var out struct{ Debug bool }
+	r := e.req("GET", "/api/debug", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || out.Debug {
+		t.Fatalf("want debug=false initially, got status=%d debug=%v", r.StatusCode, out.Debug)
+	}
+	if r := e.req("POST", "/api/debug", `{"Debug":true}`, true); r.StatusCode != 403 {
+		t.Fatal("readonly must not toggle debug, got", r.Status)
+	}
+
+	e.login("admin")
+	r = e.req("POST", "/api/debug", `{"Debug":true}`, true)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || !out.Debug {
+		t.Fatalf("want debug=true after enabling, got status=%d debug=%v", r.StatusCode, out.Debug)
+	}
+	r = e.req("GET", "/api/debug", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if !out.Debug {
+		t.Fatal("GET after enable should report debug=true")
+	}
+
+	r = e.req("POST", "/api/debug", `{"Debug":false}`, true)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || out.Debug {
+		t.Fatal("want debug=false after disabling")
 	}
 }
