@@ -2,7 +2,7 @@ package controller
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,7 +150,7 @@ func (s *Supervisor) supervise(launched chan<- error) {
 	s.stMu.Lock()
 	s.cmd, s.done, s.running = cmd, done, true
 	s.stMu.Unlock()
-	log.Printf("controller: openvpn started (pid %d)", cmd.Process.Pid)
+	slog.Info("openvpn started", "pid", cmd.Process.Pid)
 	launched <- nil
 
 	err = cmd.Wait() // reap — no zombie can accumulate
@@ -159,7 +159,7 @@ func (s *Supervisor) supervise(launched chan<- error) {
 	s.running, s.cmd = false, nil
 	s.stMu.Unlock()
 	close(done)
-	log.Printf("controller: openvpn exited (pid %d): %v", cmd.Process.Pid, err)
+	slog.Info("openvpn exited", "pid", cmd.Process.Pid, "err", err)
 }
 
 // stop sends SIGTERM, waits for the reaper, and escalates to SIGKILL on

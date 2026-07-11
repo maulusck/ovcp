@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ovcp/ovcp/internal/auth"
 	"github.com/ovcp/ovcp/internal/controller"
@@ -55,7 +57,30 @@ func (s *Server) Handler() http.Handler {
 	if s.UI != nil {
 		mux.Handle("/", spa(s.UI))
 	}
-	return secureHeaders(mux)
+	return requestLog(secureHeaders(mux))
+}
+
+// requestLog is debug-only noise: every request, its status and latency.
+// State-changing actions already land in the persistent audit log (see
+// Store.Audit calls in handlers.go); this is for live troubleshooting.
+func requestLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(sw, r)
+		slog.Debug("http", "method", r.Method, "path", r.URL.Path,
+			"status", sw.status, "remote", clientIP(r), "dur", time.Since(start))
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
 }
 
 type handler func(w http.ResponseWriter, r *http.Request, u *store.User)

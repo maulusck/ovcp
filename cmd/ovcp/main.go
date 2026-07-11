@@ -8,7 +8,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -35,7 +35,12 @@ import (
 
 var version = "dev"
 
+// logLevel backs the default logger; "ovcp debug on|off" flips it at
+// runtime via the control socket, no restart needed.
+var logLevel = new(slog.LevelVar)
+
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
 	dataDir := flag.String("data", envOr("OVCP_DATA", "/var/lib/ovcp"), "data directory")
 	flag.Parse()
 	args := flag.Args()
@@ -329,6 +334,18 @@ func main() {
 			fmt.Printf("vpn reconnect sent (pid %d)\n", r.Pid)
 		}
 
+	case "debug":
+		fs := flag.NewFlagSet("debug", flag.ExitOnError)
+		ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
+		fs.Parse(args[1:])
+		op := fs.Arg(0)
+		if op != "on" && op != "off" {
+			die(fmt.Errorf("usage: ovcp debug on|off"))
+		}
+		_, err := controller.Control(*ctrl, "debug "+op)
+		die(err)
+		fmt.Println("debug logging", op)
+
 	case "user":
 		if len(args) < 2 {
 			die(fmt.Errorf("user add|list|del|disable|enable|passwd|totp [-off]"))
@@ -433,7 +450,7 @@ func main() {
 
 func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	if os.Geteuid() != 0 {
-		log.Print("warn: not root; ovcp owns the PKI and starts openvpn, both need root")
+		slog.Warn("not root; ovcp owns the PKI and starts openvpn, both need root")
 	}
 	s, err := store.Open(filepath.Join(dataDir, "ovcp.db"))
 	die(err)
@@ -484,20 +501,20 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 
 	// bring the worker up as a reaped foreground child, and expose the
 	// control socket so `ovcp vpn <op>` can drive it while we run.
-	ctl, err := controller.ServeControl(ctrlSock(), sup)
+	ctl, err := controller.ServeControl(ctrlSock(), sup, logLevel)
 	die(err)
 	defer ctl.Close()
 	if err := sup.Start(); err != nil {
-		log.Printf("warn: openvpn start: %v", err)
+		slog.Warn("openvpn start", "err", err)
 	}
-	log.Printf("ovcp %s | admin UI https://{%s}", version, listen)
+	slog.Info("ovcp started", "version", version, "listen", listen)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	ctl.Close()
 	if err := sup.Stop(); err != nil {
-		log.Printf("warn: openvpn stop: %v", err)
+		slog.Warn("openvpn stop", "err", err)
 	}
 	hs.Close()
 }
@@ -645,6 +662,7 @@ func usage() {
   status                               VPN process + connected clients
   kill      -cn NAME [-sock PATH]      disconnect client
   vpn       start|stop|restart|reconnect|status   manage/inspect the openvpn worker
+  debug     on|off                     toggle verbose logging on a running serve (no restart)
   user      add|list|del|disable|enable|passwd|totp[-off]
   audit                                last 50 audit entries
   serve     [-listen ADDR] [-sock PATH]   run admin UI + API

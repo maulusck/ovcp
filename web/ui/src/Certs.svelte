@@ -63,7 +63,7 @@
       <label>Common name
         <input bind:value={form.cn} required placeholder="alice-laptop" />
       </label>
-      <label>Server address (optional)
+      <label>Server address *
         <input bind:value={form.remote} placeholder="defaults to server CN" />
       </label>
       <label>Valid for (days)
@@ -72,9 +72,8 @@
       <label>CA passphrase
         <input type="password" bind:value={form.passphrase} required />
       </label>
-      <label>Profile password (optional)
-        <input type="password" bind:value={form.keypass}
-          placeholder="encrypts the key in the profile" />
+      <label>Profile password *
+        <input type="password" bind:value={form.keypass} />
       </label>
     </div>
     <button type="submit">Issue and download .ovpn</button>

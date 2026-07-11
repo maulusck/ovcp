@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -25,9 +26,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 401, "totp required")
 		return
 	case auth.ErrRateLimited:
+		slog.Warn("login rate limited", "user", in.Username, "remote", clientIP(r))
 		jsonErr(w, 429, "too many attempts, try again later")
 		return
 	default:
+		slog.Warn("login failed", "user", in.Username, "remote", clientIP(r))
 		jsonErr(w, 401, "invalid credentials")
 		return
 	}

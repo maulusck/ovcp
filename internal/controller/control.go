@@ -3,6 +3,7 @@ package controller
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -31,7 +32,10 @@ type ControlResult struct {
 // `ovcp vpn <op>` invocation can drive the openvpn worker owned by the
 // running serve process. Filesystem permissions (0600) are the only auth
 // needed for a local root admin.
-func ServeControl(sockPath string, lc Lifecycle) (net.Listener, error) {
+//
+// The same socket also carries `ovcp debug on|off`, which flips level at
+// runtime — no restart, no separate IPC mechanism for a debug knob.
+func ServeControl(sockPath string, lc Lifecycle, level *slog.LevelVar) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o750); err != nil {
 		return nil, err
 	}
@@ -47,13 +51,13 @@ func ServeControl(sockPath string, lc Lifecycle) (net.Listener, error) {
 			if err != nil {
 				return // listener closed
 			}
-			go serveControlConn(c, lc)
+			go serveControlConn(c, lc, level)
 		}
 	}()
 	return l, nil
 }
 
-func serveControlConn(c net.Conn, lc Lifecycle) {
+func serveControlConn(c net.Conn, lc Lifecycle, level *slog.LevelVar) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(60 * time.Second)) // restart may take a few s
 	line, err := bufio.NewReader(c).ReadString('\n')
@@ -73,6 +77,12 @@ func serveControlConn(c net.Conn, lc Lifecycle) {
 		opErr = lc.Restart()
 	case "reconnect":
 		opErr = lc.Reconnect()
+	case "debug on":
+		level.Set(slog.LevelDebug)
+		slog.Info("debug logging enabled")
+	case "debug off":
+		slog.Info("debug logging disabled")
+		level.Set(slog.LevelInfo)
 	default:
 		fmt.Fprintln(c, "ERR unknown operation")
 		return

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"log/slog"
 	"path/filepath"
 	"testing"
 )
@@ -19,7 +20,7 @@ func (f *fakeLife) Pid() int { return fakePid }
 func TestControlRoundTrip(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
-	l, err := ServeControl(sock, lc)
+	l, err := ServeControl(sock, lc, new(slog.LevelVar))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +48,35 @@ func TestControlChangedFlag(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	// pid flips 0 -> 100 across the call: reported as changed
 	lc := &flipLife{before: 0, after: 100}
-	l, _ := ServeControl(sock, lc)
+	l, _ := ServeControl(sock, lc, new(slog.LevelVar))
 	defer l.Close()
 	r, err := Control(sock, "start")
 	if err != nil || r.Pid != 100 || !r.Changed {
 		t.Fatalf("got %+v err=%v; want pid=100 changed=true", r, err)
+	}
+}
+
+func TestControlDebugToggle(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	lc := &fakeLife{}
+	level := new(slog.LevelVar)
+	l, err := ServeControl(sock, lc, level)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	if _, err := Control(sock, "debug on"); err != nil {
+		t.Fatal(err)
+	}
+	if level.Level() != slog.LevelDebug {
+		t.Fatalf("level = %v, want Debug", level.Level())
+	}
+	if _, err := Control(sock, "debug off"); err != nil {
+		t.Fatal(err)
+	}
+	if level.Level() != slog.LevelInfo {
+		t.Fatalf("level = %v, want Info", level.Level())
 	}
 }
 
