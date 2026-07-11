@@ -522,9 +522,11 @@ func main() {
 }
 
 func runServe(dataDir, listen, sock string, p *pki.PKI) {
+	pp := dataPaths(dataDir)
 	// tee ovcp's own log to a file (alongside stderr/journal) so the UI can
 	// tail it; unbounded growth, same as openvpn.log — no rotation here either.
-	if lf, err := os.OpenFile(filepath.Join(dataDir, "ovcp.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); err == nil {
+	os.MkdirAll(pp.LogsDir, 0o750)
+	if lf, err := os.OpenFile(pp.OvcpLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); err == nil {
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, lf), &slog.HandlerOptions{Level: logLevel})))
 	}
 	if os.Geteuid() != 0 {
@@ -535,7 +537,6 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	defer s.Close()
 
 	sup := newSupervisor(dataDir)
-	pp := dataPaths(dataDir)
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
 		Mgmt:       controller.NewClient(sock),
@@ -609,18 +610,21 @@ func ctrlSock() string {
 
 // newSupervisor wires the single openvpn worker controller from data paths.
 func newSupervisor(dataDir string) *controller.Supervisor {
+	pp := dataPaths(dataDir)
 	return &controller.Supervisor{
-		ConfigPath: dataPaths(dataDir).ServerConf,
-		LogPath:    filepath.Join(dataDir, "openvpn.log"),
+		ConfigPath: pp.ServerConf,
+		LogPath:    pp.OpenVPNLog,
 	}
 }
 
 type paths struct {
 	PKIDir, CACert, ServerCert, ServerKey, CRL, TLSCrypt, ServerConf, DB string
+	LogsDir, OpenVPNLog, OvcpLog, StatusLog                              string
 }
 
 func dataPaths(dataDir string) paths {
 	pd := filepath.Join(dataDir, "pki")
+	ld := filepath.Join(dataDir, "logs")
 	return paths{
 		PKIDir: pd,
 		CACert: filepath.Join(pd, "ca.crt"), ServerCert: filepath.Join(pd, "server.crt"),
@@ -628,6 +632,10 @@ func dataPaths(dataDir string) paths {
 		TLSCrypt:   filepath.Join(pd, "tls-crypt.key"),
 		ServerConf: filepath.Join(dataDir, "server.conf"),
 		DB:         filepath.Join(dataDir, "ovcp.db"),
+		LogsDir:    ld,
+		OpenVPNLog: filepath.Join(ld, "openvpn.log"),
+		OvcpLog:    filepath.Join(ld, "ovcp.log"),
+		StatusLog:  filepath.Join(ld, "status.log"),
 	}
 }
 
@@ -651,7 +659,7 @@ func fillPaths(cfg *ovpnconf.Config, dataDir, sock string) {
 	cfg.CACert, cfg.ServerCert, cfg.ServerKey = pp.CACert, pp.ServerCert, pp.ServerKey
 	cfg.CRL, cfg.TLSCrypt = pp.CRL, pp.TLSCrypt
 	cfg.MgmtSocket = sock
-	cfg.StatusLog = filepath.Join(dataDir, "status.log")
+	cfg.StatusLog = pp.StatusLog
 }
 
 // preflight verifies init artifacts exist, with an actionable error.

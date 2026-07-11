@@ -65,11 +65,11 @@ func isStatusPollLine(line string) bool {
 	return strings.Contains(line, `MANAGEMENT: CMD 'status 3'`)
 }
 
-// logHandler builds a GET handler tailing <DataDir>/filename; shared by the
-// openvpn.log and ovcp.log routes so the tailing logic exists exactly once.
+// logHandler builds a GET handler tailing <DataDir>/logs/filename; shared by
+// the openvpn.log and ovcp.log routes so the tailing logic exists exactly once.
 func (s *Server) logHandler(filename string) handler {
 	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
-		lines, err := tailLines(filepath.Join(s.DataDir, filename), tailLineLimit, isStatusPollLine)
+		lines, err := tailLines(filepath.Join(s.DataDir, "logs", filename), tailLineLimit, isStatusPollLine)
 		if err != nil {
 			jsonErr(w, 500, err.Error())
 			return
@@ -91,7 +91,7 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 	for _, filename := range []string{"openvpn.log", "ovcp.log"} {
-		data, err := os.ReadFile(filepath.Join(s.DataDir, filename))
+		data, err := os.ReadFile(filepath.Join(s.DataDir, "logs", filename))
 		if err != nil {
 			continue // missing log is not an error, same as the tailed view
 		}

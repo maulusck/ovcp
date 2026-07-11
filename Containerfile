@@ -37,6 +37,9 @@ ENV OVCP_DATA=/var/lib/ovcp \
     OVCP_CA_PASSPHRASE=changeme \
     OVCP_USER_PASSWORD=changeme \
     OVCP_OPENVPN_GROUP=nobody
+# logrotate/log-shippers expect /var/log; symlink into the data volume
+# instead of duplicating files.
+RUN ln -s /var/lib/ovcp/logs /var/log/ovcp
 VOLUME /var/lib/ovcp
 EXPOSE 1194/udp 8443/tcp
 ENTRYPOINT ["ovcp"]

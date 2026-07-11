@@ -9,7 +9,6 @@ command -v getenforce >/dev/null 2>&1 || exit 0
 command -v semanage >/dev/null 2>&1 || { echo "install policycoreutils-python-utils"; exit 1; }
 DATA="${OVCP_DATA:-/var/lib/ovcp}"
 semanage fcontext -a -t openvpn_etc_t "${DATA}(/.*)?"
-semanage fcontext -a -t openvpn_var_log_t "${DATA}/status\.log"
-semanage fcontext -a -t openvpn_var_log_t "${DATA}/openvpn\.log"
+semanage fcontext -a -t openvpn_var_log_t "${DATA}/logs(/.*)?"
 restorecon -R "$DATA"
 # /run/ovcp is created by systemd (RuntimeDirectory) as var_run_t: fine.

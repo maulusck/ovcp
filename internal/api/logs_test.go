@@ -94,7 +94,8 @@ func TestLogEndpoints(t *testing.T) {
 		}
 	}
 
-	os.WriteFile(filepath.Join(e.dir, "ovcp.log"), []byte("hello\nworld\n"), 0o644)
+	os.MkdirAll(filepath.Join(e.dir, "logs"), 0o750)
+	os.WriteFile(filepath.Join(e.dir, "logs", "ovcp.log"), []byte("hello\nworld\n"), 0o644)
 	r := e.req("GET", "/api/logs/ovcp", "", false)
 	if r.StatusCode != 200 {
 		t.Fatal(r.Status)
@@ -110,7 +111,8 @@ func TestLogsDownloadZip(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
 	// openvpn.log deliberately absent — must be skipped, not an error.
-	os.WriteFile(filepath.Join(e.dir, "ovcp.log"), []byte("line one\nline two\n"), 0o644)
+	os.MkdirAll(filepath.Join(e.dir, "logs"), 0o750)
+	os.WriteFile(filepath.Join(e.dir, "logs", "ovcp.log"), []byte("line one\nline two\n"), 0o644)
 
 	r := e.req("GET", "/api/logs/download", "", false)
 	if r.StatusCode != 200 {
@@ -141,7 +143,8 @@ func TestLogsDownloadZip(t *testing.T) {
 func TestLogsDownloadIgnoresQueryParams(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
-	os.WriteFile(filepath.Join(e.dir, "ovcp.log"), []byte("hi\n"), 0o644)
+	os.MkdirAll(filepath.Join(e.dir, "logs"), 0o750)
+	os.WriteFile(filepath.Join(e.dir, "logs", "ovcp.log"), []byte("hi\n"), 0o644)
 
 	r := e.req("GET", "/api/logs/download?file=../../etc/passwd", "", false)
 	if r.StatusCode != 200 {

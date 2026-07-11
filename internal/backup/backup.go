@@ -33,7 +33,7 @@ var requiredFiles = []file{
 
 // optional files: included if present, silently skipped otherwise.
 var optionalFiles = []file{
-	{"openvpn.log", "openvpn.log"},
+	{filepath.Join("logs", "openvpn.log"), "logs/openvpn.log"},
 }
 
 // ErrAlreadyInitialized guards Restore against clobbering a live install.

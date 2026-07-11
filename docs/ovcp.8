@@ -75,7 +75,7 @@ Run the HTTPS admin UI and REST API (default \fI127.0.0.1:8443\fR, self\-signed
 certificate generated on first run). Starts the
 .B openvpn
 worker from \fIserver.conf\fR as a foreground child (reaped on exit \(en no
-zombies) with its log in \fIopenvpn.log\fR, and stops it on clean shutdown.
+zombies) with its log in \fIlogs/openvpn.log\fR, and stops it on clean shutdown.
 Exposes a root\-only control socket so a separate
 .B ovcp vpn
 invocation can drive the worker. Refuses to start with an
@@ -252,11 +252,18 @@ Private keys are never stored in the database.
 .I $OVCP_DATA/admin\-tls/
 Self\-signed certificate for the admin UI.
 .TP
-.I $OVCP_DATA/openvpn.log
+.I $OVCP_DATA/logs/openvpn.log
 openvpn's stdout/stderr, appended across restarts.
 .TP
-.I $OVCP_DATA/status.log
+.I $OVCP_DATA/logs/ovcp.log
+ovcp's own log, mirrored to stderr/journal.
+.TP
+.I $OVCP_DATA/logs/status.log
 openvpn's periodic status dump (connected clients); not the audit log.
+.TP
+.I /var/log/ovcp
+Symlink to \fI$OVCP_DATA/logs\fR (package/container installs), for
+logrotate and log\-shipper discovery.
 .TP
 .I $OVCP_MGMT_SOCK, $OVCP_CTRL_SOCK
 OpenVPN management socket (unix only, never TCP) and ovcp's root\-only
