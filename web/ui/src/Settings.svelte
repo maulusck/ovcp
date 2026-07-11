@@ -1,5 +1,5 @@
 <script>
-  import { api } from './api.js'
+  import { api, csrf } from './api.js'
   import { expectRecovery } from './status.svelte.js'
   let { isAdmin } = $props()
   let cfg = $state(null)
@@ -42,6 +42,40 @@
   const stop      = () => vpn('stop', 'Stop OpenVPN? All tunnels disconnect.', 0, 'Stopped. All tunnels disconnected.')
   const restart   = () => vpn('restart', 'Restart OpenVPN? Connected clients will briefly drop.', 30000, 'Restarting. Applies all configuration changes.')
   const reconnect = () => vpn('reconnect', null, 15000, 'Reconnect signal sent. Live sessions reset.')
+
+  async function renewServer() {
+    const passphrase = prompt('CA passphrase to renew the server certificate:')
+    if (!passphrase) return
+    err = ''; ok = ''
+    try {
+      const r = await api('POST', '/certs/renew-server', { Passphrase: passphrase })
+      ok = `Server cert renewed (serial ${r.serial.slice(0, 12)}…). Use Restart to apply.`
+    } catch (x) { err = x.error }
+  }
+
+  let backupErr = $state('')
+  let backupOk = $state('')
+  async function downloadBackup() {
+    const passphrase = prompt('Set a passphrase to encrypt this backup (needed to restore it — write it down, it cannot be recovered):')
+    if (!passphrase) return
+    backupErr = ''; backupOk = ''
+    try {
+      const res = await fetch('/api/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-OVCP-CSRF': csrf() },
+        body: JSON.stringify({ Passphrase: passphrase }),
+      })
+      if (!res.ok) throw await res.json()
+      const blob = await res.blob()
+      const match = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = match?.[1] || 'ovcp-backup.ovcpbak'
+      a.click()
+      URL.revokeObjectURL(a.href)
+      backupOk = 'Backup downloaded.'
+    } catch (x) { backupErr = x.error || 'backup failed' }
+  }
 </script>
 
 <div class="card">
@@ -87,6 +121,7 @@
           <button type="button" class="ghost" onclick={stop}>Stop</button>
           <button type="button" class="ghost" onclick={restart}>Restart</button>
           <button type="button" class="ghost" onclick={reconnect}>Reconnect</button>
+          <button type="button" class="ghost" onclick={renewServer}>Renew server cert</button>
         </div>
       {:else}
         <p class="muted">Read-only: your role can view but not change settings.</p>
@@ -95,10 +130,24 @@
   {/if}
 </div>
 
+{#if isAdmin}
+  <div class="card">
+    <h2>Backup</h2>
+    <p class="muted small">Encrypted export of the CA, CRL, tls-crypt key, config, and database.
+      Never includes the openvpn server certificate or key — restoring reissues those fresh
+      from the CA (<code>ovcp renew-server</code>). Restoring is CLI-only:
+      <code>ovcp backup restore FILE</code>.</p>
+    {#if backupErr}<p class="err">{backupErr}</p>{/if}
+    {#if backupOk}<p class="ok">{backupOk}</p>{/if}
+    <button type="button" class="ghost" onclick={downloadBackup}>Download backup</button>
+  </div>
+{/if}
+
 <style>
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 14px; }
   .check { display: flex; align-items: center; gap: 8px; }
   .check input { width: auto; }
   .row { display: flex; gap: 10px; margin-top: 6px; }
   .ok { color: var(--ok); font-size: 13px; }
+  .small { font-size: 12px; margin: 8px 0; }
 </style>

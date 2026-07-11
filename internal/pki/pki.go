@@ -127,6 +127,27 @@ func (p *PKI) CheckPassphrase(passphrase []byte) error {
 	return err
 }
 
+// Rotate re-encrypts the CA private key under a new passphrase. The CA
+// itself (cert, keypair, subject) is untouched — only the on-disk envelope
+// protecting the key changes, so no certs need reissuing. Written via
+// temp+rename so a crash mid-rotation can never leave the key file
+// half-written; the old key stays readable until the rename succeeds.
+func (p *PKI) Rotate(oldPassphrase, newPassphrase []byte) error {
+	keyDER, err := openFromFile(p.caKeyPath(), oldPassphrase)
+	if err != nil {
+		return err
+	}
+	data, err := Seal(keyDER, newPassphrase)
+	if err != nil {
+		return err
+	}
+	tmp := p.caKeyPath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, p.caKeyPath())
+}
+
 type CertKind int
 
 const (

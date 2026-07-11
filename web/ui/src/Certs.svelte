@@ -54,6 +54,23 @@
       refresh()
     } catch (x) { err = x.error }
   }
+
+  const EXPIRY_WARN_DAYS = 30
+
+  function status(c) {
+    if (c.Revoked) return { text: 'revoked', cls: 'rv' }
+    const days = Math.ceil((new Date(c.NotAfter) - Date.now()) / 86400000)
+    if (days < 0) return { text: 'expired', cls: 'rv' }
+    if (days <= EXPIRY_WARN_DAYS) return { text: `expires in ${days}d`, cls: 'soon' }
+    return { text: 'valid', cls: '' }
+  }
+
+  // Renewal is just reissuing under the same CN (no escrow, so there's
+  // nothing to "renew" server-side) — this just pre-fills the form above.
+  function renewCN(cn) {
+    form.cn = cn
+    document.querySelector('.issue')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 </script>
 
 {#if canOperate}
@@ -98,7 +115,7 @@
           <tr>
             <td>{c.CN}</td>
             <td>{c.Kind}</td>
-            <td class={c.Revoked ? 'rv' : ''}>{c.Revoked ? 'revoked' : 'valid'}</td>
+            <td class={status(c).cls}>{status(c).text}</td>
             <td>{new Date(c.NotAfter).toISOString().slice(0, 10)}</td>
             <td>
               <button class="serial" title={c.Serial + ' — click to copy'}
@@ -110,6 +127,9 @@
               download={c.CN + '.crt'}>Download</a></td>
             {#if canOperate}
               <td>{#if !c.Revoked}
+                {#if c.Kind === 'client' && status(c).cls !== ''}
+                  <button class="ghost" onclick={() => renewCN(c.CN)}>Renew</button>
+                {/if}
                 <button class="ghost" onclick={() => revoke(c.Serial, c.CN)}>Revoke</button>
               {/if}</td>
             {/if}
@@ -127,6 +147,7 @@
   .small { font-size: 12px; margin: 8px 0 0; }
   .ok { color: var(--ok); font-size: 13px; }
   .rv { color: var(--bad); }
+  .soon { color: var(--amber); }
   .serial {
     background: none; border: 0; padding: 0; color: var(--dim);
     font-family: var(--mono); font-size: 13px; cursor: copy;

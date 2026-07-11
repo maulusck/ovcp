@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
@@ -16,7 +17,7 @@ import (
 
 // EnsureAdminTLS creates a self-signed cert for the admin UI on first run,
 // with cn as CommonName and SAN. Regenerates if the existing cert's CN
-// differs. Returns (certPath, keyPath).
+// differs or it has expired. Returns (certPath, keyPath).
 func EnsureAdminTLS(dir, cn string) (string, string, error) {
 	if cn == "" {
 		cn = "ovcp-admin"
@@ -24,7 +25,8 @@ func EnsureAdminTLS(dir, cn string) (string, string, error) {
 	cp, kp := filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key")
 	if data, err := os.ReadFile(cp); err == nil {
 		if block, _ := pem.Decode(data); block != nil {
-			if c, err := x509.ParseCertificate(block.Bytes); err == nil && c.Subject.CommonName == cn {
+			if c, err := x509.ParseCertificate(block.Bytes); err == nil &&
+				c.Subject.CommonName == cn && time.Now().Before(c.NotAfter) {
 				return cp, kp, nil
 			}
 		}
@@ -58,5 +60,6 @@ func EnsureAdminTLS(dir, cn string) (string, string, error) {
 	if err := os.WriteFile(cp, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
 		return "", "", err
 	}
+	slog.Info("admin UI TLS cert generated", "cn", cn, "notAfter", tpl.NotAfter)
 	return cp, kp, nil
 }

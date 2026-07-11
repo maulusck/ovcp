@@ -26,6 +26,7 @@ import (
 
 	"github.com/ovcp/ovcp/internal/api"
 	"github.com/ovcp/ovcp/internal/auth"
+	"github.com/ovcp/ovcp/internal/backup"
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
@@ -207,10 +208,7 @@ func main() {
 		} else {
 			ic, err := p.Issue(pki.KindServer, *serverCN, *days, pass)
 			die(err)
-			die(os.WriteFile(pp.ServerCert, ic.CertPEM, 0o644))
-			die(os.WriteFile(pp.ServerKey, ic.KeyPEM, 0o600))
-			s.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "server",
-				CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
+			die(writeServerCert(pp, s, ic))
 			s.Audit("system", "issue", "cn="+*serverCN+" kind=server (init)")
 			fmt.Println("[2/5] server cert issued:", pp.ServerCert)
 		}
@@ -332,6 +330,81 @@ func main() {
 			fmt.Printf("vpn restarted (pid %d)\n", r.Pid)
 		case op == "reconnect":
 			fmt.Printf("vpn reconnect sent (pid %d)\n", r.Pid)
+		}
+
+	case "renew-server":
+		fs := flag.NewFlagSet("renew-server", flag.ExitOnError)
+		days := fs.Int("days", 825, "validity (days)")
+		serverCNFlag := fs.String("server-cn", "", "server CN (default: current server cert's CN / OVCP_SERVER_CN)")
+		fs.Parse(args[1:])
+		serverCN := *serverCNFlag
+		if serverCN == "" {
+			serverCN = adminCertCN(*dataDir)
+		}
+		if serverCN == "" {
+			die(fmt.Errorf("no server certificate found; pass -server-cn (e.g. right after a backup restore) or run ovcp init first"))
+		}
+		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
+		ic, err := p.Issue(pki.KindServer, serverCN, *days, pass)
+		die(err)
+		s := openStore()
+		defer s.Close()
+		die(writeServerCert(dataPaths(*dataDir), s, ic))
+		s.Audit("cli", "renew_server", "cn="+serverCN+" serial="+ic.SerialHex)
+		fmt.Println("server cert renewed:", ic.SerialHex)
+		fmt.Println("run `ovcp vpn restart` to apply")
+
+	case "rotate-ca":
+		oldPass := readSecret("Current CA passphrase", "OVCP_CA_PASSPHRASE", false)
+		newPass := readSecret("New CA passphrase", "OVCP_CA_NEW_PASSPHRASE", true)
+		die(p.Rotate(oldPass, newPass))
+		s := openStore()
+		defer s.Close()
+		s.Audit("cli", "ca_rotate", "")
+		fmt.Println("CA passphrase rotated")
+
+	case "backup":
+		if len(args) < 2 {
+			die(fmt.Errorf("usage: ovcp backup create [-out FILE] | ovcp backup restore FILE [-force]"))
+		}
+		switch args[1] {
+		case "create":
+			fs := flag.NewFlagSet("backup create", flag.ExitOnError)
+			out := fs.String("out", "", "output file (default: ovcp-backup-<timestamp>.ovcpbak)")
+			fs.Parse(args[2:])
+			if *out == "" {
+				*out = "ovcp-backup-" + time.Now().Format("20060102-150405") + ".ovcpbak"
+			}
+			pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", true)
+			s := openStore()
+			defer s.Close()
+			f, err := os.Create(*out)
+			die(err)
+			defer f.Close()
+			die(backup.Create(*dataDir, s, f, pass))
+			s.Audit("cli", "backup_create", "file="+*out)
+			fmt.Println("backup written:", *out)
+			fmt.Println("keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
+
+		case "restore":
+			fs := flag.NewFlagSet("backup restore", flag.ExitOnError)
+			force := fs.Bool("force", false, "overwrite an already-initialized data directory")
+			fs.Parse(args[2:])
+			file := fs.Arg(0)
+			if file == "" {
+				die(fmt.Errorf("usage: ovcp backup restore FILE [-force]"))
+			}
+			pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", false)
+			f, err := os.Open(file)
+			die(err)
+			defer f.Close()
+			die(backup.Restore(*dataDir, f, pass, *force))
+			fmt.Println("[1/2] restored CA, CRL, tls-crypt key, config, and database into", *dataDir)
+			fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp renew-server   (issues the openvpn server cert)")
+			fmt.Println("      then: ovcp vpn start")
+
+		default:
+			die(fmt.Errorf("unknown: backup %s", args[1]))
 		}
 
 	case "debug":
@@ -457,12 +530,16 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	defer s.Close()
 
 	sup := newSupervisor(dataDir)
+	pp := dataPaths(dataDir)
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
 		Mgmt:       controller.NewClient(sock),
 		VPN:        sup,
-		ConfigPath: dataPaths(dataDir).ServerConf,
-		TLSCrypt:   dataPaths(dataDir).TLSCrypt,
+		DataDir:    dataDir,
+		ConfigPath: pp.ServerConf,
+		TLSCrypt:   pp.TLSCrypt,
+		ServerCert: pp.ServerCert,
+		ServerKey:  pp.ServerKey,
 		UI:         web.Dist(),
 	}
 	srv.DefaultRemote = adminCertCN(dataDir)
@@ -546,6 +623,20 @@ func dataPaths(dataDir string) paths {
 		ServerConf: filepath.Join(dataDir, "server.conf"),
 		DB:         filepath.Join(dataDir, "ovcp.db"),
 	}
+}
+
+// writeServerCert persists a freshly issued server cert+key to the paths
+// `serve` reads and records it in the store. Shared by init (first issue)
+// and renew-server (reissue in place); takes effect on the next `vpn restart`.
+func writeServerCert(pp paths, s *store.Store, ic *pki.IssuedCert) error {
+	if err := os.WriteFile(pp.ServerCert, ic.CertPEM, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(pp.ServerKey, ic.KeyPEM, 0o600); err != nil {
+		return err
+	}
+	return s.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "server",
+		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
 }
 
 // fillPaths sets the server-owned path fields on a config.
@@ -657,6 +748,10 @@ func usage() {
                                         tls-crypt, config, admin user
   issue     -cn NAME [-kind client|server] [-days N] [-out PREFIX] [-key-pass PW]
   revoke    -serial HEX                revoke + regenerate CRL
+  rotate-ca                            re-encrypt the CA key under a new passphrase
+  renew-server [-days N] [-server-cn CN]   reissue the openvpn server cert (needs vpn restart)
+  backup    create [-out FILE]         encrypted export: CA, CRL, tls-crypt, config, database
+  backup    restore FILE [-force]      import into a fresh (or -force) data dir; then renew-server
   list                                 list certificates
   export    -cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-key-pass PW]
   status                               VPN process + connected clients

@@ -54,6 +54,17 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// Ping verifies the database connection is alive (health checks).
+func (s *Store) Ping() error { return s.db.Ping() }
+
+// BackupTo writes a consistent point-in-time copy of the database to path,
+// which must not already exist. Uses SQLite's own VACUUM INTO rather than a
+// raw file copy, so a backup taken while writes are in flight is never torn.
+func (s *Store) BackupTo(path string) error {
+	_, err := s.db.Exec("VACUUM INTO ?", path)
+	return err
+}
+
 // --- certs ---
 
 func (s *Store) AddCert(c Cert) error {

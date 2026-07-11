@@ -74,6 +74,41 @@ Issue a fresh client certificate and print a complete inline
 Revoke a certificate and regenerate the CRL. OpenVPN rejects the client
 on its next handshake (\fBcrl\-verify\fR is always configured).
 .TP
+.B rotate\-ca
+Re\-encrypt the CA private key under a new passphrase (prompts for the
+current one, then the new one twice). The CA keypair and certificate are
+unchanged \(en issued certificates stay valid, nothing needs reissuing.
+.TP
+.B renew\-server [\fB\-days\fR \fIN\fR] [\fB\-server\-cn\fR \fICN\fR]
+Reissue the openvpn server certificate (a fresh keypair and serial),
+writing it to the same paths
+.B serve
+reads. Defaults to the existing server cert's CN (or \fBOVCP_SERVER_CN\fR);
+pass \fB\-server\-cn\fR explicitly right after a \fBbackup restore\fR, which
+never restores a server cert (see below). Also available from the web UI
+(Settings, admin role). Takes effect on the next
+.B ovcp vpn restart
+\(en openvpn does not hot\-reload its certificate.
+.TP
+.B backup create [\fB\-out\fR \fIFILE\fR]
+Write an encrypted archive (argon2id + AES\-256\-GCM, prompts twice for a
+backup passphrase) of the CA, CRL, tls\-crypt key, \fIserver.conf\fR, and
+database. Also available from the web UI (Settings, admin role).
+Deliberately excludes the openvpn server certificate and private key:
+OpenVPN clients trust the CA chain and a CN match, never a pinned server
+cert, so a restore just issues a fresh one (\fBrenew\-server\fR) \(en the
+server's private key never has to leave the machine. Client private keys
+were never stored here to begin with (no escrow); nothing to back up there
+either.
+.TP
+.B backup restore \fIFILE\fR [\fB\-force\fR]
+Decrypt and extract a backup into \fB\-data\fR (must be an uninitialized
+directory, or pass \fB\-force\fR to overwrite one). \fICLI\-only\fR by
+design \(en restoring is an offline, disaster\-recovery operation against a
+data directory, not something to expose over HTTP on a possibly\-live
+server. Follow with \fBrenew\-server\fR (the archive has no server cert)
+and \fBovcp vpn start\fR.
+.TP
 .B list
 List issued certificates with status (valid, REVOKED, expired).
 .TP
@@ -124,6 +159,10 @@ prints an otpauth:// enrollment URL.
 Print the last 50 audit entries (logins, issues, revocations, kills,
 config changes).
 .TP
+.B debug on|off
+Toggle verbose logging on a running \fBserve\fR (over the control socket,
+see \fBOVCP_CTRL_SOCK\fR) \(en no restart, resets to normal on the next one.
+.TP
 .B version
 Print the version.
 .SH OPTIONS
@@ -156,13 +195,18 @@ certificate (falls back to the VPN server certificate's CN).
 Non\-interactive passphrase/password for automation, tests, and container
 init (the image defaults both to \fIchangeme\fR). Avoid on
 shared systems: environment variables can leak.
+.TP
+.B OVCP_CA_NEW_PASSPHRASE, OVCP_BACKUP_PASSPHRASE
+Non\-interactive equivalents for \fBrotate\-ca\fR's new passphrase and
+\fBbackup\fR's archive passphrase. Same leak caveat as above.
 .SH FILES
 .TP
 .I /var/lib/ovcp/pki/ca.crt, ca.key.enc
 CA certificate and encrypted private key.
 .TP
 .I /var/lib/ovcp/pki/server.crt, server.key
-Server keypair used by openvpn.
+Server keypair used by openvpn. Not included in \fBbackup\fR archives \(en
+reissued by \fBrenew\-server\fR after a restore.
 .TP
 .I /var/lib/ovcp/pki/crl.pem
 Certificate revocation list (referenced by \fBcrl\-verify\fR).

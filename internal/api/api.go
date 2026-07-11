@@ -24,8 +24,11 @@ type Server struct {
 	PKI           *pki.PKI
 	Mgmt          *controller.Client
 	VPN           controller.Lifecycle
+	DataDir       string // data directory root (backup source)
 	ConfigPath    string // rendered server.conf
 	TLSCrypt      string // tls-crypt key path
+	ServerCert    string // openvpn server cert path (renew-server target)
+	ServerKey     string // openvpn server key path (renew-server target)
 	DefaultRemote string // OVCP_SERVER_CN / server cert CN; default client remote
 	UI            fs.FS  // built frontend; nil = API only
 }
@@ -39,6 +42,7 @@ const (
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// public
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	// authenticated
 	mux.Handle("POST /api/logout", s.wrap(auth.RoleReadonly, s.handleLogout))
@@ -50,6 +54,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/clients/kill", s.wrap(auth.RoleOperator, s.handleKill))
 	mux.Handle("POST /api/certs", s.wrap(auth.RoleOperator, s.handleIssue))
 	mux.Handle("POST /api/certs/revoke", s.wrap(auth.RoleOperator, s.handleRevoke))
+	mux.Handle("POST /api/certs/renew-server", s.wrap(auth.RoleAdmin, s.handleRenewServer))
+	mux.Handle("POST /api/backup", s.wrap(auth.RoleAdmin, s.handleBackup))
 	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
 	mux.Handle("PUT /api/config", s.wrap(auth.RoleAdmin, s.handleConfigPut))
 	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleVPN))

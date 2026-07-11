@@ -8,10 +8,22 @@ import (
 	"time"
 
 	"github.com/ovcp/ovcp/internal/auth"
+	"github.com/ovcp/ovcp/internal/backup"
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 )
+
+// handleHealthz is unauthenticated: systemd/container probes have no
+// session to offer. A DB ping is the cheapest real signal that serve is
+// actually working, not just that the listener is up.
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if err := s.Store.Ping(); err != nil {
+		jsonErr(w, 503, "db unreachable")
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Username, Password, TOTP string }
@@ -130,6 +142,65 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 	s.Store.Audit(u.Username, "issue", "cn="+in.CN+" serial="+ic.SerialHex)
 	jsonOK(w, map[string]string{"serial": ic.SerialHex,
 		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
+}
+
+// handleRenewServer reissues the openvpn server cert in place (same CN, new
+// serial), writing to the exact paths `serve` reads. Admin-only: it changes
+// the server's own identity and needs a `vpn restart` to take effect.
+func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct {
+		Passphrase string
+		Days       int
+	}
+	if !decode(r, &in) || in.Passphrase == "" {
+		jsonErr(w, 400, "passphrase required")
+		return
+	}
+	if in.Days <= 0 {
+		in.Days = 825
+	}
+	if s.DefaultRemote == "" {
+		jsonErr(w, 400, "no server CN configured")
+		return
+	}
+	ic, err := s.PKI.Issue(pki.KindServer, s.DefaultRemote, in.Days, []byte(in.Passphrase))
+	if err != nil {
+		s.pkiErr(w, err)
+		return
+	}
+	if err := os.WriteFile(s.ServerCert, ic.CertPEM, 0o644); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	if err := os.WriteFile(s.ServerKey, ic.KeyPEM, 0o600); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "server",
+		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
+	s.Store.Audit(u.Username, "renew_server", "cn="+s.DefaultRemote+" serial="+ic.SerialHex)
+	jsonOK(w, map[string]string{"serial": ic.SerialHex, "notAfter": ic.NotAfter.Format(time.RFC3339)})
+}
+
+// handleBackup streams an encrypted backup archive for download. Admin-only:
+// it covers the CA key envelope, the raw server/tls-crypt secrets, and the
+// full user table including TOTP secrets. No restore endpoint exists here
+// on purpose — `ovcp backup restore` is CLI-only, run against an offline
+// data directory, not a live server over HTTP.
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ Passphrase string }
+	if !decode(r, &in) || in.Passphrase == "" {
+		jsonErr(w, 400, "passphrase required")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	name := "ovcp-backup-" + time.Now().Format("20060102-150405") + ".ovcpbak"
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	if err := backup.Create(s.DataDir, s.Store, w, []byte(in.Passphrase)); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "backup_create", "")
 }
 
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, u *store.User) {

@@ -112,12 +112,39 @@ Confined openvpn can't read the non-standard data dir without labels — run
 ### packages
 `nfpm package -f deploy/nfpm.yaml -p deb` (or `-p rpm`) after `make release`.
 
+## Backup & restore
+
+```sh
+bin/ovcp backup create              # prompts for a backup passphrase (twice)
+# → ovcp-backup-<timestamp>.ovcpbak, an encrypted archive: CA, CRL, tls-crypt
+#   key, server.conf, database. Unreadable without the passphrase — write it
+#   down, it's never stored anywhere and can't be recovered.
+
+bin/ovcp backup restore ovcp-backup-<timestamp>.ovcpbak -data /var/lib/ovcp
+OVCP_SERVER_CN=vpn.example.com bin/ovcp renew-server   # issue a fresh server cert
+bin/ovcp vpn start
+```
+
+Deliberately excludes the openvpn server certificate and private key: clients
+trust the CA chain and a CN match, never a pinned server cert, so restore
+just issues a fresh one from the restored CA instead of ever letting the
+server's private key leave the machine. Client private keys were never
+stored here either (no escrow) — nothing lost for existing clients across a
+restore.
+
+`backup create` is also in the web UI (Settings, admin role). `backup
+restore` is CLI-only by design: it's an offline, disaster-recovery operation
+against a data directory, not something to expose over HTTP on a possibly-
+live server. Refuses to touch an already-initialized data directory unless
+you pass `-force`.
+
 ## Layout
 
 ```
 cmd/ovcp             CLI + serve entrypoint
 internal/pki         CA, issue/revoke, CRL, .ovpn bundles, tls-crypt
 internal/store       SQLite (metadata only — never private keys)
+internal/backup      encrypted export/import (CA, CRL, tls-crypt, config, database)
 internal/controller  openvpn Supervisor (reaped child) + control socket; mgmt client
 internal/ovpnconf    validated server.conf generation
 internal/auth        argon2id, sessions, TOTP, rate-limit, RBAC

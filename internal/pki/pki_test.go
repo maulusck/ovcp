@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/x509"
 	"encoding/pem"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,28 @@ func TestInitCA(t *testing.T) {
 	}
 	if err := p.CheckPassphrase([]byte("wrong")); err != ErrBadPassphrase {
 		t.Fatalf("want ErrBadPassphrase, got %v", err)
+	}
+}
+
+func TestRotate(t *testing.T) {
+	p := newCA(t)
+	newPass := []byte("a different passphrase entirely")
+
+	if err := p.Rotate([]byte("wrong"), newPass); err != ErrBadPassphrase {
+		t.Fatalf("want ErrBadPassphrase, got %v", err)
+	}
+	if err := p.Rotate(pass, newPass); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CheckPassphrase(pass); err != ErrBadPassphrase {
+		t.Fatalf("old passphrase should no longer work, got %v", err)
+	}
+	if err := p.CheckPassphrase(newPass); err != nil {
+		t.Fatal(err)
+	}
+	// CA identity survives rotation: issuing still works under the new key.
+	if _, err := p.Issue(KindClient, "alice", 365, newPass); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -94,7 +117,7 @@ func TestCRL(t *testing.T) {
 		t.Fatal(err)
 	}
 	caCert, _ := parseCertPEM(data)
-	crlPEM, err := readFile(p.CRLPath())
+	crlPEM, err := os.ReadFile(p.CRLPath())
 	if err != nil {
 		t.Fatal(err)
 	}
