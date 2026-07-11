@@ -57,9 +57,6 @@ func fakeMgmt(t *testing.T) string {
 
 func TestStatusKill(t *testing.T) {
 	c := NewClient(fakeMgmt(t))
-	if err := c.Ping(); err != nil {
-		t.Fatal(err)
-	}
 	cl, err := c.Status()
 	if err != nil {
 		t.Fatal(err)
@@ -78,9 +75,6 @@ func TestStatusKill(t *testing.T) {
 
 func TestSocketGone(t *testing.T) {
 	c := NewClient(filepath.Join(t.TempDir(), "nope.sock"))
-	if err := c.Ping(); err == nil {
-		t.Fatal("want dial error")
-	}
 	if _, err := c.Status(); err == nil {
 		t.Fatal("want dial error")
 	}

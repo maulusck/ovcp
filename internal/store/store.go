@@ -15,8 +15,6 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 1
-
 type Store struct{ db *sql.DB }
 
 type Cert struct {
@@ -50,10 +48,6 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
-	}
-	var n int
-	if err := db.QueryRow("SELECT COUNT(*) FROM schema_meta").Scan(&n); err == nil && n == 0 {
-		db.Exec("INSERT INTO schema_meta(version) VALUES (?)", schemaVersion)
 	}
 	return &Store{db: db}, nil
 }

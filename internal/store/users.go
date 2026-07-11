@@ -124,11 +124,6 @@ func (s *Store) DeleteSession(tokenHash string) error {
 	return err
 }
 
-func (s *Store) PurgeExpiredSessions() error {
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at <= ?`, time.Now().Unix())
-	return err
-}
-
 func (s *Store) DeleteUser(username string) error {
 	return s.mustAffect(s.db.Exec(`DELETE FROM users WHERE username=?`, username))
 }

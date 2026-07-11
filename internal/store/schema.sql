@@ -1,10 +1,6 @@
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS schema_meta (
-  version INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS certs (
   serial     TEXT PRIMARY KEY,          -- hex, no leading zeros
   cn         TEXT NOT NULL,

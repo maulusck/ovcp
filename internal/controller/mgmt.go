@@ -102,15 +102,6 @@ func (c *Client) Kill(cn string) error {
 	return c.simple("kill " + cn)
 }
 
-// Ping verifies the mgmt socket is reachable.
-func (c *Client) Ping() error {
-	conn, _, err := c.dial()
-	if err != nil {
-		return err
-	}
-	return conn.Close()
-}
-
 func (c *Client) simple(cmd string) error {
 	conn, r, err := c.dial()
 	if err != nil {
