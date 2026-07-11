@@ -203,14 +203,18 @@
   /* CSS columns (not grid) so panels reflow natively when a <details> is
      toggled — a closed panel frees its space immediately, no JS layout code. */
   .logs-grid { column-width: 420px; column-gap: 22px; }
-  .logs-grid :global(.card) { break-inside: avoid; margin-bottom: 22px; }
+  .logs-grid :global(.card) { break-inside: avoid; margin-bottom: 22px; padding: 10px 14px; }
   summary { cursor: pointer; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
   details[open] summary { margin-bottom: 14px; }
   /* compact by default; native resize handle (drag the corner) covers
      "let me make it bigger" without any drag-handler JS or min/max logic —
-     the browser already clamps against min-height/max-height for us. */
+     the browser already clamps against min-height/max-height for us.
+     fit-content caps both ends at the log's actual content size: a short
+     log starts smaller than 260px, and dragging can't stretch it past its
+     own content (min() also keeps a huge log capped at 80vh either way). */
   .logbox, .table-wrap {
-    max-height: 260px; min-height: 80px; overflow: auto; resize: vertical;
+    height: min(260px, fit-content); min-height: 80px; max-height: min(80vh, fit-content);
+    overflow: auto; resize: vertical; cursor: grab;
   }
   .logbox {
     font-family: var(--mono); font-size: 12px; line-height: 1.4; white-space: pre-wrap;
