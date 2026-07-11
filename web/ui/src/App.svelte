@@ -6,6 +6,7 @@
   import Dashboard from './Dashboard.svelte'
   import Certs from './Certs.svelte'
   import Settings from './Settings.svelte'
+  import Users from './Users.svelte'
   import Audit from './Audit.svelte'
   import Docs from './Docs.svelte'
 
@@ -19,6 +20,7 @@
     ['dashboard', 'Dashboard'],
     ['certs', 'Certificates'],
     ['settings', 'Settings'],
+    ['users', 'Users'],
     ['audit', 'Audit'],
     ['docs', 'Docs'],
   ]
@@ -123,6 +125,8 @@
       <Certs {canOperate} />
     {:else if tab === 'settings'}
       <Settings {isAdmin} />
+    {:else if tab === 'users'}
+      <Users {isAdmin} me={user.username} />
     {:else if tab === 'audit'}
       <Audit />
     {:else}

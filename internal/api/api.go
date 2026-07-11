@@ -60,6 +60,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/config", s.wrap(auth.RoleAdmin, s.handleConfigPut))
 	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleVPN))
 	mux.Handle("GET /api/certs/download", s.wrap(auth.RoleReadonly, s.handleCertDownload))
+	mux.Handle("GET /api/users", s.wrap(auth.RoleAdmin, s.handleUsersList))
+	mux.Handle("POST /api/users", s.wrap(auth.RoleAdmin, s.handleUserAdd))
+	mux.Handle("DELETE /api/users/{name}", s.wrap(auth.RoleAdmin, s.handleUserDelete))
+	mux.Handle("PATCH /api/users/{name}", s.wrap(auth.RoleAdmin, s.handleUserDisabled))
+	mux.Handle("POST /api/users/{name}/password", s.wrap(auth.RoleAdmin, s.handleUserPassword))
+	mux.Handle("POST /api/users/{name}/totp", s.wrap(auth.RoleAdmin, s.handleUserTOTPEnroll))
+	mux.Handle("DELETE /api/users/{name}/totp", s.wrap(auth.RoleAdmin, s.handleUserTOTPOff))
 	if s.UI != nil {
 		mux.Handle("/", spa(s.UI))
 	}

@@ -359,6 +359,141 @@ func (s *Server) handleCertDownload(w http.ResponseWriter, r *http.Request, u *s
 	w.Write(c.CertPEM)
 }
 
+func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request, u *store.User) {
+	users, err := s.Store.ListUsers()
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	type row struct {
+		Username  string
+		Role      string
+		Disabled  bool
+		TOTP      bool
+		CreatedAt time.Time
+	}
+	out := []row{}
+	for _, x := range users {
+		out = append(out, row{x.Username, x.Role, x.Disabled, x.TOTPSecret != "", x.CreatedAt})
+	}
+	jsonOK(w, out)
+}
+
+func (s *Server) handleUserAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ Username, Password, Role string }
+	if !decode(r, &in) || in.Username == "" || !auth.ValidRole(in.Role) {
+		jsonErr(w, 400, "username and valid role required")
+		return
+	}
+	if len(in.Password) < 8 {
+		jsonErr(w, 400, "password too short (min 8)")
+		return
+	}
+	h, err := auth.HashPassword(in.Password)
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	if _, err := s.Store.AddUser(in.Username, h, in.Role); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "user_add", "name="+in.Username+" role="+in.Role)
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
+	name := r.PathValue("name")
+	if name == u.Username {
+		jsonErr(w, 400, "cannot delete your own account")
+		return
+	}
+	if err := s.Store.DeleteUser(name); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "user_del", "name="+name)
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// handleUserDisabled toggles enable/disable (`ovcp user disable|enable` as one endpoint).
+func (s *Server) handleUserDisabled(w http.ResponseWriter, r *http.Request, u *store.User) {
+	name := r.PathValue("name")
+	var in struct{ Disabled bool }
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	if in.Disabled && name == u.Username {
+		jsonErr(w, 400, "cannot disable your own account")
+		return
+	}
+	if err := s.Store.SetUserDisabled(name, in.Disabled); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	action := "user_enable"
+	if in.Disabled {
+		action = "user_disable"
+	}
+	s.Store.Audit(u.Username, action, "name="+name)
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleUserPassword(w http.ResponseWriter, r *http.Request, u *store.User) {
+	name := r.PathValue("name")
+	var in struct{ Password string }
+	if !decode(r, &in) || len(in.Password) < 8 {
+		jsonErr(w, 400, "password too short (min 8)")
+		return
+	}
+	h, err := auth.HashPassword(in.Password)
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	if err := s.Store.SetUserPassword(name, h); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "user_passwd", "name="+name)
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// handleUserTOTPEnroll mirrors `ovcp user totp`: generates+stores a fresh
+// secret immediately (no separate confirm step) and returns it plus a QR
+// code for display.
+func (s *Server) handleUserTOTPEnroll(w http.ResponseWriter, r *http.Request, u *store.User) {
+	name := r.PathValue("name")
+	sec, err := auth.TOTPGenerateSecret()
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	if err := s.Store.SetUserTOTP(name, sec); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	url := auth.TOTPProvisioningURL(sec, name)
+	qr, err := qrDataURI(url)
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "user_totp_enroll", "name="+name)
+	jsonOK(w, map[string]string{"secret": sec, "url": url, "qr": qr})
+}
+
+func (s *Server) handleUserTOTPOff(w http.ResponseWriter, r *http.Request, u *store.User) {
+	name := r.PathValue("name")
+	if err := s.Store.SetUserTOTP(name, ""); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "user_totp_off", "name="+name)
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *store.User) {
 	tail, err := s.Store.AuditTail(200)
 	if err != nil {
