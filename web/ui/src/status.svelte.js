@@ -1,7 +1,7 @@
 // Shared live VPN status. Polled app-wide; phase drives the header glow.
 import { api } from './api.js'
 
-export const vpn = $state({ up: false, phase: 'down' }) // ok | down | reloading
+export const vpn = $state({ up: false, phase: 'down', clients: 0 }) // ok | down | reloading
 
 let deadline = 0
 
@@ -9,6 +9,7 @@ export async function pollOnce() {
   try {
     const d = await api('GET', '/status')
     vpn.up = d.vpn_up
+    vpn.clients = d.clients?.length ?? 0
     if (d.vpn_up) {
       vpn.phase = 'ok'
       deadline = 0

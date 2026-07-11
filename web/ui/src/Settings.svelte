@@ -78,7 +78,7 @@
   }
 </script>
 
-<div class="card">
+<div class="card server-card">
   <h2>Server configuration</h2>
   {#if !cfg}
     <p class="muted">Loading…</p>
@@ -117,11 +117,18 @@
       {#if isAdmin}
         <div class="row">
           <button type="submit">Save configuration</button>
-          <button type="button" class="ghost" onclick={start}>Start</button>
-          <button type="button" class="ghost" onclick={stop}>Stop</button>
-          <button type="button" class="ghost" onclick={restart}>Restart</button>
-          <button type="button" class="ghost" onclick={reconnect}>Reconnect</button>
-          <button type="button" class="ghost" onclick={renewServer}>Renew server cert</button>
+          <button type="button" class="ghost" onclick={start}
+            title="Launch openvpn if it isn't running">Start</button>
+          <button type="button" class="ghost" onclick={stop}
+            title="SIGTERM openvpn; disconnects all clients">Stop</button>
+          <button type="button" class="ghost" onclick={restart}
+            title="Full stop + fresh start; applies config, key, and CRL changes">Restart</button>
+          <button type="button" class="ghost" onclick={reconnect}
+            title="Soft session reset (SIGUSR1); keeps the process running">Reconnect</button>
+        </div>
+        <div class="row row-secondary">
+          <button type="button" class="ghost" onclick={renewServer}
+            title="Issue a fresh server certificate from the CA; needs Restart to apply">Renew server cert</button>
         </div>
       {:else}
         <p class="muted">Read-only: your role can view but not change settings.</p>
@@ -139,15 +146,18 @@
       <code>ovcp backup restore FILE</code>.</p>
     {#if backupErr}<p class="err">{backupErr}</p>{/if}
     {#if backupOk}<p class="ok">{backupOk}</p>{/if}
-    <button type="button" class="ghost" onclick={downloadBackup}>Download backup</button>
+    <button type="button" class="ghost" onclick={downloadBackup}
+      title="Download an encrypted archive of the CA, CRL, tls-crypt key, config, and database">Download backup</button>
   </div>
 {/if}
 
 <style>
+  .server-card { margin-bottom: 18px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 14px; }
   .check { display: flex; align-items: center; gap: 8px; }
   .check input { width: auto; }
   .row { display: flex; gap: 10px; margin-top: 6px; }
+  .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
   .ok { color: var(--ok); font-size: 13px; }
   .small { font-size: 12px; margin: 8px 0; }
 </style>

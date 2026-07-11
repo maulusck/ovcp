@@ -128,9 +128,11 @@
             {#if canOperate}
               <td>{#if !c.Revoked}
                 {#if c.Kind === 'client' && status(c).cls !== ''}
-                  <button class="ghost" onclick={() => renewCN(c.CN)}>Renew</button>
+                  <button class="ghost" onclick={() => renewCN(c.CN)}
+                    title="Pre-fill the issue form with this CN to reissue it">Renew</button>
                 {/if}
-                <button class="ghost" onclick={() => revoke(c.Serial, c.CN)}>Revoke</button>
+                <button class="ghost" onclick={() => revoke(c.Serial, c.CN)}
+                  title="Revoke this certificate and regenerate the CRL">Revoke</button>
               {/if}</td>
             {/if}
           </tr>
