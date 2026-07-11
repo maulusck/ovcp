@@ -54,8 +54,10 @@
   const auditText = () => entries.map(e =>
     `${new Date(e.TS).toLocaleString()} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
 
+  // the archive bundle takes no request input at all (fixed server-side
+  // filenames) — per-log copy/download stays entirely client-side instead
+  // of adding a parametrized single-file endpoint for it.
   const downloadAllLogs = () => (window.location.href = '/api/logs/download')
-  const downloadFile = (name) => (window.location.href = '/api/logs/download?file=' + name)
 
   function downloadText(filename, text) {
     const a = document.createElement('a')
@@ -135,7 +137,8 @@
         <button type="button" class="ghost" onclick={() => copyText('openvpn', ovpnLines.join('\n'))}>
           {copied === 'openvpn' ? 'Copied' : 'Copy'}
         </button>
-        <button type="button" class="ghost" onclick={() => downloadFile('openvpn.log')}>Download</button>
+        <button type="button" class="ghost" title="Downloads what's shown here (last 200 lines) — for the complete file, use Download all logs"
+          onclick={() => downloadText('openvpn.log', ovpnLines.join('\n'))}>Download</button>
       </div>
       <pre class="logbox" bind:this={ovpnBox}>{ovpnLines.join('\n')}</pre>
     {/if}
@@ -150,7 +153,8 @@
         <button type="button" class="ghost" onclick={() => copyText('ovcp', ovcpLines.join('\n'))}>
           {copied === 'ovcp' ? 'Copied' : 'Copy'}
         </button>
-        <button type="button" class="ghost" onclick={() => downloadFile('ovcp.log')}>Download</button>
+        <button type="button" class="ghost" title="Downloads what's shown here (last 200 lines) — for the complete file, use Download all logs"
+          onclick={() => downloadText('ovcp.log', ovcpLines.join('\n'))}>Download</button>
       </div>
       <pre class="logbox" bind:this={ovcpBox}>{ovcpLines.join('\n')}</pre>
     {/if}
@@ -158,10 +162,15 @@
 </div>
 
 <style>
-  .logs-head { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 14px; }
-  .poll-pick { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
+  .logs-head {
+    display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
+    gap: 6px 14px; margin-bottom: 10px; font-size: 12px;
+  }
+  .poll-pick { display: flex; align-items: center; gap: 6px; margin: 0; }
   .poll-pick select, .poll-pick input { width: auto; }
-  .panel-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 8px; }
+  .poll-pick select { padding: 3px 6px; font-size: 12px; }
+  .logs-head button.ghost, .panel-actions button.ghost { padding: 3px 10px; font-size: 12px; }
+  .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
   /* CSS columns (not grid) so panels reflow natively when a <details> is
      toggled — a closed panel frees its space immediately, no JS layout code. */
   .logs-grid { column-width: 420px; column-gap: 22px; }

@@ -117,28 +117,28 @@ func TestLogsDownloadZip(t *testing.T) {
 	}
 }
 
-func TestLogsDownloadSingleFile(t *testing.T) {
+// handleLogsDownload takes no request input: any query string, including a
+// path-traversal attempt, must be silently ignored — it still just returns
+// the fixed two-file zip, proving nothing from the request reaches the
+// filesystem.
+func TestLogsDownloadIgnoresQueryParams(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
 	os.WriteFile(filepath.Join(e.dir, "ovcp.log"), []byte("hi\n"), 0o644)
 
-	r := e.req("GET", "/api/logs/download?file=ovcp.log", "", false)
+	r := e.req("GET", "/api/logs/download?file=../../etc/passwd", "", false)
 	if r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
+	if ct := r.Header.Get("Content-Type"); ct != "application/zip" {
+		t.Fatalf("Content-Type = %q, query params must not change the response shape", ct)
+	}
 	body, _ := io.ReadAll(r.Body)
-	if string(body) != "hi\n" {
-		t.Fatalf("got %q", body)
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cd := r.Header.Get("Content-Disposition"); !strings.Contains(cd, "ovcp.log") {
-		t.Fatalf("Content-Disposition = %q", cd)
-	}
-
-	// not on the allowlist: reject, don't touch the filesystem with it.
-	if r := e.req("GET", "/api/logs/download?file=../../etc/passwd", "", false); r.StatusCode != 400 {
-		t.Fatal("path traversal attempt must 400, got", r.Status)
-	}
-	if r := e.req("GET", "/api/logs/download?file=ovcp.db", "", false); r.StatusCode != 400 {
-		t.Fatal("non-allowlisted file must 400, got", r.Status)
+	if len(zr.File) != 1 || zr.File[0].Name != "ovcp.log" {
+		t.Fatalf("want only ovcp.log, got %v", zr.File)
 	}
 }

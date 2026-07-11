@@ -61,25 +61,19 @@ func (s *Server) logHandler(filename string) handler {
 	}
 }
 
-// logFilenames are the only files handleLogsDownload will ever serve — an
-// allowlist, since ?file= is attacker-controlled input at a trust boundary.
-var logFilenames = []string{"openvpn.log", "ovcp.log"}
-
-// handleLogsDownload serves the full (untailed) log files for offline
-// analysis — unlike the tailed panels, these are the complete files.
-// No ?file= param: bundles everything into one zip. ?file=<name>: that one
-// file raw, name must be in logFilenames.
+// handleLogsDownload bundles the full (untailed) log files into one zip for
+// offline analysis — unlike the tailed panels, this is the complete file.
+// Takes no request input at all: only ever reads these two fixed filenames,
+// nothing derived from the request ever reaches the filesystem. Per-log
+// copy/download in the UI is handled entirely client-side from what's
+// already loaded, precisely to avoid needing a parametrized version of this.
 func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if f := r.URL.Query().Get("file"); f != "" {
-		s.downloadOneLog(w, f)
-		return
-	}
 	w.Header().Set("Content-Type", "application/zip")
 	name := "ovcp-logs-" + time.Now().Format("20060102-150405") + ".zip"
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
 	zw := zip.NewWriter(w)
 	defer zw.Close()
-	for _, filename := range logFilenames {
+	for _, filename := range []string{"openvpn.log", "ovcp.log"} {
 		data, err := os.ReadFile(filepath.Join(s.DataDir, filename))
 		if err != nil {
 			continue // missing log is not an error, same as the tailed view
@@ -90,26 +84,4 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 		}
 		f.Write(data)
 	}
-}
-
-func (s *Server) downloadOneLog(w http.ResponseWriter, filename string) {
-	valid := false
-	for _, f := range logFilenames {
-		if f == filename {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		jsonErr(w, 400, "unknown log file")
-		return
-	}
-	data, err := os.ReadFile(filepath.Join(s.DataDir, filename))
-	if err != nil {
-		jsonErr(w, 404, "log not found")
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	w.Write(data)
 }
