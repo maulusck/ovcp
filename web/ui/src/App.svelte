@@ -138,7 +138,7 @@
           <option value={t.name} style="background:{t.bg}; color:{t.fg}">{t.label}</option>
         {/each}
       </select>
-      <div class="account" title="{user.username} — {user.role}">
+      <div class="account" title="user: {user.username}  role: {user.role}">
         <span class="avatar">{@html identicon(user.username)}</span>
         <span class="acct-name">{user.username}</span>
         <span class="role-pill role-{user.role}">{user.role}</span>
