@@ -359,22 +359,26 @@ func (s *Server) handleCertDownload(w http.ResponseWriter, r *http.Request, u *s
 	w.Write(c.CertPEM)
 }
 
+// userSummary strips the auth-relevant-but-not-secret fields off store.User
+// (never the password/TOTP secret itself) — shared by the /users list and
+// the status export in logs.go, same shape either way.
+type userSummary struct {
+	Username  string
+	Role      string
+	Disabled  bool
+	TOTP      bool
+	CreatedAt time.Time
+}
+
 func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request, u *store.User) {
 	users, err := s.Store.ListUsers()
 	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	type row struct {
-		Username  string
-		Role      string
-		Disabled  bool
-		TOTP      bool
-		CreatedAt time.Time
-	}
-	out := []row{}
+	out := []userSummary{}
 	for _, x := range users {
-		out = append(out, row{x.Username, x.Role, x.Disabled, x.TOTPSecret != "", x.CreatedAt})
+		out = append(out, userSummary{x.Username, x.Role, x.Disabled, x.TOTPSecret != "", x.CreatedAt})
 	}
 	jsonOK(w, out)
 }

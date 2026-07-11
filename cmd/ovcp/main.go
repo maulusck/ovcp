@@ -548,6 +548,7 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 		ServerKey:  pp.ServerKey,
 		UI:         web.Dist(),
 		DebugLevel: logLevel,
+		Version:    version,
 	}
 	srv.DefaultRemote = adminCertCN(dataDir)
 

@@ -142,7 +142,8 @@
     </select>
   </label>
   <button type="button" class="ghost" onclick={downloadAllLogs}
-    title="Download the full openvpn.log + ovcp.log as a zip">Download all logs</button>
+    title="Full audit package: logs, audit trail, VPN/cert/user/config status — unencrypted, for security/ops review">
+    Download audit package</button>
 </div>
 
 <div class="logs-grid">
