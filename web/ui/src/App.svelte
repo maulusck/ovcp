@@ -60,6 +60,25 @@
     tab = 'dashboard'
   }
 
+  // deterministic per-username "identicon": a symmetric 5x3 bit grid seeded
+  // by a cheap string hash — no avatar library, no network image.
+  function identicon(seed, size = 24) {
+    let h = 0
+    for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0
+    const cell = size / 5
+    let rects = ''
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 3; x++) {
+        if ((h >> (y * 3 + x)) & 1) {
+          rects += `<rect x="${x * cell}" y="${y * cell}" width="${cell}" height="${cell}"/>`
+          if (x < 2) rects += `<rect x="${(4 - x) * cell}" y="${y * cell}" width="${cell}" height="${cell}"/>`
+        }
+      }
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">` +
+      `<rect width="100%" height="100%" fill="var(--ink)"/><g fill="hsl(${h % 360} 65% 55%)">${rects}</g></svg>`
+  }
+
   const canOperate = $derived(user && user.role !== 'readonly')
   const isAdmin = $derived(user && user.role === 'admin')
   const phaseText = $derived(
@@ -115,7 +134,7 @@
         {/each}
       </select>
       <div class="account" title="{user.username} — {user.role}">
-        <span class="avatar">{user.username[0].toUpperCase()}</span>
+        <span class="avatar">{@html identicon(user.username)}</span>
         <span class="acct-name">{user.username}</span>
         <span class="role-pill role-{user.role}">{user.role}</span>
       </div>
@@ -239,11 +258,7 @@
   .who { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--dim); }
   .theme-pick { width: auto; padding: 5px 8px; font-size: 12px; }
   .account { display: flex; align-items: center; gap: 8px; }
-  .avatar {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
-    background: var(--amber); color: var(--ink); font-weight: 700; font-size: 12px;
-  }
+  .avatar { display: inline-flex; width: 24px; height: 24px; border-radius: 6px; overflow: hidden; flex-shrink: 0; }
   .acct-name { color: var(--text); font-weight: 600; }
   .role-pill {
     font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
