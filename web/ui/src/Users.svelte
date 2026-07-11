@@ -147,10 +147,6 @@
 
 <style>
   .issue { margin-bottom: 18px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
-  .req { color: var(--bad); }
-  .ok { color: var(--ok); font-size: 13px; }
-  .rv { color: var(--bad); }
   .small { font-size: 12px; margin: 8px 0; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .qr { background: #fff; padding: 8px; border-radius: 4px; }

@@ -20,17 +20,14 @@ import (
 const (
 	tailMaxBytes  = 256 * 1024 // bound the read regardless of file size
 	tailLineLimit = 200        // lines returned to the UI
-	// ponytail: no unbounded audit query exists, so the "complete" export is
-	// capped here instead — raise this (or add one) if an install ever has
-	// more audit rows than this in its lifetime.
+	// ponytail: no unbounded audit query exists, so this stands in as "all" —
+	// raise it if an install ever outlives this many audit rows.
 	auditDownloadLimit = 1_000_000
 )
 
 // tailLines returns up to n trailing lines of path, reading at most the last
-// tailMaxBytes so an unbounded log file can't blow up memory. A missing file
-// is not an error — it just means the process hasn't logged anything yet.
-// Lines matching skip (nil = none) are dropped before the n-line cap is
-// applied, so noise doesn't crowd real content out of the tail.
+// tailMaxBytes (a missing file isn't an error, just unwritten yet). Lines
+// matching skip (nil = none) are dropped before the n-line cap applies.
 func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -62,12 +59,9 @@ func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
 	return lines, nil
 }
 
-// isStatusPollLine matches the "status 3" command openvpn logs on its
-// management socket every time the app polls VPN status (every few seconds,
-// see App.svelte). It's not connection noise (that's gone now that the
-// mgmt client holds one connection instead of dialing per poll) — it's a
-// real command echo, just one that fires often enough to drown out
-// everything else in a 200-line tail.
+// isStatusPollLine matches the periodic "status 3" command openvpn echoes
+// on its management socket (App.svelte's status timer) — a real, expected
+// line, just frequent enough to drown out everything else in a 200-line tail.
 func isStatusPollLine(line string) bool {
 	return strings.Contains(line, `MANAGEMENT: CMD 'status 3'`)
 }
@@ -85,13 +79,9 @@ func (s *Server) logHandler(filename string) handler {
 	}
 }
 
-// handleLogsDownload bundles a complete, unencrypted audit package for
-// security/ops review: the full log files, full audit trail, and a
-// status.json snapshot (VPN/certs/users/config — all already served to any
-// readonly admin individually, so bundling it adds no new exposure). No
-// private keys, no DB file — that's what the encrypted `ovcp backup` is
-// for. Deliberately unparametrized: nothing from the request reaches the
-// filesystem or DB, so there's no parameter to get wrong.
+// handleLogsDownload bundles an unencrypted audit package: log files,
+// audit trail, and a status.json snapshot of data already served
+// individually (no new exposure; no keys/DB — that's `ovcp backup`).
 func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
 	w.Header().Set("Content-Type", "application/zip")
 	name := "ovcp-audit-" + time.Now().Format("20060102-150405") + ".zip"
@@ -128,11 +118,9 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 	}
 }
 
-// statusExport is a non-sensitive, point-in-time snapshot of server state,
-// built entirely from the same reads the /status, /certs, /users, /config
-// endpoints already do — see handleLogsDownload. Certs carry no secrets
-// (private keys are never stored); Users goes through userSummary because
-// store.User does (PassHash, TOTPSecret).
+// statusExport reuses the same reads /status, /certs, /users, /config
+// already do. Certs carry no secrets (keys are never stored); Users goes
+// through userSummary since store.User does (PassHash, TOTPSecret).
 type statusExport struct {
 	GeneratedAt time.Time
 	ServerCN    string

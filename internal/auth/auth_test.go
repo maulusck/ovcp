@@ -155,9 +155,8 @@ func TestRateLimitAcrossIPs(t *testing.T) {
 }
 
 // TestLimiterSweepBoundsMap: a key that fails once and is never rechecked
-// must not linger in the map forever — Fail sweeps expired entries so the
-// map stays bounded to the current window instead of growing for the life
-// of the process.
+// must not linger forever — Fail sweeps expired entries so the map stays
+// bounded instead of growing for the process's whole life.
 func TestLimiterSweepBoundsMap(t *testing.T) {
 	l := NewLimiter(5, time.Minute)
 	now := time.Now()

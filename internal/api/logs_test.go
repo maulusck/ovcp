@@ -138,10 +138,8 @@ func TestLogsDownloadZip(t *testing.T) {
 	}
 }
 
-// handleLogsDownload takes no request input: any query string, including a
-// path-traversal attempt, must be silently ignored — it still just returns
-// the fixed archive contents, proving nothing from the request reaches the
-// filesystem or DB query.
+// handleLogsDownload takes no request input: a query string, including a
+// path-traversal attempt, must be silently ignored — same fixed archive.
 func TestLogsDownloadIgnoresQueryParams(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
@@ -165,10 +163,8 @@ func TestLogsDownloadIgnoresQueryParams(t *testing.T) {
 	}
 }
 
-// Covers both non-obvious pieces of the "audit package": the archive
-// travels standalone (e.g. attached to a support ticket) so its filename
-// must carry the server CN, and status.json must actually decode into
-// real, non-null data — it's the whole point of the archive.
+// The archive travels standalone (e.g. a support ticket), so its filename
+// must carry the server CN, and status.json must decode to real, non-null data.
 func TestLogsDownloadStatusJSON(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")

@@ -1,5 +1,5 @@
 <script>
-  import { api, csrf } from './api.js'
+  import { api, apiBlob, downloadBlob } from './api.js'
   import { expectRecovery } from './status.svelte.js'
   let { isAdmin } = $props()
   let cfg = $state(null)
@@ -60,19 +60,8 @@
     if (!passphrase) return
     backupErr = ''; backupOk = ''
     try {
-      const res = await fetch('/api/backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-OVCP-CSRF': csrf() },
-        body: JSON.stringify({ Passphrase: passphrase }),
-      })
-      if (!res.ok) throw await res.json()
-      const blob = await res.blob()
-      const match = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = match?.[1] || 'ovcp-backup.ovcpbak'
-      a.click()
-      URL.revokeObjectURL(a.href)
+      const { blob, filename } = await apiBlob('POST', '/backup', { Passphrase: passphrase })
+      downloadBlob(blob, filename || 'ovcp-backup.ovcpbak')
       backupOk = 'Backup downloaded.'
     } catch (x) { backupErr = x.error || 'backup failed' }
   }
@@ -158,6 +147,5 @@
   .check input { width: auto; }
   .row { display: flex; gap: 10px; margin-top: 6px; }
   .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
-  .ok { color: var(--ok); font-size: 13px; }
   .small { font-size: 12px; margin: 8px 0; }
 </style>

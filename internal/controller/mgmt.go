@@ -1,9 +1,6 @@
 // Package controller talks to openvpn's management socket over one held
-// connection, reconnecting on demand if it drops (e.g. openvpn restarts and
-// recreates the socket). Holding the connection avoids a fresh
-// connect/disconnect on every status poll, which otherwise spams
-// openvpn.log with a MANAGEMENT connect/CMD/disconnect triple every few
-// seconds.
+// connection instead of dialing per op — dialing per status poll spammed
+// openvpn.log with a connect/CMD/disconnect triple every few seconds.
 package controller
 
 import (
@@ -70,11 +67,9 @@ func (c *Client) drop() {
 // the round trip succeeded, so exec must not drop and reconnect for these.
 type appErr struct{ error }
 
-// exec runs cmd on the held connection, reading the response via parse.
-// Any connection-level failure (dial, write, or read) drops the connection
-// and retries once against a freshly dialed one, so a stale connection
-// (e.g. openvpn restarted and recreated the socket) self-heals within the
-// same call. An appErr from parse is returned as-is without retrying.
+// exec runs cmd on the held connection, retrying once against a freshly
+// dialed one on any I/O failure (self-healing a stale connection after e.g.
+// an openvpn restart) — but not on an appErr, since that round trip already succeeded.
 func (c *Client) exec(cmd string, parse func(*bufio.Reader) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

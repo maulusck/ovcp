@@ -21,7 +21,9 @@ export async function pollOnce() {
     }
     return d
   } catch {
-    if (!(vpn.phase === 'reloading' && Date.now() < deadline)) { vpn.phase = 'down'; vpn.clientList = [] }
+    if (!(vpn.phase === 'reloading' && Date.now() < deadline)) {
+      vpn.phase = 'down'; vpn.up = false; vpn.clientList = []
+    }
     return { vpn_up: false, clients: [] }
   }
 }

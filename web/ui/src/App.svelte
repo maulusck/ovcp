@@ -227,6 +227,11 @@
   :global(td) { padding: 7px 10px; border-bottom: 1px solid var(--line); }
   :global(.err) { color: var(--bad); font-size: 13px; }
   :global(.muted) { color: var(--dim); }
+  /* shared by Certs.svelte and Users.svelte's forms/tables */
+  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
+  :global(.req) { color: var(--bad); }
+  :global(.ok) { color: var(--ok); font-size: 13px; }
+  :global(.rv) { color: var(--bad); }
 
   .gate { min-height: 100vh; display: grid; place-items: center; }
   .login { width: min(340px, 92vw); }

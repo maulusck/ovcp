@@ -1,5 +1,5 @@
 <script>
-  import { api, csrf } from './api.js'
+  import { api, apiBlob, downloadBlob } from './api.js'
   let { canOperate } = $props()
   let certs = $state([])
   let err = $state('')
@@ -16,20 +16,9 @@
     e.preventDefault()
     err = ''; ok = ''
     try {
-      const res = await fetch('/api/certs/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-OVCP-CSRF': csrf() },
-        body: JSON.stringify({ CN: form.cn, Remote: form.remote,
-          Passphrase: form.passphrase, Days: +form.days,
-          KeyPassphrase: form.keypass }),
-      })
-      if (!res.ok) throw await res.json()
-      const blob = await res.blob()
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = form.cn + '.ovpn'
-      a.click()
-      URL.revokeObjectURL(a.href)
+      const { blob } = await apiBlob('POST', '/certs/export', { CN: form.cn, Remote: form.remote,
+        Passphrase: form.passphrase, Days: +form.days, KeyPassphrase: form.keypass })
+      downloadBlob(blob, form.cn + '.ovpn')
       ok = `Issued ${form.cn} and downloaded the profile.`
       form.cn = ''; form.passphrase = ''; form.keypass = ''
       refresh()
@@ -144,11 +133,7 @@
 
 <style>
   .issue { margin-bottom: 18px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
-  .req { color: var(--bad); }
   .small { font-size: 12px; margin: 8px 0 0; }
-  .ok { color: var(--ok); font-size: 13px; }
-  .rv { color: var(--bad); }
   .soon { color: var(--amber); }
   .serial {
     background: none; border: 0; padding: 0; color: var(--dim);

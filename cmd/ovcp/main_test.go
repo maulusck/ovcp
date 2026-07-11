@@ -1,16 +1,8 @@
 package main
 
-// Black-box CLI tests: main() is a big switch built on die() (os.Exit(1) on
-// error), which isn't safe to call in-process — it would kill the test
-// binary. So these drive the real compiled binary as a subprocess, the same
-// way an operator would. readSecret reads every passphrase from its env var
-// when set, so all of this runs non-interactively.
-//
-// Not covered here: `serve` and `vpn start` actually spawning openvpn — that
-// needs a real openvpn binary, root, and a bound network port, and the HTTP
-// layer + control-socket wiring it depends on already have dedicated tests
-// in internal/api and internal/controller. Re-proving that here would be a
-// slow, flaky duplicate, not new coverage.
+// Black-box CLI tests: main() calls die() (os.Exit(1)), unsafe in-process,
+// so these drive the compiled binary as a subprocess. `serve`/`vpn start`
+// spawning real openvpn isn't covered here — internal/api/controller do that.
 
 import (
 	"bytes"
@@ -111,11 +103,9 @@ func TestVersionAndUsage(t *testing.T) {
 	}
 }
 
-// TestDataFlagPosition covers the actual -data CLI flag, not just the
-// OVCP_DATA env var every other test uses. -data is parsed by the top-level
-// flag set before the subcommand name, so it must come first (ovcp -data
-// DIR <command>, matching git -C / docker -H); every other test sidesteps
-// this entirely via the env var, so this was never actually exercised.
+// TestDataFlagPosition covers the -data CLI flag itself (every other test
+// uses OVCP_DATA instead). -data is parsed before the subcommand name, so
+// it must come first: ovcp -data DIR <command>, like git -C / docker -H.
 func TestDataFlagPosition(t *testing.T) {
 	dir := t.TempDir()
 	env := []string{
@@ -250,10 +240,9 @@ func TestBackupRestore(t *testing.T) {
 		t.Fatalf("restored db should still have alice: %+v", r)
 	}
 
-	// dstDir is now initialized: a second restore must refuse without
-	// -force, and -force only works before the positional FILE argument
-	// (flag.Parse stops at the first non-flag arg) — restore's own usage
-	// text got that backwards once already; guard it here for real.
+	// dstDir is now initialized: restore must refuse without -force, and
+	// -force only works before the positional FILE arg (flag.Parse stops at
+	// the first non-flag arg) — usage text got that backwards once already.
 	if r := run(t, restore, "backup", "restore", backupFile); r.code == 0 {
 		t.Fatalf("restore over an initialized dir without -force should fail: %+v", r)
 	}

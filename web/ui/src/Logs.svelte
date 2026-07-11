@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte'
-  import { api } from './api.js'
+  import { api, downloadBlob } from './api.js'
   let { isAdmin } = $props()
 
   // the two plain-text log panels are identical except for these fields;
@@ -25,10 +25,9 @@
     { audit: true, openvpn: false, ovcp: false },
     JSON.parse(localStorage.getItem(OPEN_KEY) || '{}')))
 
-  // clamp a box's height to its content: CSS fit-content doesn't work in the
-  // vertical axis in Firefox, so measure instead. Keeps a short log from
-  // showing dead space (on load) and a resize drag from stretching past the
-  // end of the log (clamped again on pointerup).
+  // clamp a box's height to its content: CSS fit-content doesn't work in
+  // the vertical axis in Firefox, so measure instead (also re-clamps a
+  // resize drag on pointerup, so it can't stretch past the log's end).
   function fitToContent(el) {
     if (!el) return
     const cur = el.offsetHeight
@@ -76,13 +75,7 @@
   // of adding a parametrized single-file endpoint for it.
   const downloadAllLogs = () => (window.location.href = '/api/logs/download')
 
-  function downloadText(filename, text) {
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(a.href)
-  }
+  const downloadText = (filename, text) => downloadBlob(new Blob([text], { type: 'text/plain' }), filename)
 
   // native Fullscreen API for "maximize" — no custom overlay/z-index CSS,
   // Esc-to-exit and restore both come from the browser for free.

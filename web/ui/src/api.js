@@ -20,6 +20,28 @@ export async function api(method, path, body) {
   return data
 }
 
+// apiBlob is api()'s counterpart for endpoints that return a file instead
+// of JSON (export/backup/logs downloads) — same CSRF'd POST, but hands back
+// the raw blob and any server-suggested filename instead of parsing JSON.
+export async function apiBlob(method, path, body) {
+  const res = await fetch('/api' + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-OVCP-CSRF': csrf() },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) throw await res.json()
+  const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1]
+  return { blob: await res.blob(), filename }
+}
+
+export function downloadBlob(blob, filename) {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
 export function fmtBytes(n) {
   if (n < 1024) return n + ' B'
   const u = ['KiB', 'MiB', 'GiB', 'TiB']
