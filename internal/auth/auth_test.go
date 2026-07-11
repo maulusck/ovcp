@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -125,5 +126,27 @@ func TestRateLimit(t *testing.T) {
 	a.Limiter.now = func() time.Time { return time.Now().Add(16 * time.Minute) }
 	if _, _, err := a.Login("carl", "password1", "", "9.9.9.9"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestLimiterSweepBoundsMap: a key that fails once and is never rechecked
+// must not linger in the map forever — Fail sweeps expired entries so the
+// map stays bounded to the current window instead of growing for the life
+// of the process.
+func TestLimiterSweepBoundsMap(t *testing.T) {
+	l := NewLimiter(5, time.Minute)
+	now := time.Now()
+	l.now = func() time.Time { return now }
+	for i := 0; i < 1000; i++ {
+		l.Fail(fmt.Sprintf("stale-key-%d", i))
+	}
+	if len(l.failures) != 1000 {
+		t.Fatalf("expected 1000 fresh entries, got %d", len(l.failures))
+	}
+
+	now = now.Add(2 * time.Minute) // past the window
+	l.Fail("fresh-key")
+	if len(l.failures) != 1 {
+		t.Fatalf("expected the sweep to drop all stale entries, got %d left", len(l.failures))
 	}
 }

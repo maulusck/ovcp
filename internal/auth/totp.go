@@ -90,12 +90,21 @@ func (l *Limiter) Allow(key string) bool {
 	return e.count < l.max
 }
 
+// Fail also sweeps expired entries: it's the only method that grows the
+// map, so this is what keeps a key that fails once and is never rechecked
+// from lingering forever (unbounded growth otherwise).
 func (l *Limiter) Fail(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := l.now()
+	for k, e := range l.failures {
+		if now.Sub(e.first) > l.window {
+			delete(l.failures, k)
+		}
+	}
 	e, ok := l.failures[key]
-	if !ok || l.now().Sub(e.first) > l.window {
-		l.failures[key] = entry{count: 1, first: l.now()}
+	if !ok || now.Sub(e.first) > l.window {
+		l.failures[key] = entry{count: 1, first: now}
 		return
 	}
 	e.count++

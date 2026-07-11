@@ -38,7 +38,10 @@ func EnsureAdminTLS(dir, cn string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return "", "", err
+	}
 	tpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: cn},
@@ -53,7 +56,10 @@ func EnsureAdminTLS(dir, cn string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	kder, _ := x509.MarshalPKCS8PrivateKey(key)
+	kder, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return "", "", err
+	}
 	if err := os.WriteFile(kp, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kder}), 0o600); err != nil {
 		return "", "", err
 	}

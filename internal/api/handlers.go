@@ -269,7 +269,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	tc, _ := os.ReadFile(s.TLSCrypt)
+	tc, err := os.ReadFile(s.TLSCrypt)
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
 	cfg := s.LoadConfig()
 	bundle := pki.RenderOVPN(pki.BundleParams{
 		Remote: in.Remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: s.DefaultRemote,
