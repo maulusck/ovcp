@@ -97,6 +97,17 @@ func TestTOTPFlow(t *testing.T) {
 	}
 }
 
+func TestTOTPProvisioningURL(t *testing.T) {
+	if u := TOTPProvisioningURL("SECRET", "eve", "vpn.example.com"); u !=
+		"otpauth://totp/vpn.example.com:eve?secret=SECRET&issuer=vpn.example.com" {
+		t.Fatalf("got %q", u)
+	}
+	if u := TOTPProvisioningURL("SECRET", "eve", ""); u !=
+		"otpauth://totp/OVCP:eve?secret=SECRET&issuer=OVCP" {
+		t.Fatalf("empty issuer should fall back to OVCP, got %q", u)
+	}
+}
+
 func TestTOTPVector(t *testing.T) {
 	// RFC 6238 test vector (SHA1): secret "12345678901234567890", T=59 → 94287082 → 6-digit 287082
 	sec := "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"

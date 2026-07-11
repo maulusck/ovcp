@@ -23,10 +23,16 @@ func TOTPGenerateSecret() (string, error) {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
 }
 
-// TOTPProvisioningURL → otpauth:// URI for authenticator apps.
-func TOTPProvisioningURL(secret, account string) string {
-	return fmt.Sprintf("otpauth://totp/OVCP:%s?secret=%s&issuer=OVCP",
-		url.PathEscape(account), secret)
+// TOTPProvisioningURL → otpauth:// URI for authenticator apps. issuer names
+// the ovcp instance (its server FQDN) so multiple deployments show up as
+// distinct entries in an authenticator app instead of all being "OVCP";
+// falls back to "OVCP" if the caller has no FQDN yet.
+func TOTPProvisioningURL(secret, account, issuer string) string {
+	if issuer == "" {
+		issuer = "OVCP"
+	}
+	return fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s",
+		url.PathEscape(issuer), url.PathEscape(account), secret, url.QueryEscape(issuer))
 }
 
 func totpCode(secret string, t time.Time) (string, error) {

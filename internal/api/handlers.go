@@ -474,7 +474,7 @@ func (s *Server) handleUserTOTPEnroll(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	url := auth.TOTPProvisioningURL(sec, name)
+	url := auth.TOTPProvisioningURL(sec, name, s.DefaultRemote)
 	qr, err := qrDataURI(url)
 	if err != nil {
 		jsonErr(w, 500, err.Error())

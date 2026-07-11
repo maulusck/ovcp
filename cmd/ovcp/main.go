@@ -497,7 +497,7 @@ func main() {
 			die(err)
 			die(s.SetUserTOTP(*name, sec))
 			s.Audit("cli", "user_totp_enroll", "name="+*name)
-			url := auth.TOTPProvisioningURL(sec, *name)
+			url := auth.TOTPProvisioningURL(sec, *name, adminCertCN(*dataDir))
 			printQR(url)
 			fmt.Println("scan with your authenticator, or enter manually:")
 			fmt.Println("  secret:", sec)
