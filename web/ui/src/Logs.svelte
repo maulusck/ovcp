@@ -6,6 +6,7 @@
   let ovpnLines = $state([])
   let ovcpLines = $state([])
   let ovpnBox = $state(), ovcpBox = $state()
+  let auditCard = $state(), ovpnCard = $state(), ovcpCard = $state()
   let debugOn = $state(false)
   let err = $state('')
   const POLL_KEY = 'ovcp_logs_poll'
@@ -67,6 +68,23 @@
     URL.revokeObjectURL(a.href)
   }
 
+  // native Fullscreen API for "maximize" — no custom overlay/z-index CSS,
+  // Esc-to-exit and restore both come from the browser for free.
+  let maximized = $state(null) // 'audit' | 'openvpn' | 'ovcp' | null
+  function toggleMaximize(el) {
+    if (!el) return
+    if (document.fullscreenElement === el) document.exitFullscreen()
+    else el.requestFullscreen()
+  }
+  $effect(() => {
+    function onChange() {
+      const el = document.fullscreenElement
+      maximized = el === auditCard ? 'audit' : el === ovpnCard ? 'openvpn' : el === ovcpCard ? 'ovcp' : null
+    }
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  })
+
   $effect(() => {
     localStorage.setItem(POLL_KEY, pollSec)
     if (!pollSec) return
@@ -101,7 +119,7 @@
 </div>
 
 <div class="logs-grid">
-  <details class="card" bind:open={openState.audit}>
+  <details class="card" bind:open={openState.audit} bind:this={auditCard}>
     <summary>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
@@ -111,24 +129,29 @@
           {copied === 'audit' ? 'Copied' : 'Copy'}
         </button>
         <button type="button" class="ghost" onclick={() => downloadText('audit.log', auditText())}>Download</button>
+        <button type="button" class="ghost" onclick={() => toggleMaximize(auditCard)}>
+          {maximized === 'audit' ? 'Restore' : 'Maximize'}
+        </button>
       </div>
-      <table>
-        <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
-        <tbody>
-          {#each entries as e}
-            <tr>
-              <td>{new Date(e.TS).toLocaleString()}</td>
-              <td>{e.Actor}</td>
-              <td>{e.Action}</td>
-              <td class="muted">{e.Detail}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+          <tbody>
+            {#each entries as e}
+              <tr>
+                <td>{new Date(e.TS).toLocaleString()}</td>
+                <td>{e.Actor}</td>
+                <td>{e.Action}</td>
+                <td class="muted">{e.Detail}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {/if}
   </details>
 
-  <details class="card" bind:open={openState.openvpn}>
+  <details class="card" bind:open={openState.openvpn} bind:this={ovpnCard}>
     <summary>OpenVPN log</summary>
     {#if ovpnLines.length === 0}
       <p class="muted">No log yet.</p>
@@ -139,12 +162,15 @@
         </button>
         <button type="button" class="ghost" title="Downloads what's shown here (last 200 lines) — for the complete file, use Download all logs"
           onclick={() => downloadText('openvpn.log', ovpnLines.join('\n'))}>Download</button>
+        <button type="button" class="ghost" onclick={() => toggleMaximize(ovpnCard)}>
+          {maximized === 'openvpn' ? 'Restore' : 'Maximize'}
+        </button>
       </div>
       <pre class="logbox" bind:this={ovpnBox}>{ovpnLines.join('\n')}</pre>
     {/if}
   </details>
 
-  <details class="card" bind:open={openState.ovcp}>
+  <details class="card" bind:open={openState.ovcp} bind:this={ovcpCard}>
     <summary>OVCP log</summary>
     {#if ovcpLines.length === 0}
       <p class="muted">No log yet.</p>
@@ -155,6 +181,9 @@
         </button>
         <button type="button" class="ghost" title="Downloads what's shown here (last 200 lines) — for the complete file, use Download all logs"
           onclick={() => downloadText('ovcp.log', ovcpLines.join('\n'))}>Download</button>
+        <button type="button" class="ghost" onclick={() => toggleMaximize(ovcpCard)}>
+          {maximized === 'ovcp' ? 'Restore' : 'Maximize'}
+        </button>
       </div>
       <pre class="logbox" bind:this={ovcpBox}>{ovcpLines.join('\n')}</pre>
     {/if}
@@ -177,8 +206,18 @@
   .logs-grid :global(.card) { break-inside: avoid; margin-bottom: 22px; }
   summary { cursor: pointer; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
   details[open] summary { margin-bottom: 14px; }
-  .logbox {
-    font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all;
-    max-height: 420px; overflow-y: auto; margin: 0; color: var(--text);
+  /* compact by default; native resize handle (drag the corner) covers
+     "let me make it bigger" without any drag-handler JS or min/max logic —
+     the browser already clamps against min-height/max-height for us. */
+  .logbox, .table-wrap {
+    max-height: 260px; min-height: 80px; overflow: auto; resize: vertical;
   }
+  .logbox {
+    font-family: var(--mono); font-size: 12px; line-height: 1.4; white-space: pre-wrap;
+    word-break: break-all; margin: 0; color: var(--text);
+  }
+  /* Maximize = native Fullscreen API on the .card; give the scroll boxes
+     the freed-up viewport space instead of staying capped at 260px. */
+  .card:fullscreen { padding: 18px; overflow: auto; }
+  .card:fullscreen .logbox, .card:fullscreen .table-wrap { max-height: calc(100vh - 100px); resize: none; }
 </style>
