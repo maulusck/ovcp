@@ -19,6 +19,7 @@ import (
 )
 
 const pass = "test-passphrase-123"
+const testUserPW = "hunter22hunter22"
 
 type env struct {
 	ts   *httptest.Server
@@ -43,9 +44,9 @@ func setup(t *testing.T) *env {
 	os.WriteFile(filepath.Join(dir, "pki", "tls-crypt.key"), []byte("fake-tls-crypt"), 0o600)
 	os.WriteFile(filepath.Join(dir, "server.conf"), []byte("fake-server-conf"), 0o644)
 	a := auth.NewService(s)
-	h, _ := auth.HashPassword("hunter22hunter22")
+	h, _ := auth.HashPassword(testUserPW)
 	s.AddUser("admin", h, "admin")
-	h2, _ := auth.HashPassword("hunter22hunter22")
+	h2, _ := auth.HashPassword(testUserPW)
 	s.AddUser("viewer", h2, "readonly")
 	srv := &Server{Store: s, Auth: a, PKI: p,
 		Mgmt:          controller.NewClient(filepath.Join(dir, "no.sock")),
@@ -70,7 +71,7 @@ func (f *fakeVPN) Reconnect() error { f.n++; return nil }
 func (f *fakeVPN) Pid() int         { return 4242 }
 
 func (e *env) login(user string) {
-	body, _ := json.Marshal(map[string]string{"Username": user, "Password": "hunter22hunter22"})
+	body, _ := json.Marshal(map[string]string{"Username": user, "Password": testUserPW})
 	res, err := http.Post(e.ts.URL+"/api/login", "application/json", bytes.NewReader(body))
 	if err != nil || res.StatusCode != 200 {
 		e.t.Fatalf("login: %v %v", res.Status, err)
