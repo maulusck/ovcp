@@ -365,7 +365,7 @@ func main() {
 
 	case "backup":
 		if len(args) < 2 {
-			die(fmt.Errorf("usage: ovcp backup create [-out FILE] | ovcp backup restore FILE [-force]"))
+			die(fmt.Errorf("usage: ovcp backup create [-out FILE] | ovcp backup restore [-force] FILE"))
 		}
 		switch args[1] {
 		case "create":
@@ -392,7 +392,7 @@ func main() {
 			fs.Parse(args[2:])
 			file := fs.Arg(0)
 			if file == "" {
-				die(fmt.Errorf("usage: ovcp backup restore FILE [-force]"))
+				die(fmt.Errorf("usage: ovcp backup restore [-force] FILE"))
 			}
 			pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", false)
 			f, err := os.Open(file)
@@ -665,10 +665,6 @@ func preflight(dataDir string) error {
 }
 
 // adminCertCN: OVCP_SERVER_CN env, else the VPN server cert's CN.
-//
-// Note: ovcp runs as root and is the sole owner of the PKI (0600 root:root),
-// so it never drops privileges. A future unprivileged IPC worker will be a
-// separate process that talks to this one — not a privilege drop here.
 func adminCertCN(dataDir string) string {
 	if v := os.Getenv("OVCP_SERVER_CN"); v != "" {
 		return v
@@ -751,7 +747,7 @@ func usage() {
   rotate-ca                            re-encrypt the CA key under a new passphrase
   renew-server [-days N] [-server-cn CN]   reissue the openvpn server cert (needs vpn restart)
   backup    create [-out FILE]         encrypted export: CA, CRL, tls-crypt, config, database
-  backup    restore FILE [-force]      import into a fresh (or -force) data dir; then renew-server
+  backup    restore [-force] FILE      import into a fresh (or -force) data dir; then renew-server
   list                                 list certificates
   export    -cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-key-pass PW]
   status                               VPN process + connected clients

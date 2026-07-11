@@ -120,7 +120,7 @@ bin/ovcp backup create              # prompts for a backup passphrase (twice)
 #   key, server.conf, database. Unreadable without the passphrase — write it
 #   down, it's never stored anywhere and can't be recovered.
 
-bin/ovcp backup restore ovcp-backup-<timestamp>.ovcpbak -data /var/lib/ovcp
+bin/ovcp -data /var/lib/ovcp backup restore ovcp-backup-<timestamp>.ovcpbak
 OVCP_SERVER_CN=vpn.example.com bin/ovcp renew-server   # issue a fresh server cert
 bin/ovcp vpn start
 ```

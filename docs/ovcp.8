@@ -101,7 +101,7 @@ server's private key never has to leave the machine. Client private keys
 were never stored here to begin with (no escrow); nothing to back up there
 either.
 .TP
-.B backup restore \fIFILE\fR [\fB\-force\fR]
+.B backup restore [\fB\-force\fR] \fIFILE\fR
 Decrypt and extract a backup into \fB\-data\fR (must be an uninitialized
 directory, or pass \fB\-force\fR to overwrite one). \fICLI\-only\fR by
 design \(en restoring is an offline, disaster\-recovery operation against a
@@ -119,14 +119,6 @@ socket).
 .TP
 .B kill \fB\-cn\fR \fINAME\fR [\fB\-sock\fR \fIPATH\fR]
 Disconnect a client immediately.
-.TP
-.B genconfig [\fB\-out\fR \fIPATH\fR] [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-dns\fR \fIIPs\fR]
-Render \fIserver.conf\fR from options (stdout by default). Normally not
-needed:
-.B init
-and
-.B serve
-maintain the file.
 .TP
 .B vpn start|stop|restart|reconnect|status
 Manage or inspect the openvpn worker owned by a running

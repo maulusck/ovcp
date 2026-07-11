@@ -111,6 +111,25 @@ func TestVersionAndUsage(t *testing.T) {
 	}
 }
 
+// TestDataFlagPosition covers the actual -data CLI flag, not just the
+// OVCP_DATA env var every other test uses. -data is parsed by the top-level
+// flag set before the subcommand name, so it must come first (ovcp -data
+// DIR <command>, matching git -C / docker -H); every other test sidesteps
+// this entirely via the env var, so this was never actually exercised.
+func TestDataFlagPosition(t *testing.T) {
+	dir := t.TempDir()
+	env := []string{
+		"OVCP_CA_PASSPHRASE=correct horse battery staple",
+		"OVCP_USER_PASSWORD=admin-password-1",
+	}
+	if r := run(t, env, "-data", dir, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init with -data flag: %+v", r)
+	}
+	if r := run(t, env, "-data", dir, "list"); r.code != 0 || len(certLines(r.stdout, "server")) != 1 {
+		t.Fatalf("-data flag before the subcommand should target dir: %+v", r)
+	}
+}
+
 // TestLifecycle exercises the everyday flow: init, issue, list, export,
 // revoke, audit — the same sequence a real operator runs.
 func TestLifecycle(t *testing.T) {
@@ -229,6 +248,20 @@ func TestBackupRestore(t *testing.T) {
 	}
 	if r := run(t, renew, "list"); r.code != 0 || len(certLines(r.stdout, "alice")) != 1 {
 		t.Fatalf("restored db should still have alice: %+v", r)
+	}
+
+	// dstDir is now initialized: a second restore must refuse without
+	// -force, and -force only works before the positional FILE argument
+	// (flag.Parse stops at the first non-flag arg) — restore's own usage
+	// text got that backwards once already; guard it here for real.
+	if r := run(t, restore, "backup", "restore", backupFile); r.code == 0 {
+		t.Fatalf("restore over an initialized dir without -force should fail: %+v", r)
+	}
+	if r := run(t, restore, "backup", "restore", backupFile, "-force"); r.code == 0 {
+		t.Fatalf("-force after FILE is silently ignored by flag.Parse; this must still fail: %+v", r)
+	}
+	if r := run(t, restore, "backup", "restore", "-force", backupFile); r.code != 0 {
+		t.Fatalf("-force before FILE should overwrite: %+v", r)
 	}
 }
 
