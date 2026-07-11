@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -521,6 +522,11 @@ func main() {
 }
 
 func runServe(dataDir, listen, sock string, p *pki.PKI) {
+	// tee ovcp's own log to a file (alongside stderr/journal) so the UI can
+	// tail it; unbounded growth, same as openvpn.log — no rotation here either.
+	if lf, err := os.OpenFile(filepath.Join(dataDir, "ovcp.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); err == nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, lf), &slog.HandlerOptions{Level: logLevel})))
+	}
 	if os.Geteuid() != 0 {
 		slog.Warn("not root; ovcp owns the PKI and starts openvpn, both need root")
 	}

@@ -7,7 +7,7 @@
   import Certs from './Certs.svelte'
   import Settings from './Settings.svelte'
   import Users from './Users.svelte'
-  import Audit from './Audit.svelte'
+  import Logs from './Logs.svelte'
   import Docs from './Docs.svelte'
 
   let user = $state(null)
@@ -21,7 +21,7 @@
     ['certs', 'Certificates'],
     ['settings', 'Settings'],
     ['users', 'Users'],
-    ['audit', 'Audit'],
+    ['logs', 'Logs'],
     ['docs', 'Docs'],
   ]
 
@@ -127,8 +127,8 @@
       <Settings {isAdmin} />
     {:else if tab === 'users'}
       <Users {isAdmin} me={user.username} />
-    {:else if tab === 'audit'}
-      <Audit />
+    {:else if tab === 'logs'}
+      <Logs />
     {:else}
       <Docs />
     {/if}

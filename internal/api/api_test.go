@@ -24,6 +24,7 @@ type env struct {
 	sess *http.Cookie
 	csrf *http.Cookie
 	t    *testing.T
+	dir  string
 }
 
 func setup(t *testing.T) *env {
@@ -55,7 +56,7 @@ func setup(t *testing.T) *env {
 		ServerKey:     filepath.Join(dir, "server.key"),
 		DefaultRemote: "vpn.example.com",
 	}
-	return &env{ts: httptest.NewServer(srv.Handler()), t: t}
+	return &env{ts: httptest.NewServer(srv.Handler()), t: t, dir: dir}
 }
 
 type fakeVPN struct{ n int }
