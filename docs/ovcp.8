@@ -216,6 +216,12 @@ Private keys are never stored in the database.
 .I /var/lib/ovcp/admin\-tls/
 Self\-signed certificate for the admin UI.
 .TP
+.I /var/lib/ovcp/openvpn.log
+openvpn's stdout/stderr, appended across restarts.
+.TP
+.I /var/lib/ovcp/status.log
+openvpn's periodic status dump (connected clients); not the audit log.
+.TP
 .I /run/ovcp/mgmt.sock, /run/ovcp/control.sock
 OpenVPN management socket (unix only, never TCP) and ovcp's root\-only
 (0600) control socket for \fBvpn\fR lifecycle ops.
@@ -249,8 +255,15 @@ root or CAP_NET_ADMIN at startup and then drops to \fInobody\fR on its own.
 In containers, run with \-\-cap\-add NET_ADMIN; the runtime dir
 \fI/run/ovcp\fR (0750) holds the management and control sockets. openvpn
 runs as a foreground child of ovcp and cannot outlive it (Pdeathsig).
-A future unprivileged IPC worker will be a separate process, not a drop
-inside ovcp.
+.PP
+A privilege\-separated admin UI (root supervisor + non\-root HTTP worker)
+was considered and deliberately not built: reaching the admin UI at all
+already means the VPN's own auth+CSRF+RBAC+TOTP has been breached, so a
+second process and an IPC protocol didn't earn their complexity for this
+tool's threat model. The shipped systemd unit sandboxes the whole process
+instead (\fBProtectSystem=strict\fR, \fBNoNewPrivileges\fR,
+\fBMemoryDenyWriteExecute\fR, and more) \(en native containment, not an
+app\-level privilege split.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

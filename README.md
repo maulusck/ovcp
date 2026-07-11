@@ -31,7 +31,8 @@ Full reference: `make man` (or `man ovcp` once installed).
 ## Security model (tier 2 CA)
 
 - CA key encrypted at rest (argon2id + AES-256-GCM); **every** sign/revoke
-  requires the operator passphrase; it is never persisted.
+  requires the operator passphrase; it is never persisted. Rotate it anytime
+  with `ovcp rotate-ca` — re-encrypts the key in place, no certs reissued.
 - Client private keys are embedded in the exported profile once and never
   stored server-side (no escrow): lost profile = revoke + reissue.
   Certificates (public) are stored and downloadable anytime. Optionally
