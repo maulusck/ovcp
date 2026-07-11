@@ -160,11 +160,15 @@ Print the version.
 .SH OPTIONS
 .TP
 .B \-data \fIDIR\fR
-Data directory (default \fI/var/lib/ovcp\fR, or \fB$OVCP_DATA\fR).
+Data directory. Overrides \fB$OVCP_DATA\fR for this invocation; if neither
+is given, defaults to \fI/var/lib/ovcp\fR. This directory is the root every
+path in \fBFILES\fR below is relative to.
 .SH ENVIRONMENT
 .TP
 .B OVCP_DATA
-Data directory.
+Data directory \(en the source of truth for where ovcp keeps everything
+(see \fBFILES\fR). Defaults to \fI/var/lib/ovcp\fR if unset; \fB\-data\fR
+overrides it for a single invocation.
 .TP
 .B OVCP_LISTEN
 Admin UI listen address(es), comma\-separated. Each gets the full
@@ -191,40 +195,48 @@ shared systems: environment variables can leak.
 .B OVCP_CA_NEW_PASSPHRASE, OVCP_BACKUP_PASSPHRASE
 Non\-interactive equivalents for \fBrotate\-ca\fR's new passphrase and
 \fBbackup\fR's archive passphrase. Same leak caveat as above.
-.SH FILES
 .TP
-.I /var/lib/ovcp/pki/ca.crt, ca.key.enc
+.B OVCP_OPENVPN_USER, OVCP_OPENVPN_GROUP
+Unprivileged account openvpn drops to after startup (default \fInobody\fR
+/ \fInogroup\fR). The container image sets \fBOVCP_OPENVPN_GROUP=nobody\fR
+since Alpine has no \fInogroup\fR.
+.SH FILES
+All paths below are rooted at \fB$OVCP_DATA\fR (default \fI/var/lib/ovcp\fR)
+\(en set it once and everything follows, including these.
+.TP
+.I $OVCP_DATA/pki/ca.crt, ca.key.enc
 CA certificate and encrypted private key.
 .TP
-.I /var/lib/ovcp/pki/server.crt, server.key
+.I $OVCP_DATA/pki/server.crt, server.key
 Server keypair used by openvpn. Not included in \fBbackup\fR archives \(en
 reissued by \fBrenew\-server\fR after a restore.
 .TP
-.I /var/lib/ovcp/pki/crl.pem
+.I $OVCP_DATA/pki/crl.pem
 Certificate revocation list (referenced by \fBcrl\-verify\fR).
 .TP
-.I /var/lib/ovcp/pki/tls\-crypt.key
+.I $OVCP_DATA/pki/tls\-crypt.key
 OpenVPN static key for tls\-crypt (control channel encryption).
 .TP
-.I /var/lib/ovcp/server.conf
+.I $OVCP_DATA/server.conf
 Generated openvpn configuration. Managed by ovcp; do not edit.
 .TP
-.I /var/lib/ovcp/ovcp.db
+.I $OVCP_DATA/ovcp.db
 SQLite database: users, sessions, certificate metadata, audit log.
 Private keys are never stored in the database.
 .TP
-.I /var/lib/ovcp/admin\-tls/
+.I $OVCP_DATA/admin\-tls/
 Self\-signed certificate for the admin UI.
 .TP
-.I /var/lib/ovcp/openvpn.log
+.I $OVCP_DATA/openvpn.log
 openvpn's stdout/stderr, appended across restarts.
 .TP
-.I /var/lib/ovcp/status.log
+.I $OVCP_DATA/status.log
 openvpn's periodic status dump (connected clients); not the audit log.
 .TP
-.I /run/ovcp/mgmt.sock, /run/ovcp/control.sock
+.I $OVCP_MGMT_SOCK, $OVCP_CTRL_SOCK
 OpenVPN management socket (unix only, never TCP) and ovcp's root\-only
-(0600) control socket for \fBvpn\fR lifecycle ops.
+(0600) control socket for \fBvpn\fR lifecycle ops. Default to
+\fI/run/ovcp/mgmt.sock\fR and \fI/run/ovcp/control.sock\fR.
 .SH EXAMPLES
 Issue and download a profile for a phone, valid two years:
 .nf

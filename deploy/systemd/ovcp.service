@@ -16,6 +16,9 @@ RuntimeDirectory=ovcp
 RuntimeDirectoryMode=0750
 ProtectSystem=strict
 ProtectHome=true
+# ReadWritePaths is a literal path, not a $OVCP_DATA reference — systemd
+# can't expand it. Override OVCP_DATA via a drop-in (systemctl edit ovcp)
+# and update this path to match, or ProtectSystem=strict blocks writes there.
 ReadWritePaths=/var/lib/ovcp
 # root stays root (openvpn needs it), but strip everything a compromised
 # process inside the unit doesn't need: no kernel/module/log tampering, no

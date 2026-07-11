@@ -76,6 +76,31 @@ takes to reach the UI from connected clients:
 OVCP_LISTEN=127.0.0.1:8443,10.8.0.1:8443   # host + inside the VPN
 ```
 
+## Environment variables
+
+`OVCP_DATA` is the source of truth for where ovcp keeps everything —
+every path in this doc (PKI, database, config, logs) is relative to it.
+`-data` overrides it for one invocation; unset either way, it's
+`/var/lib/ovcp`. The rest are optional, sane-default, mostly for automation:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OVCP_DATA` | `/var/lib/ovcp` | Data directory — everything else lives under here. |
+| `OVCP_LISTEN` | `127.0.0.1:8443` | Admin UI listen address(es), comma-separated. |
+| `OVCP_MGMT_SOCK` | `/run/ovcp/mgmt.sock` | OpenVPN management socket path. |
+| `OVCP_CTRL_SOCK` | `/run/ovcp/control.sock` | ovcp's own control socket — `vpn`/`debug` subcommands talk to a running `serve` here. |
+| `OVCP_SERVER_CN` | server cert's CN | Default client `remote` for `export`, and CN for the admin UI's self-signed cert. |
+| `OVCP_CA_PASSPHRASE` | — | Non-interactive CA passphrase (`issue`/`revoke`/`rotate-ca`/`renew-server`/`export`). |
+| `OVCP_CA_NEW_PASSPHRASE` | — | Non-interactive new passphrase for `rotate-ca`. |
+| `OVCP_USER_PASSWORD` | — | Non-interactive password for `init`/`user add`/`user passwd`. |
+| `OVCP_BACKUP_PASSPHRASE` | — | Non-interactive passphrase for `backup create`/`backup restore`. |
+| `OVCP_OPENVPN_USER` | `nobody` | Unprivileged account openvpn drops to after startup. |
+| `OVCP_OPENVPN_GROUP` | `nogroup` | Same, for the group — the container image sets this to `nobody`, since Alpine has no `nogroup`. |
+
+The passphrase/password variables exist for automation only (container
+init, tests, CI) — avoid them on shared systems, since environment
+variables are visible to anything that can read a process's `/proc/<pid>/environ`.
+
 ## Deployment
 
 One runtime, everywhere: ovcp runs as root and owns the openvpn worker
