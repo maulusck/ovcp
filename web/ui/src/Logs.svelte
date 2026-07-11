@@ -44,6 +44,27 @@
     catch (x) { err = x.error; e.target.checked = !want }
   }
 
+  let copied = $state('')
+  async function copyText(panel, text) {
+    try { await navigator.clipboard.writeText(text) }
+    catch { prompt('Log text:', text); return }
+    copied = panel
+    setTimeout(() => (copied = ''), 1200)
+  }
+  const auditText = () => entries.map(e =>
+    `${new Date(e.TS).toLocaleString()} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
+
+  const downloadAllLogs = () => (window.location.href = '/api/logs/download')
+  const downloadFile = (name) => (window.location.href = '/api/logs/download?file=' + name)
+
+  function downloadText(filename, text) {
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   $effect(() => {
     localStorage.setItem(POLL_KEY, pollSec)
     if (!pollSec) return
@@ -73,6 +94,8 @@
       <option value={30}>30s</option>
     </select>
   </label>
+  <button type="button" class="ghost" onclick={downloadAllLogs}
+    title="Download the full openvpn.log + ovcp.log as a zip">Download all logs</button>
 </div>
 
 <div class="logs-grid">
@@ -81,6 +104,12 @@
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
     {:else}
+      <div class="panel-actions">
+        <button type="button" class="ghost" onclick={() => copyText('audit', auditText())}>
+          {copied === 'audit' ? 'Copied' : 'Copy'}
+        </button>
+        <button type="button" class="ghost" onclick={() => downloadText('audit.log', auditText())}>Download</button>
+      </div>
       <table>
         <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
         <tbody>
@@ -102,6 +131,12 @@
     {#if ovpnLines.length === 0}
       <p class="muted">No log yet.</p>
     {:else}
+      <div class="panel-actions">
+        <button type="button" class="ghost" onclick={() => copyText('openvpn', ovpnLines.join('\n'))}>
+          {copied === 'openvpn' ? 'Copied' : 'Copy'}
+        </button>
+        <button type="button" class="ghost" onclick={() => downloadFile('openvpn.log')}>Download</button>
+      </div>
       <pre class="logbox" bind:this={ovpnBox}>{ovpnLines.join('\n')}</pre>
     {/if}
   </details>
@@ -111,6 +146,12 @@
     {#if ovcpLines.length === 0}
       <p class="muted">No log yet.</p>
     {:else}
+      <div class="panel-actions">
+        <button type="button" class="ghost" onclick={() => copyText('ovcp', ovcpLines.join('\n'))}>
+          {copied === 'ovcp' ? 'Copied' : 'Copy'}
+        </button>
+        <button type="button" class="ghost" onclick={() => downloadFile('ovcp.log')}>Download</button>
+      </div>
       <pre class="logbox" bind:this={ovcpBox}>{ovcpLines.join('\n')}</pre>
     {/if}
   </details>
@@ -120,6 +161,7 @@
   .logs-head { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 14px; }
   .poll-pick { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
   .poll-pick select, .poll-pick input { width: auto; }
+  .panel-actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 8px; }
   /* CSS columns (not grid) so panels reflow natively when a <details> is
      toggled — a closed panel frees its space immediately, no JS layout code. */
   .logs-grid { column-width: 420px; column-gap: 22px; }

@@ -54,6 +54,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))
 	mux.Handle("GET /api/logs/openvpn", s.wrap(auth.RoleReadonly, s.logHandler("openvpn.log")))
 	mux.Handle("GET /api/logs/ovcp", s.wrap(auth.RoleReadonly, s.logHandler("ovcp.log")))
+	mux.Handle("GET /api/logs/download", s.wrap(auth.RoleReadonly, s.handleLogsDownload))
 	mux.Handle("GET /api/debug", s.wrap(auth.RoleReadonly, s.handleDebugGet))
 	mux.Handle("POST /api/debug", s.wrap(auth.RoleAdmin, s.handleDebugSet))
 	mux.Handle("POST /api/clients/kill", s.wrap(auth.RoleOperator, s.handleKill))

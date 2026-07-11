@@ -1,7 +1,10 @@
 package api
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -83,5 +86,59 @@ func TestLogEndpoints(t *testing.T) {
 	json.NewDecoder(r.Body).Decode(&out)
 	if len(out.Lines) != 2 || out.Lines[1] != "world" {
 		t.Fatalf("want [hello world], got %v", out.Lines)
+	}
+}
+
+func TestLogsDownloadZip(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+	// openvpn.log deliberately absent — must be skipped, not an error.
+	os.WriteFile(filepath.Join(e.dir, "ovcp.log"), []byte("line one\nline two\n"), 0o644)
+
+	r := e.req("GET", "/api/logs/download", "", false)
+	if r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	if ct := r.Header.Get("Content-Type"); ct != "application/zip" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	body, _ := io.ReadAll(r.Body)
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zr.File) != 1 || zr.File[0].Name != "ovcp.log" {
+		t.Fatalf("want only ovcp.log in the archive, got %v", zr.File)
+	}
+	rc, _ := zr.File[0].Open()
+	content, _ := io.ReadAll(rc)
+	if string(content) != "line one\nline two\n" {
+		t.Fatalf("got %q", content)
+	}
+}
+
+func TestLogsDownloadSingleFile(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+	os.WriteFile(filepath.Join(e.dir, "ovcp.log"), []byte("hi\n"), 0o644)
+
+	r := e.req("GET", "/api/logs/download?file=ovcp.log", "", false)
+	if r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	body, _ := io.ReadAll(r.Body)
+	if string(body) != "hi\n" {
+		t.Fatalf("got %q", body)
+	}
+	if cd := r.Header.Get("Content-Disposition"); !strings.Contains(cd, "ovcp.log") {
+		t.Fatalf("Content-Disposition = %q", cd)
+	}
+
+	// not on the allowlist: reject, don't touch the filesystem with it.
+	if r := e.req("GET", "/api/logs/download?file=../../etc/passwd", "", false); r.StatusCode != 400 {
+		t.Fatal("path traversal attempt must 400, got", r.Status)
+	}
+	if r := e.req("GET", "/api/logs/download?file=ovcp.db", "", false); r.StatusCode != 400 {
+		t.Fatal("non-allowlisted file must 400, got", r.Status)
 	}
 }

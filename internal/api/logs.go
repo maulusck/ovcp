@@ -1,11 +1,14 @@
 package api
 
 import (
+	"archive/zip"
 	"bufio"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ovcp/ovcp/internal/store"
 )
@@ -56,4 +59,57 @@ func (s *Server) logHandler(filename string) handler {
 		}
 		jsonOK(w, map[string]any{"lines": lines})
 	}
+}
+
+// logFilenames are the only files handleLogsDownload will ever serve — an
+// allowlist, since ?file= is attacker-controlled input at a trust boundary.
+var logFilenames = []string{"openvpn.log", "ovcp.log"}
+
+// handleLogsDownload serves the full (untailed) log files for offline
+// analysis — unlike the tailed panels, these are the complete files.
+// No ?file= param: bundles everything into one zip. ?file=<name>: that one
+// file raw, name must be in logFilenames.
+func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
+	if f := r.URL.Query().Get("file"); f != "" {
+		s.downloadOneLog(w, f)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	name := "ovcp-logs-" + time.Now().Format("20060102-150405") + ".zip"
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+	for _, filename := range logFilenames {
+		data, err := os.ReadFile(filepath.Join(s.DataDir, filename))
+		if err != nil {
+			continue // missing log is not an error, same as the tailed view
+		}
+		f, err := zw.Create(filename)
+		if err != nil {
+			continue
+		}
+		f.Write(data)
+	}
+}
+
+func (s *Server) downloadOneLog(w http.ResponseWriter, filename string) {
+	valid := false
+	for _, f := range logFilenames {
+		if f == filename {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		jsonErr(w, 400, "unknown log file")
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(s.DataDir, filename))
+	if err != nil {
+		jsonErr(w, 404, "log not found")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Write(data)
 }
