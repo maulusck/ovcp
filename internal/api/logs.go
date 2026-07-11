@@ -68,12 +68,8 @@ func isStatusPollLine(line string) bool {
 // logHandler builds a GET handler tailing <DataDir>/filename; shared by the
 // openvpn.log and ovcp.log routes so the tailing logic exists exactly once.
 func (s *Server) logHandler(filename string) handler {
-	var skip func(string) bool
-	if filename == "openvpn.log" {
-		skip = isStatusPollLine
-	}
 	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
-		lines, err := tailLines(filepath.Join(s.DataDir, filename), tailLineLimit, skip)
+		lines, err := tailLines(filepath.Join(s.DataDir, filename), tailLineLimit, isStatusPollLine)
 		if err != nil {
 			jsonErr(w, 500, err.Error())
 			return
