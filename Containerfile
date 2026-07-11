@@ -30,7 +30,7 @@ RUN CGO_ENABLED=1 go build -ldflags '-s -w' -o /ovcp ./cmd/ovcp
 
 FROM alpine:latest
 RUN apk add --no-cache openvpn
-COPY --from=build /ovcp /usr/local/bin/ovcp
+COPY --from=build /ovcp /usr/bin/ovcp
 ENV OVCP_DATA=/var/lib/ovcp \
     OVCP_LISTEN=0.0.0.0:8443 \
     OVCP_CA_PASSPHRASE=changeme \

@@ -10,7 +10,7 @@ scripts:
   postinstall: deploy/postinstall.sh
 contents:
   - src: bin/ovcp
-    dst: /usr/local/bin/ovcp
+    dst: /usr/bin/ovcp
   - src: deploy/systemd/ovcp.service
     dst: /usr/lib/systemd/system/ovcp.service
   - src: docs/ovcp.8

@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 # ovcp runs as root: it is the sole owner of the PKI (0600 root:root) and
 # starts openvpn itself as a detached worker. One unit, one process tree.
-ExecStart=/usr/local/bin/ovcp serve
+ExecStart=/usr/bin/ovcp serve
 Environment=OVCP_DATA=/var/lib/ovcp
 Restart=on-failure
 RestartSec=2

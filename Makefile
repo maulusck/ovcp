@@ -36,8 +36,8 @@ clean: ## remove bin/
 	rm -rf bin
 
 install: build ## install binary + man page
-	install -m 0755 bin/$(BINARY) /usr/local/bin/$(BINARY)
-	install -D -m 0644 docs/ovcp.8 /usr/local/share/man/man8/ovcp.8
+	install -m 0755 bin/$(BINARY) /usr/bin/$(BINARY)
+	install -D -m 0644 docs/ovcp.8 /usr/share/man/man8/ovcp.8
 
 man: ## preview man page
 	man ./docs/ovcp.8
