@@ -53,7 +53,7 @@ func TestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, f := range []string{"pki/ca.crt", "pki/ca.key.enc", "pki/crl.pem", "pki/tls-crypt.key", "server.conf", "ovcp.db"} {
+	for _, f := range []string{"pki/ca.crt", "pki/ca.key.enc", "pki/crl.pem", "pki/tls-crypt.key", "server.conf", "totp.key", "ovcp.db"} {
 		want, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(f)))
 		if err != nil && f != "ovcp.db" {
 			t.Fatalf("read source %s: %v", f, err)

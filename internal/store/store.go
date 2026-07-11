@@ -2,6 +2,7 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
 	_ "embed"
 	"fmt"
@@ -15,7 +16,13 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db *sql.DB
+	// totpKey encrypts totp_secret at rest (AES-256-GCM). Unlike the CA key,
+	// there's no operator passphrase available at automatic login time, so
+	// this lives in a plain machine-local file next to the database.
+	totpKey []byte
+}
 
 type Cert struct {
 	Serial    string
@@ -49,7 +56,26 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	key, err := loadOrCreateTOTPKey(filepath.Join(filepath.Dir(path), "totp.key"))
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{db: db, totpKey: key}, nil
+}
+
+func loadOrCreateTOTPKey(path string) ([]byte, error) {
+	if data, err := os.ReadFile(path); err == nil {
+		if len(data) != 32 {
+			return nil, fmt.Errorf("store: bad totp key length in %s", path)
+		}
+		return data, nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	return key, os.WriteFile(path, key, 0o600)
 }
 
 func (s *Store) Close() error { return s.db.Close() }

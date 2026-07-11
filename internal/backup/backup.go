@@ -26,6 +26,9 @@ var requiredFiles = []file{
 	{filepath.Join("pki", "crl.pem"), "pki/crl.pem"},
 	{filepath.Join("pki", "tls-crypt.key"), "pki/tls-crypt.key"},
 	{"server.conf", "server.conf"},
+	// decrypts totp_secret in the DB snapshot below; without it every
+	// enrolled user's 2FA breaks silently after a restore.
+	{"totp.key", "totp.key"},
 }
 
 // optional files: included if present, silently skipped otherwise.

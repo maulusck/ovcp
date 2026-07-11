@@ -275,11 +275,15 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		return
 	}
 	cfg := s.LoadConfig()
-	bundle := pki.RenderOVPN(pki.BundleParams{
+	bundle, err := pki.RenderOVPN(pki.BundleParams{
 		Remote: in.Remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: s.DefaultRemote,
 		CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
 		TLSCrypt: tc, Cipher: cfg.Cipher,
 	})
+	if err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-openvpn-profile")
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="%s.ovpn"`, in.CN))

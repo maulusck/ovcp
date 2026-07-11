@@ -129,6 +129,20 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
+// TestRateLimitAcrossIPs: Limiter alone buckets on username+ip, so a brute
+// force spread across many source IPs never trips it. UserLimiter buckets on
+// username alone and catches this.
+func TestRateLimitAcrossIPs(t *testing.T) {
+	a := svc(t)
+	addUser(t, a, "dana", "password1", "readonly")
+	for i := 0; i < 20; i++ {
+		a.Login("dana", "wrong", "", fmt.Sprintf("10.0.0.%d", i))
+	}
+	if _, _, err := a.Login("dana", "password1", "", "10.0.0.99"); err != ErrRateLimited {
+		t.Fatal(err)
+	}
+}
+
 // TestLimiterSweepBoundsMap: a key that fails once and is never rechecked
 // must not linger in the map forever — Fail sweeps expired entries so the
 // map stays bounded to the current window instead of growing for the life

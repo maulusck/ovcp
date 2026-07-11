@@ -167,11 +167,13 @@ func main() {
 		die(err)
 		tc, err := loadOrCreateTLSCrypt(filepath.Join(*dataDir, "pki", "tls-crypt.key"))
 		die(err)
-		os.Stdout.Write(pki.RenderOVPN(pki.BundleParams{
+		bundle, err := pki.RenderOVPN(pki.BundleParams{
 			Remote: *remote, Port: *port, Proto: *proto, ServerCN: *serverCN,
 			CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
 			TLSCrypt: tc, Cipher: "AES-256-GCM",
-		}))
+		})
+		die(err)
+		os.Stdout.Write(bundle)
 
 	case "init":
 		fs := flag.NewFlagSet("init", flag.ExitOnError)

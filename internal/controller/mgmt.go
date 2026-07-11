@@ -92,7 +92,12 @@ func (c *Client) Status() ([]VPNClient, error) {
 }
 
 // Kill disconnects all sessions for a CN (mgmt `kill`).
+// cn is rejected if it could smuggle extra lines into the management
+// protocol (which is newline-delimited and has no other escaping).
 func (c *Client) Kill(cn string) error {
+	if strings.ContainsAny(cn, "\r\n") {
+		return fmt.Errorf("controller: invalid cn %q", cn)
+	}
 	return c.simple("kill " + cn)
 }
 

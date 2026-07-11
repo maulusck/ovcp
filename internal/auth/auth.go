@@ -91,24 +91,34 @@ func VerifyPassword(password, encoded string) bool {
 
 // Service wires store + limiter. One instance per process.
 type Service struct {
-	Store   *store.Store
+	Store *store.Store
+	// Limiter buckets on username+ip (tight): stops one source hammering one account.
 	Limiter *Limiter
-	now     func() time.Time // test seam
+	// UserLimiter buckets on username alone (looser): stops the same account
+	// being hammered from many source IPs, which Limiter can't see.
+	UserLimiter *Limiter
+	now         func() time.Time // test seam
 }
 
 func NewService(s *store.Store) *Service {
-	return &Service{Store: s, Limiter: NewLimiter(5, 15*time.Minute), now: time.Now}
+	return &Service{
+		Store:       s,
+		Limiter:     NewLimiter(5, 15*time.Minute),
+		UserLimiter: NewLimiter(20, 15*time.Minute),
+		now:         time.Now,
+	}
 }
 
 // Login validates credentials (+TOTP when enrolled) and mints a session token.
 // key is the rate-limit bucket (username+ip).
 func (a *Service) Login(username, password, totpCode, ip string) (token string, u *store.User, err error) {
 	key := username + "|" + ip
-	if !a.Limiter.Allow(key) {
+	if !a.Limiter.Allow(key) || !a.UserLimiter.Allow(username) {
 		return "", nil, ErrRateLimited
 	}
 	fail := func() (string, *store.User, error) {
 		a.Limiter.Fail(key)
+		a.UserLimiter.Fail(username)
 		a.Store.Audit(username, "login_fail", "ip="+ip)
 		return "", nil, ErrBadCredentials
 	}
@@ -138,6 +148,7 @@ func (a *Service) Login(username, password, totpCode, ip string) (token string, 
 		return "", nil, err
 	}
 	a.Limiter.Reset(key)
+	a.UserLimiter.Reset(username)
 	a.Store.Audit(username, "login", "ip="+ip)
 	return token, u, nil
 }

@@ -3,6 +3,7 @@ package pki
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -39,7 +40,12 @@ type BundleParams struct {
 }
 
 // RenderOVPN emits a single-file .ovpn with all material inline.
-func RenderOVPN(p BundleParams) []byte {
+// Remote/ServerCN land in the file as raw config lines with no escaping, so a
+// newline in either would let the caller inject extra openvpn directives.
+func RenderOVPN(p BundleParams) ([]byte, error) {
+	if strings.ContainsAny(p.Remote, "\r\n") || strings.ContainsAny(p.ServerCN, "\r\n") {
+		return nil, errors.New("pki: invalid character in remote/server-cn")
+	}
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	w("client")
@@ -72,5 +78,5 @@ func RenderOVPN(p BundleParams) []byte {
 	if len(p.TLSCrypt) > 0 {
 		inline("tls-crypt", p.TLSCrypt)
 	}
-	return []byte(b.String())
+	return []byte(b.String()), nil
 }

@@ -79,3 +79,10 @@ func TestSocketGone(t *testing.T) {
 		t.Fatal("want dial error")
 	}
 }
+
+func TestKillRejectsInjection(t *testing.T) {
+	c := NewClient(fakeMgmt(t))
+	if err := c.Kill("alice\nsignal SIGTERM"); err == nil {
+		t.Fatal("want error for cn containing newline")
+	}
+}

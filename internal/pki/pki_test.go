@@ -159,11 +159,14 @@ func TestRenderOVPN(t *testing.T) {
 	ic, _ := p.Issue(KindClient, "carol", 365, pass)
 	caPEM, _ := p.CACertPEM()
 	tc, _ := GenTLSCryptKey()
-	out := RenderOVPN(BundleParams{
+	out, err := RenderOVPN(BundleParams{
 		Remote: "vpn.example.com", Port: 1194, Proto: "udp",
 		CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
 		TLSCrypt: tc, Cipher: "AES-256-GCM", ServerCN: "vpn.example.com",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"remote vpn.example.com 1194",
 		"proto udp",
@@ -174,6 +177,15 @@ func TestRenderOVPN(t *testing.T) {
 		if !bytes.Contains(out, []byte(want)) {
 			t.Fatalf("missing %q in bundle", want)
 		}
+	}
+}
+
+func TestRenderOVPNRejectsInjection(t *testing.T) {
+	if _, err := RenderOVPN(BundleParams{Remote: "vpn.example.com\nauth-user-pass steal.txt", Port: 1194, Proto: "udp"}); err == nil {
+		t.Fatal("want error for remote containing newline")
+	}
+	if _, err := RenderOVPN(BundleParams{Remote: "vpn.example.com", Port: 1194, Proto: "udp", ServerCN: "evil\nup /bin/sh"}); err == nil {
+		t.Fatal("want error for server-cn containing newline")
 	}
 }
 

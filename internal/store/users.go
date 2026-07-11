@@ -1,8 +1,13 @@
 package store
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -26,19 +31,31 @@ func (s *Store) AddUser(username, passHash, role string) (int64, error) {
 	return res.LastInsertId()
 }
 
-func (s *Store) GetUser(username string) (*User, error) {
-	row := s.db.QueryRow(
-		`SELECT id, username, pass_hash, role, COALESCE(totp_secret,''), disabled, created_at
-		 FROM users WHERE username = ?`, username)
+// scanUser reads one users row (id, username, pass_hash, role, totp_secret,
+// disabled, created_at, in that order) and decrypts totp_secret. Every query
+// that touches the column routes through here, so a future one can't forget to.
+func (s *Store) scanUser(r scanner) (*User, error) {
 	var u User
 	var dis int
 	var created int64
-	if err := row.Scan(&u.ID, &u.Username, &u.PassHash, &u.Role, &u.TOTPSecret, &dis, &created); err != nil {
+	if err := r.Scan(&u.ID, &u.Username, &u.PassHash, &u.Role, &u.TOTPSecret, &dis, &created); err != nil {
 		return nil, err
 	}
 	u.Disabled = dis != 0
 	u.CreatedAt = time.Unix(created, 0)
+	dec, err := s.decryptTOTP(u.TOTPSecret)
+	if err != nil {
+		return nil, err
+	}
+	u.TOTPSecret = dec
 	return &u, nil
+}
+
+func (s *Store) GetUser(username string) (*User, error) {
+	row := s.db.QueryRow(
+		`SELECT id, username, pass_hash, role, COALESCE(totp_secret,''), disabled, created_at
+		 FROM users WHERE username = ?`, username)
+	return s.scanUser(row)
 }
 
 func (s *Store) ListUsers() ([]User, error) {
@@ -50,15 +67,11 @@ func (s *Store) ListUsers() ([]User, error) {
 	defer rows.Close()
 	var out []User
 	for rows.Next() {
-		var u User
-		var dis int
-		var created int64
-		if err := rows.Scan(&u.ID, &u.Username, &u.PassHash, &u.Role, &u.TOTPSecret, &dis, &created); err != nil {
+		u, err := s.scanUser(rows)
+		if err != nil {
 			return nil, err
 		}
-		u.Disabled = dis != 0
-		u.CreatedAt = time.Unix(created, 0)
-		out = append(out, u)
+		out = append(out, *u)
 	}
 	return out, rows.Err()
 }
@@ -76,7 +89,61 @@ func (s *Store) SetUserPassword(username, passHash string) error {
 }
 
 func (s *Store) SetUserTOTP(username, secret string) error {
-	return s.mustAffect(s.db.Exec(`UPDATE users SET totp_secret=? WHERE username=?`, secret, username))
+	enc, err := s.encryptTOTP(secret)
+	if err != nil {
+		return err
+	}
+	return s.mustAffect(s.db.Exec(`UPDATE users SET totp_secret=? WHERE username=?`, enc, username))
+}
+
+// encryptTOTP/decryptTOTP keep totp_secret encrypted at rest (AES-256-GCM,
+// store.totpKey). "" is the enrolled/not-enrolled sentinel and passes through
+// unencrypted so callers can keep comparing against it directly.
+func (s *Store) encryptTOTP(secret string) (string, error) {
+	if secret == "" {
+		return "", nil
+	}
+	gcm, err := s.totpGCM()
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	ct := gcm.Seal(nonce, nonce, []byte(secret), nil)
+	return base64.StdEncoding.EncodeToString(ct), nil
+}
+
+func (s *Store) decryptTOTP(enc string) (string, error) {
+	if enc == "" {
+		return "", nil
+	}
+	data, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return "", fmt.Errorf("store: corrupt totp secret: %w", err)
+	}
+	gcm, err := s.totpGCM()
+	if err != nil {
+		return "", err
+	}
+	if len(data) < gcm.NonceSize() {
+		return "", errors.New("store: corrupt totp secret")
+	}
+	nonce, ct := data[:gcm.NonceSize()], data[gcm.NonceSize():]
+	pt, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return "", fmt.Errorf("store: corrupt totp secret: %w", err)
+	}
+	return string(pt), nil
+}
+
+func (s *Store) totpGCM() (cipher.AEAD, error) {
+	block, err := aes.NewCipher(s.totpKey)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
 }
 
 func (s *Store) mustAffect(res sql.Result, err error) error {
@@ -106,17 +173,11 @@ func (s *Store) SessionUser(tokenHash string) (*User, error) {
 		 FROM sessions se JOIN users u ON u.id = se.user_id
 		 WHERE se.token_hash = ? AND se.expires_at > ? AND u.disabled = 0`,
 		tokenHash, time.Now().Unix())
-	var u User
-	var dis int
-	var created int64
-	if err := row.Scan(&u.ID, &u.Username, &u.PassHash, &u.Role, &u.TOTPSecret, &dis, &created); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
+	u, err := s.scanUser(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
 	}
-	u.CreatedAt = time.Unix(created, 0)
-	return &u, nil
+	return u, err
 }
 
 func (s *Store) DeleteSession(tokenHash string) error {
