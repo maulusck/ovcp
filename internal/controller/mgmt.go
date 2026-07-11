@@ -1,10 +1,4 @@
-// Package controller talks to openvpn via its management unix socket.
-//
-// The mgmt interface accepts one client at a time and the socket can
-// vanish/reappear whenever the controller restarts openvpn. We therefore
-// dial per operation with a short timeout and hold no state. It is used
-// only for read/query commands (status, kill); lifecycle signals are sent
-// straight to the pid by the Supervisor.
+// Package controller talks to openvpn's management socket, dialing per operation (no held state) since the socket can vanish/reappear across restarts.
 package controller
 
 import (

@@ -34,10 +34,7 @@ const (
 	kdfThreads = 4
 )
 
-// Seal encrypts plaintext under passphrase (argon2id + AES-256-GCM) into a
-// self-contained, versioned envelope. Exported for reuse anywhere a
-// passphrase-protected blob is needed (key files here, backup archives in
-// internal/backup) — one KDF/cipher choice, not one per caller.
+// Seal encrypts plaintext under passphrase (argon2id + AES-256-GCM) into a versioned envelope; also used by internal/backup.
 func Seal(plaintext, passphrase []byte) ([]byte, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
@@ -65,9 +62,7 @@ func Seal(plaintext, passphrase []byte) ([]byte, error) {
 	return json.Marshal(e)
 }
 
-// Open reverses Seal, returning ErrBadPassphrase on a wrong passphrase or
-// corrupt/tampered input (AES-GCM is authenticated, so tampering is
-// detected, not silently decrypted).
+// Open reverses Seal; ErrBadPassphrase covers a wrong passphrase or tampered input (AES-GCM is authenticated, not just encrypted).
 func Open(data, passphrase []byte) ([]byte, error) {
 	var e envelope
 	if err := json.Unmarshal(data, &e); err != nil {

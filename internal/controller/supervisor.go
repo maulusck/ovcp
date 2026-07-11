@@ -12,26 +12,7 @@ import (
 	"time"
 )
 
-// Supervisor is the one and only way ovcp manages the openvpn worker.
-//
-// openvpn runs as a plain foreground child of `ovcp serve` — never with
-// --daemon. A dedicated goroutine sits in cmd.Wait(), so the child is reaped
-// the instant it exits: no zombies, even when ovcp is PID 1 in a container,
-// and liveness is the real child handle rather than a pidfile guess.
-//
-//	Start      fork/exec openvpn (idempotent: no-op if already running)
-//	Stop       SIGTERM, wait, SIGKILL on timeout — then reaped
-//	Restart    Stop + Start (full fresh process, per spec)
-//	Reconnect  SIGUSR1 (soft session reset; keeps the process)
-//
-// The child is spawned with Pdeathsig=SIGTERM so it can never outlive ovcp:
-// if ovcp crashes, the kernel takes openvpn down too. (Pdeathsig is cleared
-// only by execve of a setuid *binary*; openvpn is a normal binary that drops
-// to nobody via setuid() at runtime, which does not clear it.)
-//
-// SIGHUP / in-place reload is intentionally not implemented: a fresh Restart
-// re-reads every controller-owned file as root, which SIGHUP cannot after
-// openvpn drops its own privileges.
+// Supervisor runs openvpn as a foreground child (Pdeathsig ties its life to ours, surviving openvpn's own setuid drop to nobody); no SIGHUP — Restart always re-reads fresh instead.
 type Supervisor struct {
 	Bin        string        // openvpn binary; "" → resolve from PATH
 	ConfigPath string        // rendered server.conf
@@ -109,13 +90,7 @@ func (s *Supervisor) start() error {
 	return <-launched
 }
 
-// supervise owns the child for its whole lifetime on a single, pinned OS
-// thread. The pin is what makes Pdeathsig reliable under the Go scheduler:
-// the signal is armed against the thread that forked, and that thread stays
-// alive (blocked in Wait) until the child exits — so it fires on ovcp's
-// death, not on an incidental thread teardown. We never UnlockOSThread; when
-// this goroutine returns (child already reaped) the runtime discards the
-// thread, which is harmless.
+// supervise pins its OS thread so Pdeathsig stays armed against the forking thread until the child exits, not an incidental thread teardown.
 func (s *Supervisor) supervise(launched chan<- error) {
 	runtime.LockOSThread()
 

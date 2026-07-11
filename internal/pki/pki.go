@@ -15,14 +15,7 @@ import (
 	"time"
 )
 
-// PKI owns the CA material rooted at Dir:
-//
-//	dir/ca.crt      PEM, world-readable
-//	dir/ca.key.enc  argon2id+AES-GCM envelope (see keystore.go)
-//	dir/crl.pem     current CRL
-//
-// Tier-2 model: every operation that signs (issue, revoke→CRL) takes the
-// operator passphrase, decrypts the CA key in memory, and discards it.
+// PKI owns dir/{ca.crt, ca.key.enc, crl.pem}; every signing op takes the operator passphrase and never persists it (tier-2 model).
 type PKI struct {
 	Dir string
 }
@@ -127,11 +120,7 @@ func (p *PKI) CheckPassphrase(passphrase []byte) error {
 	return err
 }
 
-// Rotate re-encrypts the CA private key under a new passphrase. The CA
-// itself (cert, keypair, subject) is untouched — only the on-disk envelope
-// protecting the key changes, so no certs need reissuing. Written via
-// temp+rename so a crash mid-rotation can never leave the key file
-// half-written; the old key stays readable until the rename succeeds.
+// Rotate re-encrypts the CA key under a new passphrase (CA cert/keypair untouched, no reissuing needed) via temp+rename, so a crash can't corrupt the key file.
 func (p *PKI) Rotate(oldPassphrase, newPassphrase []byte) error {
 	keyDER, err := openFromFile(p.caKeyPath(), oldPassphrase)
 	if err != nil {

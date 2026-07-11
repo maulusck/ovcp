@@ -28,13 +28,7 @@ type ControlResult struct {
 	Changed bool
 }
 
-// ServeControl exposes lc over a root-only unix socket so a separate
-// `ovcp vpn <op>` invocation can drive the openvpn worker owned by the
-// running serve process. Filesystem permissions (0600) are the only auth
-// needed for a local root admin.
-//
-// The same socket also carries `ovcp debug on|off`, which flips level at
-// runtime — no restart, no separate IPC mechanism for a debug knob.
+// ServeControl exposes lc and "debug on|off" over a root-only (0600) unix socket, so `ovcp vpn`/`ovcp debug` can drive a running serve.
 func ServeControl(sockPath string, lc Lifecycle, level *slog.LevelVar) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o750); err != nil {
 		return nil, err

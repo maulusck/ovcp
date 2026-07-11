@@ -182,11 +182,7 @@ func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *st
 	jsonOK(w, map[string]string{"serial": ic.SerialHex, "notAfter": ic.NotAfter.Format(time.RFC3339)})
 }
 
-// handleBackup streams an encrypted backup archive for download. Admin-only:
-// it covers the CA key envelope, the raw server/tls-crypt secrets, and the
-// full user table including TOTP secrets. No restore endpoint exists here
-// on purpose — `ovcp backup restore` is CLI-only, run against an offline
-// data directory, not a live server over HTTP.
+// handleBackup streams an encrypted backup download; admin-only. No restore endpoint here — `ovcp backup restore` is CLI-only, offline.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Passphrase string }
 	if !decode(r, &in) || in.Passphrase == "" {

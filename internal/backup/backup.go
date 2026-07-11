@@ -1,12 +1,4 @@
-// Package backup: encrypted export/import of ovcp's server-side state.
-//
-// Deliberately excludes the openvpn server cert/key. OpenVPN clients trust
-// the CA chain plus a CN match, never a pinned server cert or key, so a
-// restored deployment just issues a fresh server cert from the restored CA
-// (see `ovcp renew-server`) — the server's private key never has to leave
-// the machine in a backup. tls-crypt.key has no such substitute (it's a
-// bare shared secret, not CA-derived) and is always included, or every
-// already-exported client profile stops handshaking.
+// Package backup: encrypted export/import of ovcp state. Excludes the reissuable openvpn server cert/key; always includes tls-crypt.key (not reissuable).
 package backup
 
 import (
@@ -44,10 +36,7 @@ var optionalFiles = []file{
 // ErrAlreadyInitialized guards Restore against clobbering a live install.
 var ErrAlreadyInitialized = errors.New("backup: data directory already has a CA; use -force to overwrite")
 
-// Create builds an encrypted backup archive (tar.gz sealed with
-// pki.Seal — argon2id + AES-256-GCM, the same envelope protecting the CA
-// key) of dataDir's CA, CRL, tls-crypt key, server.conf and database, and
-// writes it to w.
+// Create writes an encrypted tar.gz backup (CA, CRL, tls-crypt key, server.conf, database) to w.
 func Create(dataDir string, s *store.Store, w io.Writer, passphrase []byte) error {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
