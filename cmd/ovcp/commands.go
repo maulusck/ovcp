@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -300,12 +301,12 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 			fmt.Println("[5/5] admin user skipped")
 		}
 		fmt.Println("\ndone. start the server:  ovcp serve")
-		fmt.Printf("admin UI:                https://%s\n", envOr("OVCP_LISTEN", "127.0.0.1:8443"))
+		fmt.Printf("admin UI:                https://%s\n", cmp.Or(os.Getenv("OVCP_LISTEN"), "127.0.0.1:8443"))
 	}
 }
 
 func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
-	listen := fs.String("listen", envOr("OVCP_LISTEN", "127.0.0.1:8443"), "admin UI listen addr(s), comma-separated")
+	listen := fs.String("listen", cmp.Or(os.Getenv("OVCP_LISTEN"), "127.0.0.1:8443"), "admin UI listen addr(s), comma-separated")
 	sock := fs.String("sock", mgmtSock(), "mgmt socket")
 	return func(ctx *cliContext) {
 		runServe(ctx.dataDir, *listen, *sock, ctx.p)

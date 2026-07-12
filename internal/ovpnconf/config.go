@@ -2,6 +2,7 @@
 package ovpnconf
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -28,8 +29,8 @@ func Default() Config {
 	return Config{
 		Proto: "udp", Port: 1194, Subnet: "10.8.0.0/24",
 		Cipher: "AES-256-GCM", RedirectGW: true,
-		RunAsUser:  envOr("OVCP_OPENVPN_USER", "nobody"),
-		RunAsGroup: envOr("OVCP_OPENVPN_GROUP", "nogroup"),
+		RunAsUser:  cmp.Or(os.Getenv("OVCP_OPENVPN_USER"), "nobody"),
+		RunAsGroup: cmp.Or(os.Getenv("OVCP_OPENVPN_GROUP"), "nogroup"),
 	}
 }
 
@@ -46,13 +47,6 @@ func Load(raw string) Config {
 
 var allowedCiphers = map[string]bool{
 	"AES-256-GCM": true, "AES-128-GCM": true, "CHACHA20-POLY1305": true,
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }
 
 func (c *Config) Validate() error {

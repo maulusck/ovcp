@@ -1,4 +1,4 @@
-.TH OVCP 8 "July 2026" "ovcp" "System Administration"
+.TH OVCP 8 "2026-07-12" "ovcp" "System Administration"
 .SH NAME
 ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for an OpenVPN server
 .SH SYNOPSIS
@@ -113,13 +113,15 @@ client certs only, rejected for \fB\-kind\fR \fIserver\fR (openvpn cannot
 unlock an encrypted key non\-interactively at startup). \fB\-days\fR must
 be positive.
 .TP
-.B export \fB\-cn\fR \fINAME\fR \fB\-remote\fR \fIHOST\fR [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR]
+.B export \fB\-cn\fR \fINAME\fR [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-key\-pass\fR \fIPW\fR]
 Issue a fresh client certificate and print a complete inline
-\fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout. \fB\-port\fR,
-\fB\-proto\fR, and the data cipher default to the server's configured
-values (set via the web UI's Settings tab \(en there is no CLI
-equivalent); pass \fB\-port\fR or \fB\-proto\fR to override. Accepts
-\fB\-key\-pass\fR to password\-protect the embedded key.
+\fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout. \fB\-remote\fR
+defaults to \fBOVCP_SERVER_CN\fR / the server cert's CN, and is only
+required if neither is set. \fB\-port\fR, \fB\-proto\fR, and the data
+cipher default to the server's configured values (set via the web UI's
+Settings tab \(en there is no CLI equivalent); pass \fB\-port\fR or
+\fB\-proto\fR to override. \fB\-key\-pass\fR password\-protects the
+embedded key.
 .TP
 .B revoke \fB\-serial\fR \fIHEX\fR
 Revoke a certificate and regenerate the CRL. OpenVPN rejects the client
@@ -195,11 +197,17 @@ op prints the resulting openvpn pid, so a repeated
 .B start
 reports \(lqalready started\(rq rather than spawning a second process.
 .TP
-.B user add|list|del|disable|enable|passwd|totp
+.B user add \fB\-name\fR \fINAME\fR [\fB\-role\fR admin|operator|readonly]
+.TQ
+.B user list
+.TQ
+.B user del|disable|enable|passwd \fB\-name\fR \fINAME\fR
+.TQ
+.B user totp \fB\-name\fR \fINAME\fR [\fB\-off\fR]
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
-(certificates, disconnects), \fBreadonly\fR.
+(certificates, disconnects), \fBreadonly\fR (default for \fBadd\fR).
 .B user totp
-prints an otpauth:// enrollment URL.
+prints an otpauth:// enrollment URL; \fB\-off\fR disables 2FA instead.
 .TP
 .B audit
 Print the last 50 audit entries (logins, issues, revocations, kills,
@@ -259,6 +267,10 @@ Non\-interactive equivalents for \fBrotate\-ca\fR's new passphrase and
 Unprivileged account openvpn drops to after startup (default \fInobody\fR
 / \fInogroup\fR). The container image sets \fBOVCP_OPENVPN_GROUP=nobody\fR
 since Alpine has no \fInogroup\fR.
+.TP
+.B NO_COLOR
+Disable ANSI color in \fBovcp\fR's own log output. Color is already off
+when stderr isn't a terminal (piped, journal, redirected to a file).
 .SH FILES
 All paths below are rooted at \fB$OVCP_DATA\fR (default \fI/var/lib/ovcp\fR)
 \(en set it once and everything follows, including these.
@@ -375,8 +387,10 @@ the right address, e.g.
 \fB\-p 203.0.113.7:1194:1194/udp \-p 192.168.1.10:8443:8443\fR. docker works
 the same; the Containerfile is plain OCI.
 .SS packages
-.B nfpm package \-f deploy/nfpm.yaml \-p deb
-(or \fB\-p rpm\fR) after \fBmake release\fR.
+.B make deb
+(or \fBmake rpm\fR) builds a distro package via \fBnfpm\fR, installing the
+binary, systemd unit, man page, shell completions, and \fILICENSE\fR to
+their standard paths.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

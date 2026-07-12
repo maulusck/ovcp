@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -84,7 +85,7 @@ type cliContext struct {
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(logWriter(), &slog.HandlerOptions{Level: logLevel})))
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, helpText()) }
-	dataDir := flag.String("data", envOr("OVCP_DATA", "/var/lib/ovcp"), "data directory")
+	dataDir := flag.String("data", cmp.Or(os.Getenv("OVCP_DATA"), "/var/lib/ovcp"), "data directory")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) == 0 {
@@ -202,12 +203,12 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 
 // ctrlSock is the serve control socket path (CLI ↔ serve for vpn ops).
 func ctrlSock() string {
-	return envOr("OVCP_CTRL_SOCK", "/run/ovcp/control.sock")
+	return cmp.Or(os.Getenv("OVCP_CTRL_SOCK"), "/run/ovcp/control.sock")
 }
 
 // mgmtSock is the openvpn management socket path (CLI/serve ↔ openvpn).
 func mgmtSock() string {
-	return envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock")
+	return cmp.Or(os.Getenv("OVCP_MGMT_SOCK"), "/run/ovcp/mgmt.sock")
 }
 
 // newSupervisor wires the single openvpn worker controller from data paths.
@@ -321,13 +322,6 @@ func loadOrCreateTLSCrypt(path string) ([]byte, error) {
 		return nil, err
 	}
 	return k, os.WriteFile(path, k, 0o600)
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }
 
 // newFlags: every command's FlagSet, named after its dispatch value, so -h

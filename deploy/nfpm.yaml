@@ -9,6 +9,8 @@ depends: [openvpn]
 scripts:
   postinstall: deploy/postinstall.sh
 contents:
+  - src: LICENSE
+    dst: /usr/share/doc/ovcp/LICENSE
   - src: bin/ovcp
     dst: /usr/bin/ovcp
   - src: deploy/systemd/ovcp.service

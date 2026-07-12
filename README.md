@@ -9,6 +9,9 @@ Runtime needs `openvpn` on `PATH`. Building needs Go 1.22+, a C compiler,
 Node/npm, and `mandoc` — run `make deps` to check, or see `man ovcp` for
 the full list.
 
+Prefer a distro package over building from source? `make deb` / `make rpm`
+(needs `nfpm`) — see `man ovcp`'s **packages** section.
+
 ## Quick start (dev)
 
 ```sh
