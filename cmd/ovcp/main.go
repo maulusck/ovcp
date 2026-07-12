@@ -175,7 +175,7 @@ func main() {
 		years := fs.Int("ca-years", 10, "CA validity")
 		days := fs.Int("server-days", 825, "server cert validity (days)")
 		admin := fs.String("admin", "admin", "initial admin username ('' to skip)")
-		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
+		sock := fs.String("sock", mgmtSock(), "mgmt socket")
 		fs.Parse(args[1:])
 		if *serverCN == "" {
 			die(fmt.Errorf("-server-cn required (public hostname clients connect to)"))
@@ -244,13 +244,13 @@ func main() {
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ExitOnError)
 		listen := fs.String("listen", envOr("OVCP_LISTEN", "127.0.0.1:8443"), "admin UI listen addr(s), comma-separated")
-		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
+		sock := fs.String("sock", mgmtSock(), "mgmt socket")
 		fs.Parse(args[1:])
 		runServe(*dataDir, *listen, *sock, p)
 
 	case "status":
 		fs := flag.NewFlagSet("status", flag.ExitOnError)
-		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
+		sock := fs.String("sock", mgmtSock(), "mgmt socket")
 		ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 		fs.Parse(args[1:])
 		// process line first (from serve); if serve/openvpn is down, there
@@ -279,7 +279,7 @@ func main() {
 
 	case "kill":
 		fs := flag.NewFlagSet("kill", flag.ExitOnError)
-		sock := fs.String("sock", envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock"), "mgmt socket")
+		sock := fs.String("sock", mgmtSock(), "mgmt socket")
 		cn := fs.String("cn", "", "client CN (required)")
 		fs.Parse(args[1:])
 		if *cn == "" {
@@ -599,6 +599,11 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 // ctrlSock is the serve control socket path (CLI ↔ serve for vpn ops).
 func ctrlSock() string {
 	return envOr("OVCP_CTRL_SOCK", "/run/ovcp/control.sock")
+}
+
+// mgmtSock is the openvpn management socket path (CLI/serve ↔ openvpn).
+func mgmtSock() string {
+	return envOr("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock")
 }
 
 // newSupervisor wires the single openvpn worker controller from data paths.
