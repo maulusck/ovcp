@@ -85,3 +85,67 @@ func TestReconnectRequiresRunning(t *testing.T) {
 		t.Fatalf("reconnect while running: %v", err)
 	}
 }
+
+// crashingOpenVPN exits immediately every launch, simulating a crash (or an
+// external `kill -9`) rather than a clean, requested stop.
+func crashingOpenVPN(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "crashing-openvpn.sh")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestCrashLoopBreakerStopsRetrying(t *testing.T) {
+	s := &Supervisor{
+		Bin:               crashingOpenVPN(t),
+		ConfigPath:        "/dev/null",
+		LogPath:           filepath.Join(t.TempDir(), "openvpn.log"),
+		CrashRestartDelay: 5 * time.Millisecond,
+		CrashLoopWindow:   time.Second,
+		CrashLoopMax:      3,
+	}
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.stMu.Lock()
+		streak := s.crashStreak
+		s.stMu.Unlock()
+		if streak > s.CrashLoopMax {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s.stMu.Lock()
+	streak := s.crashStreak
+	s.stMu.Unlock()
+	if streak <= s.CrashLoopMax {
+		t.Fatalf("expected crash-loop breaker to trip within 2s, streak=%d", streak)
+	}
+	time.Sleep(20 * time.Millisecond) // let any in-flight restart attempt settle
+	if s.Running() {
+		t.Fatal("should have given up auto-restarting after crash-looping")
+	}
+}
+
+func TestStopDoesNotAutoRestart(t *testing.T) {
+	s := &Supervisor{
+		Bin:               fakeOpenVPN(t),
+		ConfigPath:        "/dev/null",
+		LogPath:           filepath.Join(t.TempDir(), "openvpn.log"),
+		CrashRestartDelay: 5 * time.Millisecond,
+	}
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond) // past CrashRestartDelay — must NOT come back
+	if s.Running() {
+		t.Fatal("an explicit Stop must not trigger auto-restart")
+	}
+}

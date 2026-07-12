@@ -19,12 +19,27 @@ type Supervisor struct {
 	LogPath    string        // child stdout/stderr are appended here
 	StopWait   time.Duration // graceful SIGTERM timeout; default 5s
 
+	// CrashRestartDelay/CrashLoopWindow/CrashLoopMax tune the auto-restart
+	// on an unexpected exit (crash, OOM-kill, `kill -9` from outside us):
+	// wait CrashRestartDelay then restart, but give up once CrashLoopMax
+	// such exits happen inside one CrashLoopWindow — a bad config that
+	// makes openvpn exit immediately shouldn't spin us in a tight loop.
+	// Defaults: 3s / 60s / 5.
+	CrashRestartDelay time.Duration
+	CrashLoopWindow   time.Duration
+	CrashLoopMax      int
+
 	opMu sync.Mutex // serializes whole lifecycle operations
 
 	stMu    sync.Mutex // guards the fields below
 	cmd     *exec.Cmd
 	done    chan struct{} // closed by the reaper once cmd has been Wait()ed
 	running bool
+	desired bool // true once Start/Restart has been asked for; false after Stop — gates auto-restart
+	stopped bool // set by stop() just before signaling, so the reaper can tell "we did this" from a crash
+
+	crashAt     time.Time
+	crashStreak int
 }
 
 func (s *Supervisor) snapshot() (*exec.Cmd, chan struct{}, bool) {
@@ -52,18 +67,27 @@ func (s *Supervisor) Pid() int {
 func (s *Supervisor) Start() error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	s.stMu.Lock()
+	s.desired = true
+	s.stMu.Unlock()
 	return s.start()
 }
 
 func (s *Supervisor) Stop() error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	s.stMu.Lock()
+	s.desired = false
+	s.stMu.Unlock()
 	return s.stop()
 }
 
 func (s *Supervisor) Restart() error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	s.stMu.Lock()
+	s.desired = true
+	s.stMu.Unlock()
 	if err := s.stop(); err != nil {
 		return err
 	}
@@ -131,10 +155,65 @@ func (s *Supervisor) supervise(launched chan<- error) {
 	err = cmd.Wait() // reap — no zombie can accumulate
 	lf.Close()
 	s.stMu.Lock()
+	stopped := s.stopped
+	s.stopped = false
 	s.running, s.cmd = false, nil
+	desired := s.desired
 	s.stMu.Unlock()
 	close(done)
-	slog.Info("openvpn exited", "pid", cmd.Process.Pid, "err", err)
+
+	if stopped {
+		slog.Info("openvpn exited", "pid", cmd.Process.Pid, "err", err)
+		return
+	}
+	slog.Error("openvpn exited unexpectedly", "pid", cmd.Process.Pid, "err", err)
+	if desired {
+		go s.autoRestart()
+	}
+}
+
+// autoRestart re-launches openvpn after an unexpected exit, unless it's
+// crash-looping (CrashLoopMax exits inside CrashLoopWindow) or the VPN has
+// been explicitly stopped/restarted in the meantime.
+func (s *Supervisor) autoRestart() {
+	delay, window, max := s.CrashRestartDelay, s.CrashLoopWindow, s.CrashLoopMax
+	if delay == 0 {
+		delay = 3 * time.Second
+	}
+	if window == 0 {
+		window = 60 * time.Second
+	}
+	if max == 0 {
+		max = 5
+	}
+
+	s.stMu.Lock()
+	if time.Since(s.crashAt) > window {
+		s.crashStreak = 0
+	}
+	s.crashStreak++
+	s.crashAt = time.Now()
+	streak := s.crashStreak
+	s.stMu.Unlock()
+	if streak > max {
+		slog.Error("openvpn crash-looping, giving up auto-restart; run `ovcp vpn start` once the underlying issue is fixed", "streak", streak)
+		return
+	}
+
+	time.Sleep(delay)
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.stMu.Lock()
+	stillWanted := s.desired && !s.running
+	s.stMu.Unlock()
+	if !stillWanted {
+		return
+	}
+	if err := s.start(); err != nil {
+		slog.Error("openvpn auto-restart failed", "err", err)
+		return
+	}
+	slog.Info("openvpn auto-restarted", "streak", streak)
 }
 
 // stop sends SIGTERM, waits for the reaper, and escalates to SIGKILL on
@@ -145,6 +224,9 @@ func (s *Supervisor) stop() error {
 	if !running {
 		return nil
 	}
+	s.stMu.Lock()
+	s.stopped = true
+	s.stMu.Unlock()
 	cmd.Process.Signal(syscall.SIGTERM)
 	wait := s.StopWait
 	if wait == 0 {

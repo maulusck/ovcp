@@ -87,6 +87,15 @@ certificate generated on first run). Starts the
 .B openvpn
 worker from \fIserver.conf\fR as a foreground child (reaped on exit \(en no
 zombies) with its log in \fIlogs/openvpn.log\fR, and stops it on clean shutdown.
+An exit that
+.B ovcp
+did not itself request (crash, OOM\-kill, an external \fBkill \-9\fR) is
+logged at error level and auto\-restarted after a few seconds; a config bad
+enough to make openvpn exit repeatedly trips a breaker after a handful of
+attempts within a short window, logging an error instead of retrying
+forever (fix the config, then \fBovcp vpn start\fR). A deliberate
+.B ovcp vpn stop
+never auto\-restarts.
 Exposes a root\-only control socket so a separate
 .B ovcp vpn
 invocation can drive the worker. Refuses to start with an
