@@ -165,7 +165,7 @@
       <button class="ghost" onclick={doLogout}>Sign out</button>
     </div>
   </header>
-  <main>
+  <main class:wide={tab === 'logs'}>
     {#if tab === 'dashboard'}
       <Dashboard {canOperate} />
     {:else if tab === 'certs'}
@@ -299,6 +299,7 @@
   .role-pill.role-admin { color: var(--amber); border-color: var(--amber); }
   .role-pill.role-operator { color: var(--ok); border-color: var(--ok); }
   main { padding: 18px; max-width: 1100px; margin: 0 auto; }
+  main.wide { max-width: 1600px; } /* Logs: rows are the widest content on any tab */
   @media (prefers-reduced-motion: reduce) { :global(*) { transition: none !important; animation: none !important; } }
 
   @media (max-width: 700px) {

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 
 	"os/signal"
 	"syscall"
@@ -37,6 +39,37 @@ var version = "dev"
 // runtime via the control socket, no restart needed.
 var logLevel = new(slog.LevelVar)
 
+var logLevelColor = map[string]string{
+	"level=DEBUG": "\x1b[36mlevel=DEBUG\x1b[0m",
+	"level=INFO":  "\x1b[32mlevel=INFO\x1b[0m",
+	"level=WARN":  "\x1b[33mlevel=WARN\x1b[0m",
+	"level=ERROR": "\x1b[31mlevel=ERROR\x1b[0m",
+}
+
+// colorStderr colorizes slog.TextHandler's "level=X" token by wrapping
+// stderr; skipped for NO_COLOR or a non-interactive stderr (piped, journal,
+// redirected to a file) so only an actual terminal ever sees escape codes.
+type colorStderr struct{}
+
+func (colorStderr) Write(p []byte) (int, error) {
+	out := p
+	for tag, colored := range logLevelColor {
+		if i := bytes.Index(p, []byte(tag)); i >= 0 {
+			out = append(append(append([]byte{}, p[:i]...), colored...), p[i+len(tag):]...)
+			break
+		}
+	}
+	_, err := os.Stderr.Write(out)
+	return len(p), err
+}
+
+func logWriter() io.Writer {
+	if os.Getenv("NO_COLOR") != "" || !term.IsTerminal(int(os.Stderr.Fd())) {
+		return os.Stderr
+	}
+	return colorStderr{}
+}
+
 // cliContext bundles the runtime dependencies command bodies need. Built
 // once in main(), after flag.Parse, and passed explicitly rather than
 // closed over, so the commands table itself (name/usage/sub/run) stays a
@@ -49,7 +82,7 @@ type cliContext struct {
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	slog.SetDefault(slog.New(slog.NewTextHandler(logWriter(), &slog.HandlerOptions{Level: logLevel})))
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, helpText()) }
 	dataDir := flag.String("data", envOr("OVCP_DATA", "/var/lib/ovcp"), "data directory")
 	flag.Parse()
@@ -90,7 +123,7 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	// tail it; unbounded growth, same as openvpn.log — no rotation here either.
 	os.MkdirAll(pp.LogsDir, 0o750)
 	if lf, err := os.OpenFile(pp.OvcpLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); err == nil {
-		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, lf), &slog.HandlerOptions{Level: logLevel})))
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(logWriter(), lf), &slog.HandlerOptions{Level: logLevel})))
 	}
 	if os.Geteuid() != 0 {
 		slog.Warn("not root; ovcp owns the PKI and starts openvpn, both need root")

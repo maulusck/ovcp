@@ -3,8 +3,34 @@
   import { api, downloadBlob, copyToClipboard } from './api.js'
   let { isAdmin } = $props()
 
-  // the two plain-text log panels are identical except for these fields;
-  // the audit panel stays bespoke (it's a table, newest-first, no autoscroll).
+  // one shared format for every timestamp in this file (audit + both log
+  // tables) — 24h, no AM/PM, no date/time comma, browser locale otherwise.
+  const fmtTime = (d) => d.toLocaleString(undefined, { hour12: false }).replace(',', '')
+
+  // Splits a line into time/level/msg. Two known prefixes: ovcp's own
+  // "time=... level=X ..." and openvpn's "YYYY-MM-DD HH:MM:SS ..." (see the
+  // fixture in internal/api/logs_test.go). The raw timestamp is reformatted
+  // with fmtTime so all three panels show one consistent format instead of
+  // three raw wire formats (and the ISO string's "Z" never leaks through —
+  // fmtTime always renders in the browser's local time).
+  function parseLine(line) {
+    let raw = '', msg = line, level
+    let m = line.match(/^time=(\S+)\s+level=(\w+)\s+(.*)$/)
+    if (m) {
+      raw = m[1]; level = m[2].toLowerCase(); msg = m[3]
+    } else {
+      m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(.*)$/)
+      if (m) { raw = m[1]; msg = m[2] }
+      level = /\b(error|fatal|fail(ed|ure)?)\b/i.test(msg) ? 'error'
+        : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
+    }
+    const d = raw && new Date(raw.replace(' ', 'T'))
+    return { time: d && !isNaN(d) ? fmtTime(d) : '', level, msg }
+  }
+
+  // the two log panels render as a table like the audit panel; audit stays
+  // bespoke in one way (newest-first, no autoscroll) since it's real
+  // structured rows, not parsed text.
   const LOGS = [
     { id: 'openvpn', title: 'OpenVPN log', file: 'openvpn.log' },
     { id: 'ovcp', title: 'OVCP log', file: 'ovcp.log' },
@@ -67,7 +93,7 @@
     setTimeout(() => (copied = ''), 1200)
   }
   const auditText = () => entries.map(e =>
-    `${new Date(e.TS).toLocaleString()} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
+    `${fmtTime(new Date(e.TS))} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
 
   // the archive bundle takes no request input at all (fixed server-side
   // filenames) — per-log copy/download stays entirely client-side instead
@@ -152,7 +178,7 @@
           <tbody>
             {#each entries as e}
               <tr>
-                <td>{new Date(e.TS).toLocaleString()}</td>
+                <td>{fmtTime(new Date(e.TS))}</td>
                 <td>{e.Actor}</td>
                 <td>{e.Action}</td>
                 <td class="muted">{e.Detail}</td>
@@ -171,8 +197,22 @@
         <p class="muted">No log yet.</p>
       {:else}
         {@render actions(l.id, l.file, () => lines[l.id].join('\n'))}
-        <pre class="scrollbox logbox" bind:this={boxes[l.id]}
-          onpointerup={(e) => fitToContent(e.currentTarget)}>{lines[l.id].join('\n')}</pre>
+        <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
+        <div class="scrollbox" bind:this={boxes[l.id]} onpointerup={(e) => fitToContent(e.currentTarget)}>
+          <table class="logtable">
+            <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
+            <tbody>
+              {#each lines[l.id] as line}
+                {@const p = parseLine(line)}
+                <tr>
+                  <td class="muted">{p.time}</td>
+                  <td class="log-{p.level}">{p.level}</td>
+                  <td class="log-{p.level}">{p.msg}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {/if}
     </details>
   {/each}
@@ -189,9 +229,12 @@
   .logs-head button.ghost, .panel-actions button.ghost { padding: 3px 10px; font-size: 12px; }
   .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
   /* grid not columns: columns rebalance every card while one resizes (bouncing).
-     order is set inline from openState so open cards stay first without drag/drop. */
+     order is set inline from openState so open cards stay first without drag/drop.
+     600px min caps it at 2 columns even on the widened logs main (600*3
+     doesn't fit) — a 3rd card wraps below instead of squeezing 3 across;
+     still collapses to 1 column on narrow/mobile like before. */
   .logs-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr));
     gap: 22px; align-items: start;
   }
   .logs-grid :global(.card) { padding: 10px 14px; }
@@ -203,10 +246,23 @@
     height: 260px; min-height: 60px; max-height: 80vh;
     overflow: auto; resize: vertical; cursor: grab;
   }
-  .logbox {
-    font-family: var(--mono); font-size: 12px; line-height: 1.4; white-space: pre-wrap;
-    word-break: break-all; margin: 0; color: var(--text);
+  /* desktop: fill down toward the window bottom by default instead of a
+     cramped fixed 260px (fitToContent still shrinks it for short logs);
+     mobile keeps the compact fixed height — same breakpoint as App.svelte's
+     nav collapse, so it stays the one stacked-card mobile layout. */
+  @media (min-width: 701px) {
+    .scrollbox { height: calc(100vh - 320px); }
   }
+  /* denser than the default table: log rows are numerous, not a handful of audit entries. */
+  .logtable { font-size: 12px; }
+  .logtable th, .logtable td { padding: 2px 8px; }
+  /* time/level are short fixed tokens, never wrap (that's what turns "info"
+     into "inf\no" once the column gets squeezed) — only the message column wraps. */
+  .logtable td:nth-child(1), .logtable td:nth-child(2) { white-space: nowrap; }
+  .logtable td:nth-child(3) { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .logtable .log-error { color: var(--bad); }
+  .logtable .log-warn { color: var(--amber); }
+  .logtable .log-debug { color: var(--dim); }
   /* Maximize = native Fullscreen API on the .card; give the scroll box the
      freed-up viewport space instead of staying capped. */
   .card:fullscreen { padding: 18px; overflow: auto; }
