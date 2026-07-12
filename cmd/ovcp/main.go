@@ -76,12 +76,8 @@ func main() {
 			kind = pki.KindServer
 		}
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := p.Issue(kind, *cn, *days, pass)
+		ic, err := issueCert(p, kind, *cn, *days, pass, *keyPass)
 		die(err)
-		if *keyPass != "" {
-			ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, *keyPass)
-			die(err)
-		}
 		s := openStore()
 		defer s.Close()
 		die(s.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: *kindS,
@@ -153,12 +149,8 @@ func main() {
 			die(fmt.Errorf("-cn required; -remote required (no server CN found)"))
 		}
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := p.Issue(pki.KindClient, *cn, 365, pass)
+		ic, err := issueCert(p, pki.KindClient, *cn, 365, pass, *keyPass)
 		die(err)
-		if *keyPass != "" {
-			ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, *keyPass)
-			die(err)
-		}
 		s := openStore()
 		defer s.Close()
 		die(s.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "client",
@@ -638,6 +630,21 @@ func dataPaths(dataDir string) paths {
 		OvcpLog:    filepath.Join(ld, "ovcp.log"),
 		StatusLog:  filepath.Join(ld, "status.log"),
 	}
+}
+
+// issueCert issues a cert under the CA, optionally password-protecting the
+// key. Shared by the issue and export CLI commands.
+func issueCert(p *pki.PKI, kind pki.CertKind, cn string, days int, pass []byte, keyPass string) (*pki.IssuedCert, error) {
+	ic, err := p.Issue(kind, cn, days, pass)
+	if err != nil {
+		return nil, err
+	}
+	if keyPass != "" {
+		if ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, keyPass); err != nil {
+			return nil, err
+		}
+	}
+	return ic, nil
 }
 
 // writeServerCert persists a freshly issued server cert+key to the paths

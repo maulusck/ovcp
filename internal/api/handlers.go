@@ -123,25 +123,34 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 		jsonErr(w, 400, "cn and passphrase required")
 		return
 	}
-	if in.Days <= 0 {
-		in.Days = 365
-	}
-	ic, err := s.PKI.Issue(pki.KindClient, in.CN, in.Days, []byte(in.Passphrase))
+	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days)
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
-	if in.KeyPassphrase != "" {
-		if ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, in.KeyPassphrase); err != nil {
-			jsonErr(w, 500, err.Error())
-			return
+	s.Store.Audit(u.Username, "issue", "cn="+in.CN+" serial="+ic.SerialHex)
+	jsonOK(w, map[string]string{"serial": ic.SerialHex,
+		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
+}
+
+// issueClientCert issues a client cert, optionally password-protecting the
+// key, and records it in the store. Shared by handleIssue and handleExport.
+func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int) (*pki.IssuedCert, error) {
+	if days <= 0 {
+		days = 365
+	}
+	ic, err := s.PKI.Issue(pki.KindClient, cn, days, []byte(passphrase))
+	if err != nil {
+		return nil, err
+	}
+	if keyPassphrase != "" {
+		if ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, keyPassphrase); err != nil {
+			return nil, err
 		}
 	}
 	s.Store.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "client",
 		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
-	s.Store.Audit(u.Username, "issue", "cn="+in.CN+" serial="+ic.SerialHex)
-	jsonOK(w, map[string]string{"serial": ic.SerialHex,
-		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
+	return ic, nil
 }
 
 // handleRenewServer reissues the openvpn server cert in place (same CN, new
@@ -247,22 +256,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		jsonErr(w, 400, "remote required (no server CN configured)")
 		return
 	}
-	if in.Days <= 0 {
-		in.Days = 365
-	}
-	ic, err := s.PKI.Issue(pki.KindClient, in.CN, in.Days, []byte(in.Passphrase))
+	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days)
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
-	if in.KeyPassphrase != "" {
-		if ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, in.KeyPassphrase); err != nil {
-			jsonErr(w, 500, err.Error())
-			return
-		}
-	}
-	s.Store.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "client",
-		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
 	s.Store.Audit(u.Username, "issue", "cn="+in.CN+" (export)")
 	caPEM, err := s.PKI.CACertPEM()
 	if err != nil {
