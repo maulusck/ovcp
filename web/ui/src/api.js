@@ -3,8 +3,6 @@ function csrf() {
   return m ? m[1] : ''
 }
 
-export { csrf }
-
 function req(method, path, body) {
   return fetch('/api' + path, {
     method,

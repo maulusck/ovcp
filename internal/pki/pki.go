@@ -37,7 +37,9 @@ func New(dir string) *PKI { return &PKI{Dir: dir} }
 
 func (p *PKI) caCertPath() string { return filepath.Join(p.Dir, "ca.crt") }
 func (p *PKI) caKeyPath() string  { return filepath.Join(p.Dir, "ca.key.enc") }
-func (p *PKI) crlPath() string    { return filepath.Join(p.Dir, "crl.pem") }
+
+// CRLPath returns the path openvpn should be pointed at via crl-verify.
+func (p *PKI) CRLPath() string { return filepath.Join(p.Dir, "crl.pem") }
 
 var ErrCAExists = errors.New("pki: CA already initialized")
 
@@ -222,11 +224,8 @@ func (p *PKI) RegenCRL(revoked []RevokedEntry, passphrase []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p.crlPath(), pemEncode("X509 CRL", der), 0o644)
+	return os.WriteFile(p.CRLPath(), pemEncode("X509 CRL", der), 0o644)
 }
-
-// CRLPath returns the path openvpn should be pointed at via crl-verify.
-func (p *PKI) CRLPath() string { return p.crlPath() }
 
 func randSerial() (*big.Int, error) {
 	max := new(big.Int).Lsh(big.NewInt(1), 128)
