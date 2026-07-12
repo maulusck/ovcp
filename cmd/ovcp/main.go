@@ -71,9 +71,13 @@ func main() {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
 		}
+		requirePositive(*days, "days")
 		kind := pki.KindClient
 		if *kindS == "server" {
 			kind = pki.KindServer
+		}
+		if kind == pki.KindServer && *keyPass != "" {
+			die(fmt.Errorf("-key-pass is client-only: an encrypted server key can't be unlocked non-interactively when openvpn starts"))
 		}
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
 		ic, err := issueCert(p, kind, *cn, *days, pass, *keyPass)
@@ -134,8 +138,8 @@ func main() {
 		fs := flag.NewFlagSet("export", flag.ExitOnError)
 		cn := fs.String("cn", "", "client CN (issues fresh cert, required)")
 		remote := fs.String("remote", "", "server host clients connect to (default: OVCP_SERVER_CN / server cert CN)")
-		port := fs.Int("port", 1194, "server port")
-		proto := fs.String("proto", "udp", "udp|tcp")
+		port := fs.Int("port", 0, "server port (default: the configured server port)")
+		proto := fs.String("proto", "", "udp|tcp (default: the configured server proto)")
 		serverCN := fs.String("server-cn", "", "verify-x509-name value")
 		keyPass := fs.String("key-pass", "", "encrypt embedded private key with this password")
 		fs.Parse(args[1:])
@@ -160,10 +164,18 @@ func main() {
 		die(err)
 		tc, err := loadOrCreateTLSCrypt(filepath.Join(*dataDir, "pki", "tls-crypt.key"))
 		die(err)
+		raw, _ := s.GetSetting("server_config")
+		cfg := ovpnconf.Load(raw)
+		if *port != 0 {
+			cfg.Port = *port
+		}
+		if *proto != "" {
+			cfg.Proto = *proto
+		}
 		bundle, err := pki.RenderOVPN(pki.BundleParams{
-			Remote: *remote, Port: *port, Proto: *proto, ServerCN: *serverCN,
+			Remote: *remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: *serverCN,
 			CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
-			TLSCrypt: tc, Cipher: "AES-256-GCM",
+			TLSCrypt: tc, Cipher: cfg.Cipher,
 		})
 		die(err)
 		os.Stdout.Write(bundle)
@@ -180,6 +192,8 @@ func main() {
 		if *serverCN == "" {
 			die(fmt.Errorf("-server-cn required (public hostname clients connect to)"))
 		}
+		requirePositive(*years, "ca-years")
+		requirePositive(*days, "server-days")
 		pp := dataPaths(*dataDir)
 		s := openStore()
 		defer s.Close()
@@ -332,6 +346,7 @@ func main() {
 		days := fs.Int("days", 825, "validity (days)")
 		serverCNFlag := fs.String("server-cn", "", "server CN (default: current server cert's CN / OVCP_SERVER_CN)")
 		fs.Parse(args[1:])
+		requirePositive(*days, "days")
 		serverCN := *serverCNFlag
 		if serverCN == "" {
 			serverCN = adminCertCN(*dataDir)
@@ -772,6 +787,14 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// requirePositive dies with an actionable error on a zero/negative validity
+// period (silently issues an already-expired cert/CA otherwise).
+func requirePositive(n int, flag string) {
+	if n <= 0 {
+		die(fmt.Errorf("-%s must be positive", flag))
+	}
 }
 
 func die2(err error, ctx string) {

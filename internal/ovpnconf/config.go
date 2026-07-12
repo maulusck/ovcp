@@ -2,6 +2,7 @@
 package ovpnconf
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -30,6 +31,17 @@ func Default() Config {
 		RunAsUser:  envOr("OVCP_OPENVPN_USER", "nobody"),
 		RunAsGroup: envOr("OVCP_OPENVPN_GROUP", "nogroup"),
 	}
+}
+
+// Load parses a persisted config JSON blob (the store's "server_config"
+// setting), falling back to defaults for anything empty or missing. raw =
+// "" (never configured yet) returns plain Default().
+func Load(raw string) Config {
+	cfg := Default()
+	if raw != "" {
+		json.Unmarshal([]byte(raw), &cfg)
+	}
+	return cfg
 }
 
 var allowedCiphers = map[string]bool{

@@ -195,11 +195,8 @@ func clientIP(r *http.Request) string {
 
 // LoadConfig reads persisted server config (settings key) or defaults.
 func (s *Server) LoadConfig() ovpnconf.Config {
-	cfg := ovpnconf.Default()
-	if raw, err := s.Store.GetSetting("server_config"); err == nil && raw != "" {
-		json.Unmarshal([]byte(raw), &cfg)
-	}
-	return cfg
+	raw, _ := s.Store.GetSetting("server_config")
+	return ovpnconf.Load(raw)
 }
 
 func (s *Server) saveConfig(cfg ovpnconf.Config) error {
