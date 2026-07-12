@@ -639,20 +639,18 @@ func newSupervisor(dataDir string) *controller.Supervisor {
 }
 
 type paths struct {
-	PKIDir, CACert, ServerCert, ServerKey, CRL, TLSCrypt, ServerConf, DB string
-	LogsDir, OpenVPNLog, OvcpLog, StatusLog                              string
+	CACert, ServerCert, ServerKey, CRL, TLSCrypt, ServerConf string
+	LogsDir, OpenVPNLog, OvcpLog, StatusLog                  string
 }
 
 func dataPaths(dataDir string) paths {
 	pd := filepath.Join(dataDir, "pki")
 	ld := filepath.Join(dataDir, "logs")
 	return paths{
-		PKIDir: pd,
 		CACert: filepath.Join(pd, "ca.crt"), ServerCert: filepath.Join(pd, "server.crt"),
 		ServerKey: filepath.Join(pd, "server.key"), CRL: filepath.Join(pd, "crl.pem"),
 		TLSCrypt:   filepath.Join(pd, "tls-crypt.key"),
 		ServerConf: filepath.Join(dataDir, "server.conf"),
-		DB:         filepath.Join(dataDir, "ovcp.db"),
 		LogsDir:    ld,
 		OpenVPNLog: filepath.Join(ld, "openvpn.log"),
 		OvcpLog:    filepath.Join(ld, "ovcp.log"),

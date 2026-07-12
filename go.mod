@@ -12,11 +12,3 @@ require (
 	golang.org/x/sys v0.28.0
 	rsc.io/qr v0.2.0
 )
-
-replace golang.org/x/crypto => github.com/golang/crypto v0.31.0
-
-replace golang.org/x/sys => github.com/golang/sys v0.28.0
-
-replace golang.org/x/term => github.com/golang/term v0.27.0
-
-replace rsc.io/qr => github.com/rsc/qr v0.2.0

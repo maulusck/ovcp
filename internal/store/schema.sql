@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS certs (
   not_after  INTEGER NOT NULL,
   revoked_at INTEGER                    -- NULL = valid
 );
-CREATE INDEX IF NOT EXISTS idx_certs_cn ON certs(cn);
 
 CREATE TABLE IF NOT EXISTS users (
   id         INTEGER PRIMARY KEY,

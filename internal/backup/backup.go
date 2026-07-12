@@ -31,11 +31,6 @@ var requiredFiles = []file{
 	{"totp.key", "totp.key"},
 }
 
-// optional files: included if present, silently skipped otherwise.
-var optionalFiles = []file{
-	{filepath.Join("logs", "openvpn.log"), "logs/openvpn.log"},
-}
-
 // ErrAlreadyInitialized guards Restore against clobbering a live install.
 var ErrAlreadyInitialized = errors.New("backup: data directory already has a CA; use -force to overwrite")
 
@@ -54,15 +49,9 @@ func Create(dataDir string, s *store.Store, w io.Writer, passphrase []byte) erro
 			return err
 		}
 	}
-	for _, f := range optionalFiles {
-		data, err := os.ReadFile(filepath.Join(dataDir, f.src))
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("backup: %s: %w", f.src, err)
-		}
-		if err := tarWrite(tw, f.name, data); err != nil {
+	// openvpn.log is optional: included if present, skipped otherwise.
+	if data, err := os.ReadFile(filepath.Join(dataDir, "logs", "openvpn.log")); err == nil {
+		if err := tarWrite(tw, "logs/openvpn.log", data); err != nil {
 			return err
 		}
 	}

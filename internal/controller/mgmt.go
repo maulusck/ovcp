@@ -33,7 +33,6 @@ type VPNClient struct {
 	BytesRecv      uint64
 	BytesSent      uint64
 	ConnectedSince time.Time
-	ClientID       string
 	Cipher         string
 }
 
@@ -125,7 +124,6 @@ func (c *Client) Status() ([]VPNClient, error) {
 					CN:             f[1],
 					RealAddress:    f[2],
 					VirtualAddress: f[3],
-					ClientID:       f[10],
 				}
 				vc.BytesRecv, _ = strconv.ParseUint(f[5], 10, 64)
 				vc.BytesSent, _ = strconv.ParseUint(f[6], 10, 64)
