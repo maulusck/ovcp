@@ -6,11 +6,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ovcp/ovcp/internal/ovpnconf"
+	"github.com/ovcp/ovcp/internal/store"
 )
 
 var binPath string
@@ -155,6 +159,87 @@ func TestLifecycle(t *testing.T) {
 	audit := run(t, env, "audit")
 	if audit.code != 0 || !strings.Contains(audit.stdout, "issue") || !strings.Contains(audit.stdout, "revoke") {
 		t.Fatalf("audit: %+v", audit)
+	}
+}
+
+// TestIssueValidation covers the two footguns `issue` used to allow
+// silently: an encrypted server key (unbootable, openvpn can't prompt for
+// it non-interactively) and a non-positive validity (already-expired cert).
+func TestIssueValidation(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "vpn.example.com", "-kind", "server", "-key-pass", "hunter2"); r.code == 0 {
+		t.Fatalf("server cert with -key-pass should be rejected: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "alice", "-days", "0"); r.code == 0 {
+		t.Fatalf("-days 0 should be rejected: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "alice", "-days", "-5"); r.code == 0 {
+		t.Fatalf("-days -5 should be rejected: %+v", r)
+	}
+	// the client-cert / positive-days path itself must still work
+	if r := run(t, env, "issue", "-cn", "alice", "-key-pass", "hunter2"); r.code != 0 {
+		t.Fatalf("client cert with -key-pass should still work: %+v", r)
+	}
+}
+
+func TestRenewServerValidation(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "renew-server", "-days", "0"); r.code == 0 {
+		t.Fatalf("-days 0 should be rejected: %+v", r)
+	}
+}
+
+func TestInitValidation(t *testing.T) {
+	if r := run(t, baseEnv(t), "init", "-server-cn", "vpn.example.com", "-admin", "", "-ca-years", "0"); r.code == 0 {
+		t.Fatalf("-ca-years 0 should be rejected: %+v", r)
+	}
+	if r := run(t, baseEnv(t), "init", "-server-cn", "vpn.example.com", "-admin", "", "-server-days", "-1"); r.code == 0 {
+		t.Fatalf("-server-days -1 should be rejected: %+v", r)
+	}
+}
+
+// TestExportFollowsConfig covers the bug where `export` ignored the
+// persisted server config (as set via the web UI's Settings tab) and always
+// rendered a profile pointing at the hardcoded 1194/udp/AES-256-GCM
+// defaults regardless of what the server was actually running.
+func TestExportFollowsConfig(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+
+	s, err := store.Open(filepath.Join(dataDir(env), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ovpnconf.Default()
+	cfg.Port, cfg.Proto, cfg.Cipher = 51820, "tcp", "CHACHA20-POLY1305"
+	raw, _ := json.Marshal(cfg)
+	if err := s.SetSetting("server_config", string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	r := run(t, env, "export", "-cn", "alice", "-remote", "vpn.example.com")
+	if r.code != 0 {
+		t.Fatalf("export: %+v", r)
+	}
+	for _, want := range []string{"remote vpn.example.com 51820", "proto tcp", "data-ciphers CHACHA20-POLY1305"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("export should follow the configured server, missing %q: %+v", want, r)
+		}
+	}
+
+	// an explicit flag still overrides the configured default
+	r2 := run(t, env, "export", "-cn", "bob", "-remote", "vpn.example.com", "-port", "1234", "-proto", "udp")
+	if r2.code != 0 || !strings.Contains(r2.stdout, "remote vpn.example.com 1234") || !strings.Contains(r2.stdout, "proto udp") {
+		t.Fatalf("explicit -port/-proto should override the configured default: %+v", r2)
 	}
 }
 

@@ -99,11 +99,17 @@ Issue a certificate. Client private keys are printed (or written with
 \fB\-out\fR) exactly once and never stored; if lost, revoke and reissue.
 Certificates (public) are kept and can be re\-downloaded anytime with
 \fBlist\fR / the web UI. With \fB\-key\-pass\fR the private key is
-AES\-256 encrypted; OpenVPN prompts for the password on connect.
+AES\-256 encrypted; OpenVPN prompts for the password on connect \(en
+client certs only, rejected for \fB\-kind\fR \fIserver\fR (openvpn cannot
+unlock an encrypted key non\-interactively at startup). \fB\-days\fR must
+be positive.
 .TP
 .B export \fB\-cn\fR \fINAME\fR \fB\-remote\fR \fIHOST\fR [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR]
 Issue a fresh client certificate and print a complete inline
-\fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout. Accepts
+\fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout. \fB\-port\fR,
+\fB\-proto\fR, and the data cipher default to the server's configured
+values (set via the web UI's Settings tab \(en there is no CLI
+equivalent); pass \fB\-port\fR or \fB\-proto\fR to override. Accepts
 \fB\-key\-pass\fR to password\-protect the embedded key.
 .TP
 .B revoke \fB\-serial\fR \fIHEX\fR
