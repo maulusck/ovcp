@@ -6,7 +6,8 @@ export const THEMES = [
   { name: 'default', label: 'Default', bg: '#171f28', fg: '#e0a136' },
   { name: 'matrix', label: 'Matrix', bg: '#0a0f0a', fg: '#33ff33' },
   { name: 'retrocrt', label: 'RetroCRT', bg: '#120a02', fg: '#ffb000' },
-  { name: 'frutiger', label: 'Frutiger', bg: '#eaf6fb', fg: '#1f7fb8' },
+  { name: 'frutiger', label: 'Frutiger', bg: '#e3f2f0', fg: '#0d6b80' },
+  { name: 'teletext', label: 'Teletext', bg: '#000000', fg: '#ffdd00' },
 ]
 
 export const theme = $state({ name: localStorage.getItem(KEY) || 'default' })

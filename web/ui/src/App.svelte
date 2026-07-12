@@ -194,17 +194,44 @@
     --bad: #d06a5a;
     --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   }
+  /* amber is the accent/highlight color (button bg, role-pill, warn) — it must
+     read as distinct from both --text and --ok, or accents disappear into
+     body text / success turns indistinguishable from warning. WCAG AA
+     (4.5:1) checked against ink/panel for every var below. */
   :global(:root[data-theme='matrix']) {
     --ink: #000000; --panel: #0a0f0a; --line: #14351a; --text: #8fe38f; --dim: #4f9a54;
-    --amber: #33ff33; --ok: #33ff33; --bad: #ff5555;
+    --amber: #c8ff3d; --ok: #33ff33; --bad: #ff5555;
   }
   :global(:root[data-theme='retrocrt']) {
-    --ink: #050200; --panel: #120a02; --line: #3d2400; --text: #ffb000; --dim: #a06800;
+    --ink: #050200; --panel: #120a02; --line: #3d2400; --text: #d99a00; --dim: #b37500;
     --amber: #ffb000; --ok: #c8d400; --bad: #ff3b1f;
   }
+  /* readability comes from the contrast fix above, not a glow — a body-wide
+     bloom just blurred small text further. Glow stays a titles-only flourish. */
+  :global(:root[data-theme='matrix'] h1),
+  :global(:root[data-theme='matrix'] h2),
+  :global(:root[data-theme='retrocrt'] h1),
+  :global(:root[data-theme='retrocrt'] h2) {
+    text-shadow: 0 0 6px currentColor;
+  }
+  /* Frutiger Aero = Vista-era glossy "Aero" chrome + Frutiger's nature
+     photography (blue sky meeting green grass) — teal bridges the two
+     instead of a plain aero blue; panel/ink toned down from icy white. */
   :global(:root[data-theme='frutiger']) {
-    --ink: #eaf6fb; --panel: #ffffff; --line: #bfe3f0; --text: #1b3a4b; --dim: #5c7a89;
-    --amber: #1f7fb8; --ok: #2fae6b; --bad: #e0524a;
+    --ink: #e3f2f0; --panel: #f5fbf8; --line: #cfe8de; --text: #163a30; --dim: #4f6f63;
+    --amber: #0d6b80; --ok: #1c7a46; --bad: #c9392f;
+  }
+  :global(:root[data-theme='frutiger'] body) {
+    /* fixed attachment: gradient spans the viewport once, no hard seam
+       partway down a scrolled page (the old document-relative version had one). */
+    background: linear-gradient(180deg, #bfe3f5 0%, #eef7f2 55%, #dcefe0 100%) fixed;
+  }
+  /* teletext: Ceefax/closed-caption coding — a bright hue per role on
+     near-black, cyan included alongside yellow/magenta/green/red for the
+     real 80s teletext palette (white/yellow/cyan/green/magenta/red). */
+  :global(:root[data-theme='teletext']) {
+    --ink: #000000; --panel: #050006; --line: #3a1f45; --text: #ffdd00; --dim: #29c2c2;
+    --amber: #e619e6; --ok: #33ff66; --bad: #ff3333;
   }
   :global(*) { box-sizing: border-box; }
   :global(body) {
