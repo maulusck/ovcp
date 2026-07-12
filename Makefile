@@ -10,7 +10,7 @@ deps: ## check build tools are on PATH (go, cc, npm, mandoc)
 	@command -v go     >/dev/null || { echo "missing: go (1.22+)"; exit 1; }
 	@command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || { echo "missing: a C compiler (CGO, for the sqlite driver)"; exit 1; }
 	@command -v npm    >/dev/null || { echo "missing: npm (web/ui)"; exit 1; }
-	@command -v mandoc >/dev/null || { echo "missing: mandoc (renders docs/ovcp.8 for the UI's Docs tab)"; exit 1; }
+	@command -v mandoc >/dev/null || { echo "missing: mandoc (renders docs/ovcp.8 for the UI's Docs tab and the CLI's --help)"; exit 1; }
 	@echo "build deps OK"
 
 CTR := $(shell command -v podman || command -v docker)
@@ -34,17 +34,21 @@ ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the 
 	@command -v mandoc >/dev/null || { echo "error: mandoc not found (renders docs/ovcp.8 for the UI's Docs tab)"; exit 1; }
 	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 
-build: ## build bin/ovcp (CGO for sqlite)
+# plain-text render of the man page, embedded for `ovcp --help`
+docs/ovcp.txt: docs/ovcp.8
+	mandoc -T ascii docs/ovcp.8 > $@
+
+build: docs/ovcp.txt ## build bin/ovcp (CGO for sqlite)
 	CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
 
-test: ## run all tests
+test: docs/ovcp.txt ## run all tests
 	go test ./...
 
-vet: ## go vet
+vet: docs/ovcp.txt ## go vet
 	go vet ./...
 
-clean: ## remove build output (bin/, web/dist/)
-	rm -rf bin web/dist
+clean: ## remove build output (bin/, web/dist/, docs/ovcp.txt)
+	rm -rf bin web/dist docs/ovcp.txt
 
 install: build ## install binary + man page
 	install -m 0755 bin/$(BINARY) /usr/bin/$(BINARY)

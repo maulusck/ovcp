@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 
 	"rsc.io/qr"
 
+	"github.com/ovcp/ovcp/docs"
 	"github.com/ovcp/ovcp/internal/api"
 	"github.com/ovcp/ovcp/internal/auth"
 	"github.com/ovcp/ovcp/internal/backup"
@@ -43,6 +45,18 @@ var logLevel = new(slog.LevelVar)
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	// git-style: -h is the quick list, --help pages the full guide; checked
+	// before flag.Parse (which otherwise treats -h/--help identically).
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-h":
+			fmt.Println(commandHelp)
+			return
+		case "--help":
+			page(docs.Text)
+			return
+		}
+	}
 	dataDir := flag.String("data", envOr("OVCP_DATA", "/var/lib/ovcp"), "data directory")
 	flag.Parse()
 	args := flag.Args()
@@ -58,10 +72,11 @@ func main() {
 
 	switch args[0] {
 	case "version":
+		newFlags(args[0]).Parse(args[1:])
 		fmt.Println("ovcp", version)
 
 	case "issue":
-		fs := flag.NewFlagSet("issue", flag.ExitOnError)
+		fs := newFlags(args[0])
 		cn := fs.String("cn", "", "common name (required)")
 		kindS := fs.String("kind", "client", "client|server")
 		days := fs.Int("days", 365, "validity (days)")
@@ -98,7 +113,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "serial:", ic.SerialHex)
 
 	case "revoke":
-		fs := flag.NewFlagSet("revoke", flag.ExitOnError)
+		fs := newFlags(args[0])
 		serial := fs.String("serial", "", "serial (hex, required)")
 		fs.Parse(args[1:])
 		if *serial == "" {
@@ -119,6 +134,7 @@ func main() {
 		fmt.Println("revoked; CRL regenerated:", p.CRLPath())
 
 	case "list":
+		newFlags(args[0]).Parse(args[1:])
 		s := openStore()
 		defer s.Close()
 		certs, err := s.ListCerts()
@@ -135,7 +151,7 @@ func main() {
 		}
 
 	case "export":
-		fs := flag.NewFlagSet("export", flag.ExitOnError)
+		fs := newFlags(args[0])
 		cn := fs.String("cn", "", "client CN (issues fresh cert, required)")
 		remote := fs.String("remote", "", "server host clients connect to (default: OVCP_SERVER_CN / server cert CN)")
 		port := fs.Int("port", 0, "server port (default: the configured server port)")
@@ -181,7 +197,7 @@ func main() {
 		os.Stdout.Write(bundle)
 
 	case "init":
-		fs := flag.NewFlagSet("init", flag.ExitOnError)
+		fs := newFlags(args[0])
 		caCN := fs.String("ca-cn", "OVCP CA", "CA common name")
 		serverCN := fs.String("server-cn", "", "server cert CN / public hostname (required)")
 		years := fs.Int("ca-years", 10, "CA validity")
@@ -256,14 +272,14 @@ func main() {
 		fmt.Printf("admin UI:                https://%s\n", envOr("OVCP_LISTEN", "127.0.0.1:8443"))
 
 	case "serve":
-		fs := flag.NewFlagSet("serve", flag.ExitOnError)
+		fs := newFlags(args[0])
 		listen := fs.String("listen", envOr("OVCP_LISTEN", "127.0.0.1:8443"), "admin UI listen addr(s), comma-separated")
 		sock := fs.String("sock", mgmtSock(), "mgmt socket")
 		fs.Parse(args[1:])
 		runServe(*dataDir, *listen, *sock, p)
 
 	case "status":
-		fs := flag.NewFlagSet("status", flag.ExitOnError)
+		fs := newFlags(args[0])
 		sock := fs.String("sock", mgmtSock(), "mgmt socket")
 		ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 		fs.Parse(args[1:])
@@ -292,7 +308,7 @@ func main() {
 		}
 
 	case "kill":
-		fs := flag.NewFlagSet("kill", flag.ExitOnError)
+		fs := newFlags(args[0])
 		sock := fs.String("sock", mgmtSock(), "mgmt socket")
 		cn := fs.String("cn", "", "client CN (required)")
 		fs.Parse(args[1:])
@@ -306,7 +322,7 @@ func main() {
 		fmt.Println("killed", *cn)
 
 	case "vpn":
-		fs := flag.NewFlagSet("vpn", flag.ExitOnError)
+		fs := newFlags(args[0])
 		ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 		fs.Parse(args[1:])
 		op := fs.Arg(0)
@@ -342,7 +358,7 @@ func main() {
 		}
 
 	case "renew-server":
-		fs := flag.NewFlagSet("renew-server", flag.ExitOnError)
+		fs := newFlags(args[0])
 		days := fs.Int("days", 825, "validity (days)")
 		serverCNFlag := fs.String("server-cn", "", "server CN (default: current server cert's CN / OVCP_SERVER_CN)")
 		fs.Parse(args[1:])
@@ -365,6 +381,7 @@ func main() {
 		fmt.Println("run `ovcp vpn restart` to apply")
 
 	case "rotate-ca":
+		newFlags(args[0]).Parse(args[1:])
 		oldPass := readSecret("Current CA passphrase", "OVCP_CA_PASSPHRASE", false)
 		newPass := readSecret("New CA passphrase", "OVCP_CA_NEW_PASSPHRASE", true)
 		die(p.Rotate(oldPass, newPass))
@@ -379,7 +396,7 @@ func main() {
 		}
 		switch args[1] {
 		case "create":
-			fs := flag.NewFlagSet("backup create", flag.ExitOnError)
+			fs := newFlags("backup " + args[1])
 			out := fs.String("out", "", "output file (default: ovcp-backup-<timestamp>.ovcpbak)")
 			fs.Parse(args[2:])
 			if *out == "" {
@@ -397,7 +414,7 @@ func main() {
 			fmt.Println("keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
 
 		case "restore":
-			fs := flag.NewFlagSet("backup restore", flag.ExitOnError)
+			fs := newFlags("backup " + args[1])
 			force := fs.Bool("force", false, "overwrite an already-initialized data directory")
 			fs.Parse(args[2:])
 			file := fs.Arg(0)
@@ -418,7 +435,7 @@ func main() {
 		}
 
 	case "debug":
-		fs := flag.NewFlagSet("debug", flag.ExitOnError)
+		fs := newFlags(args[0])
 		ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 		fs.Parse(args[1:])
 		op := fs.Arg(0)
@@ -437,7 +454,7 @@ func main() {
 		defer s.Close()
 		switch args[1] {
 		case "add":
-			fs := flag.NewFlagSet("user add", flag.ExitOnError)
+			fs := newFlags("user " + args[1])
 			name := fs.String("name", "", "username (required)")
 			role := fs.String("role", "operator", "admin|operator|readonly")
 			fs.Parse(args[2:])
@@ -452,6 +469,7 @@ func main() {
 			s.Audit("cli", "user_add", "name="+*name+" role="+*role)
 			fmt.Println("user added:", *name, "("+*role+")")
 		case "list":
+			newFlags("user " + args[1]).Parse(args[2:])
 			users, err := s.ListUsers()
 			die(err)
 			for _, u := range users {
@@ -466,21 +484,21 @@ func main() {
 				fmt.Printf("%-20s %-9s %-8s %s\n", u.Username, u.Role, st, tf)
 			}
 		case "del":
-			fs := flag.NewFlagSet("user del", flag.ExitOnError)
+			fs := newFlags("user " + args[1])
 			name := fs.String("name", "", "username")
 			fs.Parse(args[2:])
 			die(s.DeleteUser(*name))
 			s.Audit("cli", "user_del", "name="+*name)
 			fmt.Println("deleted:", *name)
 		case "disable", "enable":
-			fs := flag.NewFlagSet("user "+args[1], flag.ExitOnError)
+			fs := newFlags("user " + args[1])
 			name := fs.String("name", "", "username")
 			fs.Parse(args[2:])
 			die(s.SetUserDisabled(*name, args[1] == "disable"))
 			s.Audit("cli", "user_"+args[1], "name="+*name)
 			fmt.Println(args[1]+"d:", *name)
 		case "passwd":
-			fs := flag.NewFlagSet("user passwd", flag.ExitOnError)
+			fs := newFlags("user " + args[1])
 			name := fs.String("name", "", "username")
 			fs.Parse(args[2:])
 			pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
@@ -490,7 +508,7 @@ func main() {
 			s.Audit("cli", "user_passwd", "name="+*name)
 			fmt.Println("password updated:", *name)
 		case "totp":
-			fs := flag.NewFlagSet("user totp", flag.ExitOnError)
+			fs := newFlags("user " + args[1])
 			name := fs.String("name", "", "username")
 			off := fs.Bool("off", false, "disable 2FA")
 			fs.Parse(args[2:])
@@ -514,6 +532,7 @@ func main() {
 		}
 
 	case "audit":
+		newFlags(args[0]).Parse(args[1:])
 		s := openStore()
 		defer s.Close()
 		tail, err := s.AuditTail(50)
@@ -789,6 +808,13 @@ func envOr(k, def string) string {
 	return def
 }
 
+// newFlags is the one place every command/subcommand builds its FlagSet:
+// named after its own dispatch value (never a separately hardcoded string),
+// always exits on error, so -h and unknown flags behave the same everywhere.
+func newFlags(name string) *flag.FlagSet {
+	return flag.NewFlagSet(name, flag.ExitOnError)
+}
+
 // requirePositive dies with an actionable error on a zero/negative validity
 // period (silently issues an already-expired cert/CA otherwise).
 func requirePositive(n int, flag string) {
@@ -810,8 +836,8 @@ func die(err error) {
 	}
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, `ovcp <command>
+// commandHelp: -h, no args, or an unknown command. --help pages docs.Text instead.
+const commandHelp = `ovcp <command>
   init      -server-cn HOST [-admin NAME]   one-shot setup: CA, server cert,
                                         tls-crypt, config, admin user
   issue     -cn NAME [-kind client|server] [-days N] [-out PREFIX] [-key-pass PW]
@@ -829,6 +855,31 @@ func usage() {
   user      add|list|del|disable|enable|passwd|totp[-off]
   audit                                last 50 audit entries
   serve     [-listen ADDR] [-sock PATH]   run admin UI + API
-  version`)
+  version
+
+-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before
+the command, e.g. ovcp -data /tmp/ovcp init ...
+-h shows this; --help opens the full ovcp(8) guide.`
+
+func usage() {
+	fmt.Fprintln(os.Stderr, commandHelp)
 	os.Exit(2)
+}
+
+// page pipes text through $PAGER, less, or more (first one that runs), or
+// just prints it if none are on PATH. docs.Text (ovcp --help) is rendered
+// to plain text at build time (docs/embed.go), so no man/mandoc at runtime.
+func page(text string) {
+	for _, p := range []string{os.Getenv("PAGER"), "less", "more"} {
+		if p == "" {
+			continue
+		}
+		cmd := exec.Command(p)
+		cmd.Stdin = strings.NewReader(text)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if cmd.Run() == nil {
+			return
+		}
+	}
+	fmt.Print(text)
 }

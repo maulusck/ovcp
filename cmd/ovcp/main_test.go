@@ -105,6 +105,23 @@ func TestVersionAndUsage(t *testing.T) {
 	if r := run(t, nil); r.code != 2 || !strings.Contains(r.stderr, "ovcp <command>") {
 		t.Fatalf("no-args usage: %+v", r)
 	}
+	if r := run(t, nil, "bogus-command"); r.code != 2 || !strings.Contains(r.stderr, "ovcp <command>") {
+		t.Fatalf("unknown command usage: %+v", r)
+	}
+}
+
+// TestHelp: -h is the quick list, --help pages the full guide (both exit 0, stdout).
+func TestHelp(t *testing.T) {
+	if r := run(t, nil, "-h"); r.code != 0 || !strings.Contains(r.stdout, "ovcp <command>") {
+		t.Fatalf("-h: %+v", r)
+	}
+	if r := run(t, nil, "--help"); r.code != 0 || !strings.Contains(r.stdout, "OVCP") {
+		t.Fatalf("--help: %+v", r)
+	}
+	// --help must never fall through to usage()'s "unknown command" path.
+	if r := run(t, nil, "--help"); strings.Contains(r.stdout, "ovcp <command>") {
+		t.Fatalf("--help should render the man page, not the quick list: %+v", r)
+	}
 }
 
 // TestDataFlagPosition covers the -data CLI flag itself (every other test
@@ -249,6 +266,15 @@ func TestRotateCA(t *testing.T) {
 		t.Fatalf("init: %+v", r)
 	}
 
+	// rotate-ca has no flags of its own, so -h must still exit 0 without
+	// falling through to the real (interactive, passphrase-changing) op.
+	if r := run(t, env, "rotate-ca", "-h"); r.code != 0 {
+		t.Fatalf("rotate-ca -h: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "presanity"); r.code != 0 {
+		t.Fatalf("rotate-ca -h must not have rotated the CA: %+v", r)
+	}
+
 	rotate := withEnv(env, "OVCP_CA_NEW_PASSPHRASE=a totally different passphrase")
 	if r := run(t, rotate, "rotate-ca"); r.code != 0 {
 		t.Fatalf("rotate-ca: %+v", r)
@@ -261,6 +287,24 @@ func TestRotateCA(t *testing.T) {
 	newPass := []string{"OVCP_DATA=" + dataDir(env), "OVCP_CA_PASSPHRASE=a totally different passphrase"}
 	if r := run(t, newPass, "issue", "-cn", "carol"); r.code != 0 {
 		t.Fatalf("issue with the new CA passphrase should work: %+v", r)
+	}
+}
+
+// TestNoFlagCommandsAcceptHelp: commands with no flags of their own still
+// parse an (empty) FlagSet, so -h and unknown flags behave like every
+// other command instead of being silently ignored.
+func TestNoFlagCommandsAcceptHelp(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	for _, args := range [][]string{{"version", "-h"}, {"list", "-h"}, {"audit", "-h"}, {"user", "list", "-h"}} {
+		if r := run(t, env, args...); r.code != 0 {
+			t.Fatalf("%v should exit 0 on -h: %+v", args, r)
+		}
+	}
+	if r := run(t, env, "list", "-bogus"); r.code == 0 {
+		t.Fatalf("unknown flag on a no-flag command should still fail: %+v", r)
 	}
 }
 
