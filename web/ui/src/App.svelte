@@ -234,7 +234,7 @@
   :global(label) { display: block; font-size: 13px; color: var(--dim); margin-bottom: 10px; }
   :global(.card) {
     background: var(--panel); border: 1px solid var(--line);
-    border-radius: 6px; padding: 18px;
+    border-radius: 6px; padding: 18px; overflow-x: auto;
   }
   :global(h2) { font-size: 15px; font-weight: 600; margin: 0 0 12px; letter-spacing: .02em; }
   :global(table) { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
@@ -304,7 +304,7 @@
   @media (max-width: 700px) {
     header { padding: 8px 12px; gap: 10px; }
     main { padding: 12px; }
-    .brand strong, .acct-name, .pill-text { display: none; } /* logo, status dot, role pill still identify things */
+    .brand strong, .acct-name, .avatar, .pill-text { display: none; } /* logo, status dot, role pill still identify things */
     nav { display: none; }
     .nav-mobile { display: block; position: relative; }
     .nav-mobile summary {
