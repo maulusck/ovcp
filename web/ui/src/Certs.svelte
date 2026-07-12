@@ -1,5 +1,5 @@
 <script>
-  import { api, apiBlob, downloadBlob } from './api.js'
+  import { api, apiBlob, downloadBlob, copyToClipboard } from './api.js'
   let { canOperate } = $props()
   let certs = $state([])
   let err = $state('')
@@ -27,8 +27,7 @@
 
   let copied = $state('')
   async function copySerial(serial) {
-    try { await navigator.clipboard.writeText(serial) }
-    catch { prompt('Serial:', serial); return }
+    if (!(await copyToClipboard(serial, 'Serial'))) return
     copied = serial
     setTimeout(() => (copied = ''), 1200)
   }

@@ -5,8 +5,8 @@ function csrf() {
 
 export { csrf }
 
-export async function api(method, path, body) {
-  const res = await fetch('/api' + path, {
+function req(method, path, body) {
+  return fetch('/api' + path, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -14,6 +14,10 @@ export async function api(method, path, body) {
     },
     body: body ? JSON.stringify(body) : undefined,
   })
+}
+
+export async function api(method, path, body) {
+  const res = await req(method, path, body)
   const ct = res.headers.get('Content-Type') || ''
   const data = ct.includes('json') ? await res.json() : await res.text()
   if (!res.ok) throw { status: res.status, error: data.error || String(data) }
@@ -24,14 +28,17 @@ export async function api(method, path, body) {
 // of JSON (export/backup/logs downloads) — same CSRF'd POST, but hands back
 // the raw blob and any server-suggested filename instead of parsing JSON.
 export async function apiBlob(method, path, body) {
-  const res = await fetch('/api' + path, {
-    method,
-    headers: { 'Content-Type': 'application/json', 'X-OVCP-CSRF': csrf() },
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  const res = await req(method, path, body)
   if (!res.ok) throw await res.json()
   const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1]
   return { blob: await res.blob(), filename }
+}
+
+// clipboard copy with a prompt() fallback (Safari/insecure-context denials) —
+// shared by Certs.svelte (serial numbers) and Logs.svelte (log/audit text).
+export async function copyToClipboard(text, fallbackLabel) {
+  try { await navigator.clipboard.writeText(text); return true }
+  catch { prompt(fallbackLabel + ':', text); return false }
 }
 
 export function downloadBlob(blob, filename) {

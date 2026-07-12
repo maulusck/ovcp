@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte'
-  import { api, downloadBlob } from './api.js'
+  import { api, downloadBlob, copyToClipboard } from './api.js'
   let { isAdmin } = $props()
 
   // the two plain-text log panels are identical except for these fields;
@@ -62,8 +62,7 @@
 
   let copied = $state('')
   async function copyText(panel, text) {
-    try { await navigator.clipboard.writeText(text) }
-    catch { prompt('Log text:', text); return }
+    if (!(await copyToClipboard(text, 'Log text'))) return
     copied = panel
     setTimeout(() => (copied = ''), 1200)
   }
