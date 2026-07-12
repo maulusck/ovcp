@@ -24,7 +24,6 @@
 
   let user = $state(null)
   let tab = $state(tabs.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
-  let navOpen = $state(false)
   let login = $state({ username: '', password: '', totp: '' })
   let step = $state('creds') // creds | totp
   let err = $state('')
@@ -43,14 +42,6 @@
   })
 
   $effect(() => { localStorage.setItem(TAB_KEY, tab) })
-
-  // close the mobile nav dropdown on an outside tap (native <details> has no such behavior)
-  $effect(() => {
-    if (!navOpen) return
-    const onClick = (e) => { if (!e.target.closest('.nav')) navOpen = false }
-    document.addEventListener('click', onClick)
-    return () => document.removeEventListener('click', onClick)
-  })
 
   async function doLogin(e) {
     e.preventDefault()
@@ -135,14 +126,11 @@
         <i></i>{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? 'restarting' : 'vpn down'}
       </span>
     </div>
-    <details class="nav" bind:open={navOpen}>
-      <summary>{tabs.find(([id]) => id === tab)?.[1]}</summary>
-      <div class="nav-menu">
-        {#each tabs as [id, label]}
-          <button class:active={tab === id} onclick={() => { tab = id; navOpen = false }}>{label}</button>
-        {/each}
-      </div>
-    </details>
+    <nav>
+      {#each tabs as [id, label]}
+        <button class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
+      {/each}
+    </nav>
     <div class="who">
       <select class="theme-pick" value={theme.name} onchange={(e) => setTheme(e.target.value)}
         title="UI theme">
@@ -227,7 +215,7 @@
   :global(label) { display: block; font-size: 13px; color: var(--dim); margin-bottom: 10px; }
   :global(.card) {
     background: var(--panel); border: 1px solid var(--line);
-    border-radius: 6px; padding: 18px; overflow-x: auto;
+    border-radius: 6px; padding: 18px;
   }
   :global(h2) { font-size: 15px; font-weight: 600; margin: 0 0 12px; letter-spacing: .02em; }
   :global(table) { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
@@ -273,12 +261,10 @@
   }
   @keyframes pulse { 50% { opacity: .35; } }
 
-  .nav-menu { display: flex; gap: 4px; }
-  .nav-menu button { background: transparent; color: var(--dim); padding: 6px 12px; }
-  .nav-menu button:hover:not(.active):not(:disabled) { background: var(--ink); color: var(--text); opacity: 1; }
-  .nav-menu button.active { color: var(--text); background: var(--ink); }
-  .nav summary { display: none; list-style: none; cursor: pointer; }
-  .nav summary::-webkit-details-marker { display: none; }
+  nav { display: flex; gap: 4px; }
+  nav button { background: transparent; color: var(--dim); padding: 6px 12px; }
+  nav button:hover:not(.active):not(:disabled) { background: var(--ink); color: var(--text); opacity: 1; }
+  nav button.active { color: var(--text); background: var(--ink); }
   .who { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--dim); }
   .theme-pick { width: auto; padding: 5px 8px; font-size: 12px; }
   .account { display: flex; align-items: center; gap: 8px; }
@@ -292,23 +278,4 @@
   .role-pill.role-operator { color: var(--ok); border-color: var(--ok); }
   main { padding: 18px; max-width: 1100px; margin: 0 auto; }
   @media (prefers-reduced-motion: reduce) { :global(*) { transition: none !important; animation: none !important; } }
-
-  @media (max-width: 700px) {
-    header { padding: 8px 12px; gap: 10px; }
-    main { padding: 12px; }
-    .brand strong, .acct-name { display: none; } /* logo + role pill still identify the app/user */
-    .nav { position: relative; }
-    .nav summary {
-      display: block; color: var(--text); background: var(--ink);
-      border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; font-size: 13px;
-    }
-    .nav summary::after { content: ' \25be'; }
-    .nav-menu {
-      display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 10;
-      flex-direction: column; min-width: 220px; background: var(--panel);
-      border: 1px solid var(--line); border-radius: 6px; padding: 4px; box-shadow: 0 8px 20px rgba(0,0,0,.35);
-    }
-    .nav[open] .nav-menu { display: flex; }
-    .nav-menu button { text-align: left; }
-  }
 </style>

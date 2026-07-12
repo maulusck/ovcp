@@ -188,7 +188,7 @@
   .poll-pick select, .poll-pick input { width: auto; }
   .poll-pick select { padding: 3px 6px; font-size: 12px; }
   .logs-head button.ghost, .panel-actions button.ghost { padding: 3px 10px; font-size: 12px; }
-  .panel-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
+  .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
   /* grid, not CSS columns: columns rebalance every card across the page
      while a box is being resized (the "bouncing" bug); in a grid each card
      stays in its cell and a drag only grows its own row. min(420px, 100%)
@@ -221,12 +221,5 @@
   .card:fullscreen .scrollbox {
     /* !important so fullscreen wins over the inline height set by drags/fitToContent */
     height: auto !important; max-height: calc(100vh - 100px); resize: none;
-  }
-
-  @media (max-width: 700px) {
-    /* auto-fit already collapses to one column under ~860px, but force it
-       explicitly so the log panels never sit side-by-side on a phone */
-    .logs-grid { grid-template-columns: 1fr; gap: 14px; }
-    .logs-head { justify-content: flex-start; }
   }
 </style>
