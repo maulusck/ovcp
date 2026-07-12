@@ -114,6 +114,9 @@ on its next handshake (\fBcrl\-verify\fR is always configured).
 Re\-encrypt the CA private key under a new passphrase (prompts for the
 current one, then the new one twice). The CA keypair and certificate are
 unchanged \(en issued certificates stay valid, nothing needs reissuing.
+\fICLI\-only\fR by design \(en a rare maintenance operation, not a routine
+one like \fBissue\fR/\fBrevoke\fR, so the new passphrase never has to cross
+the HTTP surface at all.
 .TP
 .B renew\-server [\fB\-days\fR \fIN\fR] [\fB\-server\-cn\fR \fICN\fR]
 Reissue the openvpn server certificate (a fresh keypair and serial),
@@ -177,7 +180,7 @@ op prints the resulting openvpn pid, so a repeated
 .B start
 reports \(lqalready started\(rq rather than spawning a second process.
 .TP
-.B user add|list|disable|enable|passwd|totp
+.B user add|list|del|disable|enable|passwd|totp
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
 (certificates, disconnects), \fBreadonly\fR.
 .B user totp
