@@ -24,6 +24,7 @@
 
   let user = $state(null)
   let tab = $state(tabs.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
+  let navOpen = $state(false)
   let login = $state({ username: '', password: '', totp: '' })
   let step = $state('creds') // creds | totp
   let err = $state('')
@@ -42,6 +43,14 @@
   })
 
   $effect(() => { localStorage.setItem(TAB_KEY, tab) })
+
+  // close the mobile nav dropdown on an outside tap (native <details> has no such behavior)
+  $effect(() => {
+    if (!navOpen) return
+    const onClick = (e) => { if (!e.target.closest('.nav-mobile')) navOpen = false }
+    document.addEventListener('click', onClick)
+    return () => document.removeEventListener('click', onClick)
+  })
 
   async function doLogin(e) {
     e.preventDefault()
@@ -123,7 +132,7 @@
       <Logo />
       <strong>OVCP</strong>
       <span class="pill {vpn.phase}" title={phaseText} role="status">
-        <i></i>{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? 'restarting' : 'vpn down'}
+        <i></i><span class="pill-text">{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? 'restarting' : 'vpn down'}</span>
       </span>
     </div>
     <nav>
@@ -131,6 +140,16 @@
         <button class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
       {/each}
     </nav>
+    <!-- mobile-only dropdown twin of the nav above; hidden by default so
+         desktop CSS/markup above is untouched (see @media max-width:700px) -->
+    <details class="nav-mobile" bind:open={navOpen}>
+      <summary>{tabs.find(([id]) => id === tab)?.[1]}</summary>
+      <div class="nav-menu">
+        {#each tabs as [id, label]}
+          <button class:active={tab === id} onclick={() => { tab = id; navOpen = false }}>{label}</button>
+        {/each}
+      </div>
+    </details>
     <div class="who">
       <select class="theme-pick" value={theme.name} onchange={(e) => setTheme(e.target.value)}
         title="UI theme">
@@ -262,9 +281,12 @@
   @keyframes pulse { 50% { opacity: .35; } }
 
   nav { display: flex; gap: 4px; }
-  nav button { background: transparent; color: var(--dim); padding: 6px 12px; }
-  nav button:hover:not(.active):not(:disabled) { background: var(--ink); color: var(--text); opacity: 1; }
-  nav button.active { color: var(--text); background: var(--ink); }
+  nav button, .nav-menu button { background: transparent; color: var(--dim); padding: 6px 12px; }
+  nav button:hover:not(.active):not(:disabled), .nav-menu button:hover:not(.active):not(:disabled) {
+    background: var(--ink); color: var(--text); opacity: 1;
+  }
+  nav button.active, .nav-menu button.active { color: var(--text); background: var(--ink); }
+  .nav-mobile { display: none; } /* shown only under the mobile breakpoint below */
   .who { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--dim); }
   .theme-pick { width: auto; padding: 5px 8px; font-size: 12px; }
   .account { display: flex; align-items: center; gap: 8px; }
@@ -278,4 +300,25 @@
   .role-pill.role-operator { color: var(--ok); border-color: var(--ok); }
   main { padding: 18px; max-width: 1100px; margin: 0 auto; }
   @media (prefers-reduced-motion: reduce) { :global(*) { transition: none !important; animation: none !important; } }
+
+  @media (max-width: 700px) {
+    header { padding: 8px 12px; gap: 10px; }
+    main { padding: 12px; }
+    .brand strong, .acct-name, .pill-text { display: none; } /* logo, status dot, role pill still identify things */
+    nav { display: none; }
+    .nav-mobile { display: block; position: relative; }
+    .nav-mobile summary {
+      display: block; list-style: none; cursor: pointer; color: var(--text); background: var(--ink);
+      border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; font-size: 13px;
+    }
+    .nav-mobile summary::-webkit-details-marker { display: none; }
+    .nav-mobile summary::after { content: ' \25be'; }
+    .nav-menu {
+      display: none; flex-direction: column; position: absolute; top: calc(100% + 4px); left: 0; z-index: 10;
+      min-width: 220px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+      padding: 4px; box-shadow: 0 8px 20px rgba(0,0,0,.35);
+    }
+    .nav-mobile[open] .nav-menu { display: flex; }
+    .nav-menu button { text-align: left; }
+  }
 </style>
