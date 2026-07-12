@@ -2,9 +2,16 @@ BINARY  := ovcp
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test vet clean install help ui release man image deb rpm
+.PHONY: build test vet clean install help ui release man image deb rpm deps
 
 release: ui build ## UI + binary
+
+deps: ## check build tools are on PATH (go, cc, npm, mandoc)
+	@command -v go     >/dev/null || { echo "missing: go (1.22+)"; exit 1; }
+	@command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || { echo "missing: a C compiler (CGO, for the sqlite driver)"; exit 1; }
+	@command -v npm    >/dev/null || { echo "missing: npm (web/ui)"; exit 1; }
+	@command -v mandoc >/dev/null || { echo "missing: mandoc (renders docs/ovcp.8 for the UI's Docs tab)"; exit 1; }
+	@echo "build deps OK"
 
 CTR := $(shell command -v podman || command -v docker)
 

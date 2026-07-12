@@ -5,6 +5,10 @@ easy-rsa), client `.ovpn` export, audit log. One static Go binary with the
 Svelte UI embedded. OpenVPN itself is an external dependency, controlled
 only via its management unix socket.
 
+Runtime needs `openvpn` on `PATH`. Building needs Go 1.22+, a C compiler,
+Node/npm, and `mandoc` — run `make deps` to check, or see `man ovcp` for
+the full list.
+
 ## Quick start (dev)
 
 ```sh
@@ -65,6 +69,5 @@ go test ./...
 cd web/ui && npm run dev   # UI dev server (proxy API manually or run serve)
 ```
 
-Building the UI (`make ui`/`make release`) needs `mandoc` on `PATH` — it
-renders `docs/ovcp.8` into the Docs tab. Already in the container build
-stage; install it locally too (`apk add mandoc` / `apt install mandoc`).
+`mandoc` isn't packaged everywhere by default — `apk add mandoc` / `apt
+install mandoc` (already in the container build stage).

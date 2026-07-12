@@ -27,6 +27,17 @@ compromise the CA.
 This page is also rendered into the web UI's \fBDocs\fR tab at build time
 (\fBmandoc\fR, see \fImake ui\fR) \(en one source, readable with or without
 a terminal.
+.SH REQUIREMENTS
+Runtime:
+.BR openvpn (8)
+on \fBPATH\fR \(en ovcp starts, stops, and controls it but never bundles
+it. Linux with \fI/dev/net/tun\fR; root or \fBCAP_NET_ADMIN\fR for openvpn
+to bring the tunnel up (see \fBPRIVILEGES\fR).
+.PP
+Build: Go 1.22+, a C compiler (\fBCGO_ENABLED=1\fR, needed by the sqlite
+driver), Node/npm (Svelte UI sources), and \fBmandoc\fR (renders this page
+into the UI's Docs tab, see \fImake ui\fR). Optional: \fBnfpm\fR (\fImake
+deb\fR/\fImake rpm\fR), \fBpodman\fR or \fBdocker\fR (\fImake image\fR).
 .SH SECURITY
 Tier\-2 CA model: the CA private key is encrypted at rest (argon2id +
 AES\-256\-GCM); every signing operation (\fBissue\fR, \fBrevoke\fR) requires

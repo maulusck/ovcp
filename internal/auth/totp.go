@@ -23,13 +23,13 @@ func TOTPGenerateSecret() (string, error) {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
 }
 
-// TOTPProvisioningURL → otpauth:// URI for authenticator apps. issuer keeps
-// "OVCP" so enrollments stay searchable, with the FQDN appended so multiple
-// deployments stay distinguishable: "OVCP (vpn.example.com)".
+// TOTPProvisioningURL → otpauth:// URI for authenticator apps. Issuer (shown
+// as the entry title) stays a plain "OVCP"; the FQDN goes into the account
+// name (shown as the subtitle) instead, e.g. "OVCP" / "alice@vpn.example.com".
 func TOTPProvisioningURL(secret, account, fqdn string) string {
-	issuer := "OVCP"
+	const issuer = "OVCP"
 	if fqdn != "" {
-		issuer = "OVCP (" + fqdn + ")"
+		account = account + "@" + fqdn
 	}
 	return fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s",
 		url.PathEscape(issuer), url.PathEscape(account), secret, url.QueryEscape(issuer))
