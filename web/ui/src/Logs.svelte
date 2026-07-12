@@ -188,13 +188,8 @@
   .poll-pick select { padding: 3px 6px; font-size: 12px; }
   .logs-head button.ghost, .panel-actions button.ghost { padding: 3px 10px; font-size: 12px; }
   .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
-  /* grid, not CSS columns: columns rebalance every card across the page
-     while a box is being resized (the "bouncing" bug); in a grid each card
-     stays in its cell and a drag only grows its own row. min(420px, 100%)
-     keeps narrow screens from overflowing horizontally. Card order is set
-     inline per-card from openState (expanded first, collapsed trail at the
-     end) — grid honors `order` for auto-placement, so no drag/drop needed
-     to keep open boxes up top. */
+  /* grid not columns: columns rebalance every card while one resizes (bouncing).
+     order is set inline from openState so open cards stay first without drag/drop. */
   .logs-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
     gap: 22px; align-items: start;
@@ -202,10 +197,8 @@
   .logs-grid :global(.card) { padding: 10px 14px; }
   summary { cursor: pointer; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
   details[open] summary { margin-bottom: 14px; }
-  /* compact by default (260px cap, shorter if the log is shorter — see
-     fitToContent, which does what CSS fit-content can't cross-browser);
-     the native resize handle can grow a box up to 80vh, and fitToContent
-     snaps a drag back down to the content height on release. */
+  /* height clamps to content via fitToContent (CSS fit-content isn't cross-browser);
+     the resize handle can grow it, fitToContent snaps back down on release. */
   .scrollbox {
     height: 260px; min-height: 60px; max-height: 80vh;
     overflow: auto; resize: vertical; cursor: grab;
