@@ -134,17 +134,35 @@ func TestCSRF(t *testing.T) {
 	}
 }
 
+// TestRBAC guards the role each route is registered with in Handler(), not
+// just wrap() itself: every privileged route must reject a readonly session.
 func TestRBAC(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
 	if r := e.req("GET", "/api/certs", "", false); r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
-	if r := e.req("POST", "/api/certs", `{"CN":"x","Passphrase":"p"}`, true); r.StatusCode != 403 {
-		t.Fatal("readonly issue must 403, got", r.Status)
-	}
-	if r := e.req("POST", "/api/vpn/restart", "", true); r.StatusCode != 403 {
-		t.Fatal("readonly vpn op must 403, got", r.Status)
+	for _, ep := range []struct{ method, path string }{
+		{"POST", "/api/clients/kill"},
+		{"POST", "/api/certs"},
+		{"POST", "/api/certs/revoke"},
+		{"POST", "/api/certs/renew-server"},
+		{"POST", "/api/backup"},
+		{"POST", "/api/certs/export"},
+		{"PUT", "/api/config"},
+		{"POST", "/api/vpn/restart"},
+		{"POST", "/api/debug"},
+		{"GET", "/api/users"},
+		{"POST", "/api/users"},
+		{"DELETE", "/api/users/x"},
+		{"PATCH", "/api/users/x"},
+		{"POST", "/api/users/x/password"},
+		{"POST", "/api/users/x/totp"},
+		{"DELETE", "/api/users/x/totp"},
+	} {
+		if r := e.req(ep.method, ep.path, "{}", true); r.StatusCode != 403 {
+			t.Fatalf("%s %s as readonly = %d, want 403", ep.method, ep.path, r.StatusCode)
+		}
 	}
 }
 
@@ -180,14 +198,6 @@ func TestRenewServer(t *testing.T) {
 	}
 }
 
-func TestRenewServerRBAC(t *testing.T) {
-	e := setup(t)
-	e.login("viewer")
-	if r := e.req("POST", "/api/certs/renew-server", `{"Passphrase":"`+pass+`"}`, true); r.StatusCode != 403 {
-		t.Fatal("readonly renew-server must 403, got", r.Status)
-	}
-}
-
 func TestBackup(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
@@ -201,14 +211,6 @@ func TestBackup(t *testing.T) {
 	body, _ := io.ReadAll(r.Body)
 	if len(body) == 0 {
 		t.Fatal("empty archive")
-	}
-}
-
-func TestBackupRBAC(t *testing.T) {
-	e := setup(t)
-	e.login("viewer")
-	if r := e.req("POST", "/api/backup", `{"Passphrase":"a-backup-passphrase"}`, true); r.StatusCode != 403 {
-		t.Fatal("readonly backup must 403, got", r.Status)
 	}
 }
 
@@ -236,6 +238,72 @@ func TestConfigPutValidation(t *testing.T) {
 	}
 	if r := e.req("POST", "/api/vpn/restart", "", true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
+	}
+}
+
+// TestUserEndpoints covers the user-management routes, above all the two
+// self-lockout guards ("cannot delete/disable your own account") that exist
+// only in this layer — the CLI has no such guard and auth never sees them.
+func TestUserEndpoints(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	if r := e.req("POST", "/api/users", `{"Username":"bob","Password":"`+testUserPW+`","Role":"operator"}`, true); r.StatusCode != 200 {
+		t.Fatal("add:", r.Status)
+	}
+	if r := e.req("POST", "/api/users", `{"Username":"eve","Password":"short","Role":"operator"}`, true); r.StatusCode != 400 {
+		t.Fatal("short password must 400, got", r.Status)
+	}
+	if r := e.req("DELETE", "/api/users/admin", "", true); r.StatusCode != 400 {
+		t.Fatal("self-delete must 400, got", r.Status)
+	}
+	if r := e.req("PATCH", "/api/users/admin", `{"Disabled":true}`, true); r.StatusCode != 400 {
+		t.Fatal("self-disable must 400, got", r.Status)
+	}
+	if r := e.req("PATCH", "/api/users/bob", `{"Disabled":true}`, true); r.StatusCode != 200 {
+		t.Fatal("disable bob:", r.Status)
+	}
+
+	r := e.req("POST", "/api/users/bob/totp", "", true)
+	var totp struct{ Secret, URL, QR string }
+	json.NewDecoder(r.Body).Decode(&totp)
+	if r.StatusCode != 200 || totp.Secret == "" || !strings.HasPrefix(totp.QR, "data:image/svg+xml;base64,") {
+		t.Fatalf("totp enroll: status=%d %+v", r.StatusCode, totp)
+	}
+	if r := e.req("DELETE", "/api/users/bob/totp", "", true); r.StatusCode != 200 {
+		t.Fatal("totp off:", r.Status)
+	}
+
+	if r := e.req("DELETE", "/api/users/bob", "", true); r.StatusCode != 200 {
+		t.Fatal("delete bob:", r.Status)
+	}
+	if r := e.req("DELETE", "/api/users/bob", "", true); r.StatusCode != 400 {
+		t.Fatal("deleting a missing user must 400, got", r.Status)
+	}
+}
+
+// TestExportBundle: the API twin of the CLI's TestExportFollowsConfig — the
+// rendered profile must reflect the persisted server config, not defaults.
+func TestExportBundle(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	if r := e.req("PUT", "/api/config", `{"Proto":"tcp","Port":443,"Cipher":"CHACHA20-POLY1305"}`, true); r.StatusCode != 200 {
+		t.Fatal("config put:", r.Status)
+	}
+	r := e.req("POST", "/api/certs/export", `{"CN":"alice","Passphrase":"`+pass+`"}`, true)
+	if r.StatusCode != 200 {
+		t.Fatal("export:", r.Status)
+	}
+	if cd := r.Header.Get("Content-Disposition"); !strings.Contains(cd, "alice.ovpn") {
+		t.Fatalf("Content-Disposition = %q, want the CN in it", cd)
+	}
+	body, _ := io.ReadAll(r.Body)
+	for _, want := range []string{
+		"remote vpn.example.com 443", "proto tcp", "data-ciphers CHACHA20-POLY1305",
+		"verify-x509-name vpn.example.com name", "<cert>", "<key>", "<tls-crypt>",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("bundle missing %q:\n%s", want, body)
+		}
 	}
 }
 

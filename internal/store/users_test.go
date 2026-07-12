@@ -4,7 +4,30 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestSessionExpiry: an expired session must resolve to nil user — without
+// this, sessions that never expire would pass the whole suite.
+func TestSessionExpiry(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	id, err := s.AddUser("alice", "hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.AddSession("expired", id, -time.Second)
+	if u, err := s.SessionUser("expired"); err != nil || u != nil {
+		t.Fatalf("expired session must be nil user, got %+v err=%v", u, err)
+	}
+	s.AddSession("live", id, time.Hour)
+	if u, err := s.SessionUser("live"); err != nil || u == nil || u.Username != "alice" {
+		t.Fatalf("live session must resolve, got %+v err=%v", u, err)
+	}
+}
 
 func TestTOTPSecretEncryptedAtRest(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ovcp.db"))

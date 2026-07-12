@@ -57,4 +57,14 @@ func TestRender(t *testing.T) {
 	if strings.Contains(string(c.Render()), "explicit-exit-notify") {
 		t.Fatal("exit-notify must be udp-only")
 	}
+	c.RunAsUser = ""
+	if strings.Contains(string(c.Render()), "\nuser ") {
+		t.Fatal("empty RunAsUser must omit the user/group lines")
+	}
+}
+
+func TestLoadCorrupt(t *testing.T) {
+	if c := Load("{corrupt"); c.Port != Default().Port || c.Proto != Default().Proto {
+		t.Fatalf("corrupt JSON must fall back to defaults, got %+v", c)
+	}
 }
