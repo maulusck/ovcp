@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,7 +25,6 @@ import (
 
 	"rsc.io/qr"
 
-	"github.com/ovcp/ovcp/docs"
 	"github.com/ovcp/ovcp/internal/api"
 	"github.com/ovcp/ovcp/internal/auth"
 	"github.com/ovcp/ovcp/internal/backup"
@@ -45,18 +43,7 @@ var logLevel = new(slog.LevelVar)
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
-	// git-style: -h is the quick list, --help pages the full guide; checked
-	// before flag.Parse (which otherwise treats -h/--help identically).
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "-h":
-			fmt.Println(commandHelp)
-			return
-		case "--help":
-			page(docs.Text)
-			return
-		}
-	}
+	flag.Usage = func() { fmt.Fprintln(os.Stderr, commandHelp) }
 	dataDir := flag.String("data", envOr("OVCP_DATA", "/var/lib/ovcp"), "data directory")
 	flag.Parse()
 	args := flag.Args()
@@ -221,7 +208,9 @@ func main() {
 			s.Audit("system", "ca_init", "cn="+*caCN)
 			fmt.Println("[1/5] CA initialized:", pp.CACert)
 		case pki.ErrCAExists:
-			die2(p.CheckPassphrase(pass), "existing CA")
+			if err := p.CheckPassphrase(pass); err != nil {
+				die(fmt.Errorf("existing CA: %w", err))
+			}
 			fmt.Println("[1/5] CA exists, passphrase ok")
 		default:
 			die(err)
@@ -730,20 +719,16 @@ func adminCertCN(dataDir string) string {
 	if v := os.Getenv("OVCP_SERVER_CN"); v != "" {
 		return v
 	}
-	if data, err := os.ReadFile(dataPaths(dataDir).ServerCert); err == nil {
-		if c, err := parseFirstCert(data); err == nil {
+	data, err := os.ReadFile(dataPaths(dataDir).ServerCert)
+	if err != nil {
+		return ""
+	}
+	if block, _ := pem.Decode(data); block != nil {
+		if c, err := x509.ParseCertificate(block.Bytes); err == nil {
 			return c.Subject.CommonName
 		}
 	}
 	return ""
-}
-
-func parseFirstCert(pemData []byte) (*x509.Certificate, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, fmt.Errorf("no PEM")
-	}
-	return x509.ParseCertificate(block.Bytes)
 }
 
 func loadOrCreateTLSCrypt(path string) ([]byte, error) {
@@ -808,9 +793,8 @@ func envOr(k, def string) string {
 	return def
 }
 
-// newFlags is the one place every command/subcommand builds its FlagSet:
-// named after its own dispatch value (never a separately hardcoded string),
-// always exits on error, so -h and unknown flags behave the same everywhere.
+// newFlags: every command's FlagSet, named after its dispatch value, so -h
+// and unknown flags behave the same everywhere.
 func newFlags(name string) *flag.FlagSet {
 	return flag.NewFlagSet(name, flag.ExitOnError)
 }
@@ -823,12 +807,6 @@ func requirePositive(n int, flag string) {
 	}
 }
 
-func die2(err error, ctx string) {
-	if err != nil {
-		die(fmt.Errorf("%s: %w", ctx, err))
-	}
-}
-
 func die(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -836,7 +814,7 @@ func die(err error) {
 	}
 }
 
-// commandHelp: -h, no args, or an unknown command. --help pages docs.Text instead.
+// commandHelp: -h/--help, no args, or an unknown command.
 const commandHelp = `ovcp <command>
   init      -server-cn HOST [-admin NAME]   one-shot setup: CA, server cert,
                                         tls-crypt, config, admin user
@@ -859,27 +837,10 @@ const commandHelp = `ovcp <command>
 
 -data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before
 the command, e.g. ovcp -data /tmp/ovcp init ...
--h shows this; --help opens the full ovcp(8) guide.`
+Full guide: ovcp(8).`
 
+// usage: no args or unknown command — same text as -h, but exit 2.
 func usage() {
-	fmt.Fprintln(os.Stderr, commandHelp)
+	flag.Usage()
 	os.Exit(2)
-}
-
-// page pipes text through $PAGER, less, or more (first one that runs), or
-// just prints it if none are on PATH. docs.Text (ovcp --help) is rendered
-// to plain text at build time (docs/embed.go), so no man/mandoc at runtime.
-func page(text string) {
-	for _, p := range []string{os.Getenv("PAGER"), "less", "more"} {
-		if p == "" {
-			continue
-		}
-		cmd := exec.Command(p)
-		cmd.Stdin = strings.NewReader(text)
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		if cmd.Run() == nil {
-			return
-		}
-	}
-	fmt.Print(text)
 }

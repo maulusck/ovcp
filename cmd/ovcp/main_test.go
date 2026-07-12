@@ -110,17 +110,12 @@ func TestVersionAndUsage(t *testing.T) {
 	}
 }
 
-// TestHelp: -h is the quick list, --help pages the full guide (both exit 0, stdout).
+// TestHelp: -h and --help print the command list and exit 0.
 func TestHelp(t *testing.T) {
-	if r := run(t, nil, "-h"); r.code != 0 || !strings.Contains(r.stdout, "ovcp <command>") {
-		t.Fatalf("-h: %+v", r)
-	}
-	if r := run(t, nil, "--help"); r.code != 0 || !strings.Contains(r.stdout, "OVCP") {
-		t.Fatalf("--help: %+v", r)
-	}
-	// --help must never fall through to usage()'s "unknown command" path.
-	if r := run(t, nil, "--help"); strings.Contains(r.stdout, "ovcp <command>") {
-		t.Fatalf("--help should render the man page, not the quick list: %+v", r)
+	for _, f := range []string{"-h", "--help"} {
+		if r := run(t, nil, f); r.code != 0 || !strings.Contains(r.stderr, "ovcp <command>") {
+			t.Fatalf("%s: %+v", f, r)
+		}
 	}
 }
 
