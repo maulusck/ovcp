@@ -2,9 +2,9 @@ BINARY  := ovcp
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test vet clean install help ui release man image deb rpm deps
+.PHONY: build test vet clean install help ui release man image deb rpm deps completions
 
-release: ui build ## UI + binary
+release: ui build completions ## UI + binary + shell completions
 
 deps: ## check build tools are on PATH (go, cc, npm, mandoc)
 	@command -v go     >/dev/null || { echo "missing: go (1.22+)"; exit 1; }
@@ -20,6 +20,7 @@ image: ## build all-in-one container image (podman, else docker)
 	$(CTR) build -t ovcp -f Containerfile .
 
 deb rpm: release ## build package (needs nfpm)
+	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
 	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@
 
 help: ## show targets
@@ -36,18 +37,27 @@ ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the 
 build: ## build bin/ovcp (CGO for sqlite)
 	CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
 
+completions: build ## generate shell completion scripts into dist/completion
+	mkdir -p dist/completion
+	bin/$(BINARY) completion bash > dist/completion/ovcp.bash
+	bin/$(BINARY) completion zsh  > dist/completion/ovcp.zsh
+	bin/$(BINARY) completion fish > dist/completion/ovcp.fish
+
 test: ## run all tests
 	go test ./...
 
 vet: ## go vet
 	go vet ./...
 
-clean: ## remove build output (bin/, web/dist/)
-	rm -rf bin web/dist
+clean: ## remove build output (bin/, web/dist/, dist/)
+	rm -rf bin web/dist dist
 
-install: build ## install binary + man page
+install: build completions ## install binary + man page + shell completions
 	install -m 0755 bin/$(BINARY) /usr/bin/$(BINARY)
 	install -D -m 0644 docs/ovcp.8 /usr/share/man/man8/ovcp.8
+	install -D -m 0644 dist/completion/ovcp.bash /usr/share/bash-completion/completions/ovcp
+	install -D -m 0644 dist/completion/ovcp.zsh /usr/share/zsh/site-functions/_ovcp
+	install -D -m 0644 dist/completion/ovcp.fish /usr/share/fish/vendor_completions.d/ovcp.fish
 
 man: ## preview man page
 	man ./docs/ovcp.8

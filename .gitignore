@@ -1,4 +1,5 @@
 /bin/
+/dist/
 /web/dist/
 node_modules/
 .vscode

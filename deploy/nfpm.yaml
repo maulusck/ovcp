@@ -15,3 +15,9 @@ contents:
     dst: /usr/lib/systemd/system/ovcp.service
   - src: docs/ovcp.8
     dst: /usr/share/man/man8/ovcp.8
+  - src: dist/completion/ovcp.bash
+    dst: /usr/share/bash-completion/completions/ovcp
+  - src: dist/completion/ovcp.zsh
+    dst: /usr/share/zsh/site-functions/_ovcp
+  - src: dist/completion/ovcp.fish
+    dst: /usr/share/fish/vendor_completions.d/ovcp.fish
