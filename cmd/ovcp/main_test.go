@@ -255,6 +255,63 @@ func TestExportFollowsConfig(t *testing.T) {
 	}
 }
 
+func TestExportSplitTunnel(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	// RedirectGW defaults to true — split-tunnel should apply out of the box.
+	r := run(t, env, "export", "-cn", "alice", "-remote", "vpn.example.com", "-split-tunnel")
+	if r.code != 0 || !strings.Contains(r.stdout, `pull-filter ignore "redirect-gateway"`) {
+		t.Fatalf("split-tunnel should apply when the server redirects: %+v", r)
+	}
+
+	s, err := store.Open(filepath.Join(dataDir(env), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ovpnconf.Default()
+	cfg.RedirectGW = false
+	raw, _ := json.Marshal(cfg)
+	if err := s.SetSetting("server_config", string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	r2 := run(t, env, "export", "-cn", "bob", "-remote", "vpn.example.com", "-split-tunnel")
+	if r2.code == 0 {
+		t.Fatalf("split-tunnel should be rejected when the server doesn't redirect: %+v", r2)
+	}
+}
+
+func TestCommaOrLines(t *testing.T) {
+	if got := commaOrLines("keepalive 5 30"); got != "keepalive 5 30" {
+		t.Fatalf("single directive should pass through unchanged, got %q", got)
+	}
+	if got := commaOrLines("keepalive 5 30, verb 4"); got != "keepalive 5 30\nverb 4" {
+		t.Fatalf("comma list should split into lines, got %q", got)
+	}
+	if got := commaOrLines("keepalive 5 30\nverb 4"); got != "keepalive 5 30\nverb 4" {
+		t.Fatalf("already-newlined text (e.g. $(cat FILE)) must pass through unchanged, got %q", got)
+	}
+}
+
+func TestExportCustomOpts(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	r := run(t, env, "export", "-cn", "alice", "-remote", "vpn.example.com", "-custom-opts", "keepalive 5 30,verb 4")
+	if r.code != 0 {
+		t.Fatalf("export: %+v", r)
+	}
+	for _, want := range []string{"keepalive 5 30", "verb 4"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("missing %q in bundle: %+v", want, r)
+		}
+	}
+}
+
 func TestRotateCA(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {

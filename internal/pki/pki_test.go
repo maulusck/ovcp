@@ -178,6 +178,16 @@ func TestRenderOVPN(t *testing.T) {
 			t.Fatalf("missing %q in bundle", want)
 		}
 	}
+	if bytes.Contains(out, []byte("pull-filter")) {
+		t.Fatal("pull-filter must be omitted when SplitTunnel is false")
+	}
+	out, err = RenderOVPN(BundleParams{Remote: "vpn.example.com", Port: 1194, Proto: "udp", SplitTunnel: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`pull-filter ignore "redirect-gateway"`)) {
+		t.Fatal("SplitTunnel must add a pull-filter ignoring redirect-gateway")
+	}
 }
 
 func TestRenderOVPNRejectsInjection(t *testing.T) {

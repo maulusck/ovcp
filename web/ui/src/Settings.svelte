@@ -100,6 +100,9 @@
           <input type="checkbox" bind:checked={cfg.RedirectGW} disabled={!isAdmin} />
           Route all client traffic through the VPN
         </label>
+        <label class="wide">Custom options
+          <textarea bind:value={cfg.Extra} rows="2" placeholder="e.g. client-to-client" disabled={!isAdmin}></textarea>
+        </label>
       </div>
       {#if err}<p class="err">{err}</p>{/if}
       {#if ok}<p class="ok">{ok}</p>{/if}
@@ -144,6 +147,12 @@
   .server-card { margin-bottom: 18px; }
   .check { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   .check input { width: auto; }
+  .wide { grid-column: 1 / -1; }
+  .wide textarea {
+    width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
+    background: var(--ink); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 7px 10px;
+  }
   .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
   .small { font-size: 12px; margin: 8px 0; }

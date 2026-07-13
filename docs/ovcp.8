@@ -1,4 +1,4 @@
-.TH OVCP 8 "2026-07-12" "ovcp" "System Administration"
+.TH OVCP 8 "2026-07-13" "ovcp" "System Administration"
 .SH NAME
 ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for an OpenVPN server
 .SH SYNOPSIS
@@ -64,6 +64,15 @@ SameSite=Strict cookies), CSRF tokens on every mutating request, RBAC
 TOTP 2FA, rate\-limited logins (locks out a username+IP pair after repeated
 failures, self\-clears after the window passes), and a full audit log
 (\fBaudit\fR).
+.PP
+\fBcustom\-opts\fR (server config) and \fBexport\fR's
+\fB\-custom\-opts\fR (one client's profile) both append raw openvpn
+directives verbatim, with no parsing or validation. Neither needs a role
+beyond what already gates that surface: server config is
+\fBadmin\fR\-only already (\fBPUT /api/config\fR), and whichever role can
+export a profile at all already chooses its remote host, port, proto, and
+cipher. A bad directive just fails openvpn's next start (server) or that
+one client's next connection attempt (client) \(en never other clients.
 .SH QUICK START
 .nf
 .RS
@@ -119,16 +128,47 @@ unlock an encrypted key non\-interactively at startup). \fB\-days\fR must
 be positive. Only one certificate per CN may be active (non\-revoked) at a
 time \(en \fBrevoke\fR the existing one first to reissue under the same CN.
 .TP
-.B export \fB\-cn\fR \fINAME\fR [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR]
+.B export \fB\-cn\fR \fINAME\fR [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR] [\fB\-split\-tunnel\fR] [\fB\-custom\-opts\fR \fIOPTS\fR|\fB\-\fR]
 Issue a fresh client certificate and print a complete inline
 \fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout, or write it to
 \fIPREFIX\fR\fI.ovpn\fR with \fB\-out\fR (same convention as \fBissue\fR).
 \fB\-remote\fR defaults to \fBOVCP_SERVER_CN\fR / the server cert's CN, and
 is only required if neither is set. \fB\-port\fR, \fB\-proto\fR, and the
 data cipher default to the server's configured values (set via the web
-UI's Settings tab \(en there is no CLI equivalent); pass \fB\-port\fR or
-\fB\-proto\fR to override. \fB\-key\-pass\fR password\-protects the
-embedded key. Same one\-active\-cert\-per\-CN rule as \fBissue\fR.
+UI's Settings tab \(en there is no CLI equivalent for those three); pass
+\fB\-port\fR or \fB\-proto\fR to override. \fB\-key\-pass\fR
+password\-protects the embedded key. Same one\-active\-cert\-per\-CN rule
+as \fBissue\fR.
+.RS
+.TP
+\fB\-split\-tunnel\fR
+Adds a client\-side \fBpull\-filter\fR that ignores the server's pushed
+\fBredirect\-gateway\fR, so this one client keeps its own default route
+instead of tunneling all traffic; every other pushed option (DNS, explicit
+routes) still applies. Only accepted when the server itself redirects all
+traffic (\fBRoute all client traffic through the VPN\fR, web UI Settings)
+\(en rejected otherwise, since there is nothing to opt out of. Also
+available from the web UI (Certs tab), shown only when the server
+redirects.
+.TP
+\fB\-custom\-opts\fR
+Appends raw openvpn directives to this one client's profile, unvalidated
+\(en a bad line only breaks that one client's connection, never the
+server. Three equivalent forms, pick whichever fits:
+.RS
+.IP \(bu 2
+a comma\-separated list, split into one directive per line:
+\fB\-custom\-opts\fR "keepalive 5 30,verb 4"
+.IP \(bu 2
+a bare \fB\-\fR, which opens \fB$EDITOR\fR (falls back to \fBvi\fR) for
+multi\-line editing, same idiom as \fBgit commit\fR
+.IP \(bu 2
+a file's contents by way of the shell:
+\fB\-custom\-opts\fR "$(cat FILE)" \(en already newline\-separated with no
+commas, so it passes through the comma\-split unchanged
+.RE
+Also available from the web UI (Certs tab), a plain multi\-line field.
+.RE
 .TP
 .B revoke \fB\-serial\fR \fIHEX\fR
 Revoke a certificate and regenerate the CRL. OpenVPN rejects the client
@@ -152,6 +192,16 @@ never restores a server cert (see below). Also available from the web UI
 (Settings, admin role). Takes effect on the next
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload its certificate.
+.TP
+.B custom\-opts
+Edit the server config's raw extra directives in \fB$EDITOR\fR (falls
+back to \fBvi\fR), same idiom as \fBgit commit\fR / \fBcrontab \-e\fR.
+Saved text is appended verbatim to the next rendered \fIserver.conf\fR,
+unvalidated \(en a bad line fails on the next restart. Also available
+from the web UI (Settings, admin role, a plain multi\-line field); both
+write the same persisted value. Takes effect on the next
+.B ovcp vpn restart
+\(en openvpn does not hot\-reload its configuration.
 .TP
 .B backup create [\fB\-out\fR \fIFILE\fR]
 Write an encrypted archive (argon2id + AES\-256\-GCM, prompts twice for a
@@ -344,6 +394,22 @@ even before tun0 exists \(en see \fBIP_FREEBIND\fR under \fBOVCP_LISTEN\fR):
 .nf
 .RS
 OVCP_LISTEN=127.0.0.1:8443,10.8.0.1:8443 ovcp serve
+.RE
+.fi
+A laptop that should reach the VPN subnet but keep its own default route
+(the server redirects all traffic for everyone else):
+.nf
+.RS
+ovcp export \-cn dana\-laptop \-remote vpn.example.com \-split\-tunnel > dana\-laptop.ovpn
+.RE
+.fi
+Add a couple of extra directives to one client's profile, and separately
+edit the server's own extra directives:
+.nf
+.RS
+ovcp export \-cn dana\-phone \-remote vpn.example.com \e
+  \-custom\-opts "block\-outside\-dns,ping\-restart 30" > dana\-phone.ovpn
+ovcp custom\-opts
 .RE
 .fi
 .SH PRIVILEGES

@@ -11,6 +11,7 @@ import (
 	"github.com/ovcp/ovcp/internal/auth"
 	"github.com/ovcp/ovcp/internal/backup"
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 )
@@ -66,7 +67,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u *store.U
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, map[string]string{"username": u.Username, "role": u.Role})
+	jsonOK(w, map[string]string{"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -252,8 +253,9 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, u *store.U
 // handleExport issues a fresh client cert and streams an inline .ovpn.
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct {
-		CN, Passphrase, Remote, KeyPassphrase string
-		Days                                  int
+		CN, Passphrase, Remote, KeyPassphrase, Extra string
+		Days                                         int
+		SplitTunnel                                  bool
 	}
 	if !decode(r, &in) || in.CN == "" || in.Passphrase == "" {
 		jsonErr(w, 400, "cn and passphrase required")
@@ -264,6 +266,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 	}
 	if in.Remote == "" {
 		jsonErr(w, 400, "remote required (no server CN configured)")
+		return
+	}
+	cfg := s.LoadConfig()
+	if in.SplitTunnel && !cfg.CanSplitTunnel() {
+		jsonErr(w, 400, ovpnconf.ErrNoRedirect.Error())
 		return
 	}
 	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days)
@@ -282,11 +289,10 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	cfg := s.LoadConfig()
 	bundle, err := pki.RenderOVPN(pki.BundleParams{
 		Remote: in.Remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: s.DefaultRemote,
 		CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
-		TLSCrypt: tc, Cipher: cfg.Cipher,
+		TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: in.SplitTunnel, Extra: in.Extra,
 	})
 	if err != nil {
 		jsonErr(w, 400, err.Error())

@@ -37,6 +37,11 @@ type BundleParams struct {
 	TLSCrypt   []byte // static key, V1 format
 	Cipher     string // e.g. "AES-256-GCM"
 	ServerCN   string // optional: verify-x509-name
+
+	// SplitTunnel: keep this client's own default route, ignore only the
+	// pushed redirect-gateway. Meaningful only if the server pushes one.
+	SplitTunnel bool
+	Extra       string // raw client directives, appended verbatim; unvalidated by design
 }
 
 // RenderOVPN emits a single-file .ovpn with all material inline.
@@ -64,6 +69,13 @@ func RenderOVPN(p BundleParams) ([]byte, error) {
 	w("data-ciphers-fallback %s", p.Cipher) // silences the BF-CBC note
 	w("auth-nocache")
 	w("verb 3")
+	if p.SplitTunnel {
+		w(`pull-filter ignore "redirect-gateway"`)
+	}
+	if extra := strings.TrimSpace(p.Extra); extra != "" {
+		w("# --- custom options ---")
+		w("%s", extra)
+	}
 	inline := func(tag string, body []byte) {
 		w("<%s>", tag)
 		b.Write(body)

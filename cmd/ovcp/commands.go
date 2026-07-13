@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -65,9 +66,10 @@ var commands = []command{
 	{name: "revoke", usage: "-serial HEX   revoke + regenerate CRL", run: cmdRevoke},
 	{name: "rotate-ca", usage: "re-encrypt the CA key under a new passphrase", run: cmdRotateCA},
 	{name: "renew-server", usage: "[-days N] [-server-cn CN]   reissue the openvpn server cert (needs vpn restart)", run: cmdRenewServer},
+	{name: "custom-opts", usage: "edit raw server.conf directives in $EDITOR (fallback vi)", run: cmdCustomOpts},
 	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
 	{name: "list", usage: "list certificates", run: cmdList},
-	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW]", run: cmdExport},
+	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW] [-split-tunnel] [-custom-opts OPTS|-]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "kill", usage: "-cn NAME [-sock PATH]   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
@@ -186,6 +188,8 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 	serverCN := fs.String("server-cn", "", "verify-x509-name value")
 	out := fs.String("out", "", "write bundle to this file with .ovpn appended (prefix, like issue)")
 	keyPass := fs.String("key-pass", "", "encrypt embedded private key with this password")
+	splitTunnel := fs.Bool("split-tunnel", false, "keep the client's own default route (needs server redirect on)")
+	customOpts := fs.String("custom-opts", "", "custom client directives: comma-separated, a file via $(cat FILE), or - for $EDITOR")
 	return func(ctx *cliContext) {
 		if *remote == "" {
 			*remote = adminCertCN(ctx.dataDir)
@@ -196,17 +200,8 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *cn == "" || *remote == "" {
 			die(fmt.Errorf("-cn required; -remote required (no server CN found)"))
 		}
-		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := issueCert(ctx.p, pki.KindClient, *cn, 365, pass, *keyPass)
-		die(err)
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.AddCert(certFrom(ic, "client")))
-		s.Audit("cli", "issue", "cn="+*cn+" (export)")
-		caPEM, err := ctx.p.CACertPEM()
-		die(err)
-		tc, err := loadOrCreateTLSCrypt(filepath.Join(ctx.dataDir, "pki", "tls-crypt.key"))
-		die(err)
 		raw, _ := s.GetSetting("server_config")
 		cfg := ovpnconf.Load(raw)
 		if *port != 0 {
@@ -215,10 +210,30 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *proto != "" {
 			cfg.Proto = *proto
 		}
+		if *splitTunnel && !cfg.CanSplitTunnel() {
+			die(ovpnconf.ErrNoRedirect)
+		}
+		var extra string
+		switch *customOpts {
+		case "":
+		case "-":
+			extra = editText("")
+		default:
+			extra = commaOrLines(*customOpts)
+		}
+		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
+		ic, err := issueCert(ctx.p, pki.KindClient, *cn, 365, pass, *keyPass)
+		die(err)
+		die(s.AddCert(certFrom(ic, "client")))
+		s.Audit("cli", "issue", "cn="+*cn+" (export)")
+		caPEM, err := ctx.p.CACertPEM()
+		die(err)
+		tc, err := loadOrCreateTLSCrypt(filepath.Join(ctx.dataDir, "pki", "tls-crypt.key"))
+		die(err)
 		bundle, err := pki.RenderOVPN(pki.BundleParams{
 			Remote: *remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: *serverCN,
 			CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
-			TLSCrypt: tc, Cipher: cfg.Cipher,
+			TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: *splitTunnel, Extra: extra,
 		})
 		die(err)
 		if *out != "" {
@@ -418,6 +433,49 @@ func cmdRenewServer(fs *flag.FlagSet) func(ctx *cliContext) {
 		s.Audit("cli", "renew_server", "cn="+serverCN+" serial="+ic.SerialHex)
 		fmt.Println("server cert renewed:", ic.SerialHex)
 		fmt.Println("run `ovcp vpn restart` to apply")
+	}
+}
+
+// commaOrLines: comma list → one directive per line; no-op without a comma,
+// so $(cat FILE) passes through unchanged.
+// ponytail: assumes no directive needs a literal comma — openvpn's own
+// syntax never does. Use -custom-opts - (editor) if one ever does.
+func commaOrLines(s string) string {
+	parts := strings.Split(s, ",")
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// editText opens initial in $EDITOR (fallback vi) and returns what was saved
+// — same idiom as `git commit`/`crontab -e`.
+func editText(initial string) string {
+	tmp := filepath.Join(os.TempDir(), "ovcp-edit.conf")
+	die(os.WriteFile(tmp, []byte(initial), 0o600))
+	defer os.Remove(tmp)
+	editor := cmp.Or(os.Getenv("EDITOR"), "vi")
+	cmd := exec.Command(editor, tmp)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	die(cmd.Run())
+	out, err := os.ReadFile(tmp)
+	die(err)
+	return string(out)
+}
+
+// cmdCustomOpts edits the server config's raw extra directives in $EDITOR.
+func cmdCustomOpts(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		raw, _ := s.GetSetting("server_config")
+		cfg := ovpnconf.Load(raw)
+		cfg.Extra = editText(cfg.Extra)
+		enc, _ := json.Marshal(cfg)
+		die(s.SetSetting("server_config", string(enc)))
+		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
+		s.Audit("cli", "config_change", "custom options")
+		fmt.Println("saved; run `ovcp vpn restart` to apply")
 	}
 }
 

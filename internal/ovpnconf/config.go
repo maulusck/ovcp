@@ -4,12 +4,20 @@ package ovpnconf
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrNoRedirect: split-tunnel has nothing to opt out of unless the server
+// redirects all traffic. One check, shared by the CLI and the API.
+var ErrNoRedirect = errors.New("server doesn't redirect all traffic; nothing to split")
+
+// CanSplitTunnel reports whether a client may opt out of the server's redirect.
+func (c Config) CanSplitTunnel() bool { return c.RedirectGW }
 
 type Config struct {
 	Proto      string   // udp|tcp
@@ -19,6 +27,7 @@ type Config struct {
 	DNS        []string // pushed resolvers
 	Routes     []string // pushed routes, CIDR
 	RedirectGW bool     // push redirect-gateway
+	Extra      string   // raw directives, appended verbatim; unvalidated by design
 
 	// paths (filled by the app from its data dir)
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, MgmtSocket, StatusLog string
@@ -125,6 +134,10 @@ func (c *Config) Render() []byte {
 	}
 	if c.Proto == "udp" {
 		w("explicit-exit-notify 1")
+	}
+	if extra := strings.TrimSpace(c.Extra); extra != "" {
+		w("# --- custom options ---")
+		w("%s", extra)
 	}
 	return []byte(b.String())
 }

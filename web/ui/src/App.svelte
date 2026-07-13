@@ -33,6 +33,8 @@
 
   async function boot() {
     try { user = await api('GET', '/me') } catch { user = null }
+    // tab title: server CN identifies which VPN this is, useful with several open
+    document.title = user?.serverCN ? `OVCP · ${user.serverCN}` : 'OVCP'
   }
   boot()
 

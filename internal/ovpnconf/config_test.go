@@ -63,6 +63,30 @@ func TestRender(t *testing.T) {
 	}
 }
 
+func TestRenderExtra(t *testing.T) {
+	c := valid()
+	if strings.Contains(string(c.Render()), "custom options") {
+		t.Fatal("empty Extra must not add the custom-options marker")
+	}
+	c.Extra = "client-to-client"
+	out := string(c.Render())
+	if !strings.Contains(out, "custom options") || !strings.Contains(out, "client-to-client") {
+		t.Fatalf("Extra must be appended verbatim\n%s", out)
+	}
+}
+
+func TestCanSplitTunnel(t *testing.T) {
+	c := valid()
+	c.RedirectGW = false
+	if c.CanSplitTunnel() {
+		t.Fatal("no split-tunnel without a server redirect to opt out of")
+	}
+	c.RedirectGW = true
+	if !c.CanSplitTunnel() {
+		t.Fatal("split-tunnel should be allowed once the server redirects")
+	}
+}
+
 func TestLoadCorrupt(t *testing.T) {
 	if c := Load("{corrupt"); c.Port != Default().Port || c.Proto != Default().Proto {
 		t.Fatalf("corrupt JSON must fall back to defaults, got %+v", c)

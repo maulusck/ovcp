@@ -307,6 +307,32 @@ func TestExportBundle(t *testing.T) {
 	}
 }
 
+func TestExportSplitTunnel(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	// RedirectGW defaults to true (ovpnconf.Default) — split-tunnel should apply.
+	r := e.req("POST", "/api/certs/export", `{"CN":"alice","Passphrase":"`+pass+`","SplitTunnel":true}`, true)
+	if r.StatusCode != 200 {
+		t.Fatal("export:", r.Status)
+	}
+	body, _ := io.ReadAll(r.Body)
+	if !strings.Contains(string(body), `pull-filter ignore "redirect-gateway"`) {
+		t.Fatalf("bundle missing pull-filter:\n%s", body)
+	}
+}
+
+func TestExportSplitTunnelRejected(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	if r := e.req("PUT", "/api/config", `{"RedirectGW":false}`, true); r.StatusCode != 200 {
+		t.Fatal("config put:", r.Status)
+	}
+	r := e.req("POST", "/api/certs/export", `{"CN":"bob","Passphrase":"`+pass+`","SplitTunnel":true}`, true)
+	if r.StatusCode != 400 {
+		t.Fatalf("split-tunnel without server redirect should 400, got %s", r.Status)
+	}
+}
+
 func TestDebugToggle(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")

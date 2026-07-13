@@ -4,20 +4,23 @@
   let certs = $state([])
   let err = $state('')
   let ok = $state('')
-  let form = $state({ cn: '', remote: '', passphrase: '', days: 365, keypass: '' })
+  let form = $state({ cn: '', remote: '', passphrase: '', days: 365, keypass: '', splitTunnel: false, customOpts: '' })
+  let redirectGW = $state(false)
 
   async function refresh() {
     try { certs = await api('GET', '/certs'); err = '' }
     catch (x) { err = x.error }
   }
   refresh()
+  api('GET', '/config').then(c => (redirectGW = c.RedirectGW)).catch(() => {})
 
   async function exportBundle(e) {
     e.preventDefault()
     err = ''; ok = ''
     try {
       const { blob } = await apiBlob('POST', '/certs/export', { CN: form.cn, Remote: form.remote,
-        Passphrase: form.passphrase, Days: +form.days, KeyPassphrase: form.keypass })
+        Passphrase: form.passphrase, Days: +form.days, KeyPassphrase: form.keypass,
+        SplitTunnel: form.splitTunnel, Extra: form.customOpts })
       downloadBlob(blob, form.cn + '.ovpn')
       ok = `Issued ${form.cn} and downloaded the profile.`
       form.cn = ''; form.passphrase = ''; form.keypass = ''
@@ -80,8 +83,19 @@
       <label>Profile password
         <input type="password" bind:value={form.keypass} />
       </label>
+      {#if redirectGW}
+        <label class="check">
+          <input type="checkbox" bind:checked={form.splitTunnel} />
+          Split tunnel (keep client's own default route)
+        </label>
+      {/if}
+      <label class="wide">Custom options
+        <textarea bind:value={form.customOpts} rows="2" placeholder="e.g. block-outside-dns"></textarea>
+      </label>
     </div>
-    <button type="submit">Issue and download .ovpn</button>
+    <div class="row">
+      <button type="submit">Issue and download .ovpn</button>
+    </div>
     <p class="muted small">The private key exists only in this download — it is never stored on the server. Lost profile? Revoke and reissue. With a profile password set, OpenVPN asks for it on connect.</p>
   </form>
 {/if}
@@ -132,6 +146,15 @@
 
 <style>
   .issue { margin-bottom: 18px; }
+  .check { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  .check input { width: auto; }
+  .wide { grid-column: 1 / -1; }
+  .wide textarea {
+    width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
+    background: var(--ink); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 7px 10px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   .small { font-size: 12px; margin: 8px 0 0; }
   .soon { color: var(--amber); }
   .serial {
