@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -93,11 +94,49 @@ func (s *Store) BackupTo(path string) error {
 
 // --- certs ---
 
+// ErrDuplicateCN: one active (non-revoked) cert per CN+kind — client or
+// server. Revoke the old one first (renewal does this automatically).
+var ErrDuplicateCN = errors.New("an active cert already exists for this CN — revoke it first")
+
+// activeCertSerial returns the non-revoked cert's serial for cn+kind, or ""
+// if there isn't one.
+func (s *Store) activeCertSerial(cn, kind string) (string, error) {
+	var serial string
+	err := s.db.QueryRow(
+		`SELECT serial FROM certs WHERE cn = ? AND kind = ? AND revoked_at IS NULL LIMIT 1`, cn, kind).Scan(&serial)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return serial, err
+}
+
+// AddCert is the one funnel every issue path uses, so the active-CN check lives here, once.
+// ponytail: check-then-insert race needs two concurrent issues of the same new CN — not this tool's load.
 func (s *Store) AddCert(c Cert) error {
+	if prev, err := s.activeCertSerial(c.CN, c.Kind); err != nil {
+		return err
+	} else if prev != "" {
+		return fmt.Errorf("store: %s: %w", c.CN, ErrDuplicateCN)
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO certs(serial, cn, kind, cert_pem, issued_at, not_after) VALUES (?,?,?,?,?,?)`,
 		c.Serial, c.CN, c.Kind, c.CertPEM, c.IssuedAt.Unix(), c.NotAfter.Unix())
 	return err
+}
+
+// ReplaceCert retires c's outgoing active cert (same CN+kind), if any, then
+// adds c — server-cert renewal in one call, shared by the CLI and the API.
+func (s *Store) ReplaceCert(c Cert) error {
+	prev, err := s.activeCertSerial(c.CN, c.Kind)
+	if err != nil {
+		return err
+	}
+	if prev != "" {
+		if err := s.Revoke(prev, time.Now()); err != nil {
+			return err
+		}
+	}
+	return s.AddCert(c)
 }
 
 func (s *Store) GetCert(serial string) (*Cert, error) {

@@ -21,7 +21,6 @@ import (
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
-	"github.com/ovcp/ovcp/internal/store"
 )
 
 // command is one ovcp subcommand: its help text, its fixed set of
@@ -68,7 +67,7 @@ var commands = []command{
 	{name: "renew-server", usage: "[-days N] [-server-cn CN]   reissue the openvpn server cert (needs vpn restart)", run: cmdRenewServer},
 	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
 	{name: "list", usage: "list certificates", run: cmdList},
-	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-key-pass PW]", run: cmdExport},
+	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "kill", usage: "-cn NAME [-sock PATH]   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
@@ -124,8 +123,7 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		die(err)
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: *kindS,
-			CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter}))
+		die(s.AddCert(certFrom(ic, *kindS)))
 		s.Audit("cli", "issue", fmt.Sprintf("cn=%s kind=%s serial=%s", *cn, *kindS, ic.SerialHex))
 		if *out != "" {
 			die(os.WriteFile(*out+".crt", ic.CertPEM, 0o644))
@@ -186,6 +184,7 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 	port := fs.Int("port", 0, "server port (default: the configured server port)")
 	proto := fs.String("proto", "", "udp|tcp (default: the configured server proto)")
 	serverCN := fs.String("server-cn", "", "verify-x509-name value")
+	out := fs.String("out", "", "write bundle to this file with .ovpn appended (prefix, like issue)")
 	keyPass := fs.String("key-pass", "", "encrypt embedded private key with this password")
 	return func(ctx *cliContext) {
 		if *remote == "" {
@@ -202,8 +201,7 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 		die(err)
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "client",
-			CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter}))
+		die(s.AddCert(certFrom(ic, "client")))
 		s.Audit("cli", "issue", "cn="+*cn+" (export)")
 		caPEM, err := ctx.p.CACertPEM()
 		die(err)
@@ -223,7 +221,13 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 			TLSCrypt: tc, Cipher: cfg.Cipher,
 		})
 		die(err)
-		os.Stdout.Write(bundle)
+		if *out != "" {
+			die(os.WriteFile(*out+".ovpn", bundle, 0o644))
+			fmt.Println("wrote", *out+".ovpn")
+		} else {
+			os.Stdout.Write(bundle)
+		}
+		fmt.Fprintln(os.Stderr, "serial:", ic.SerialHex)
 	}
 }
 
@@ -605,24 +609,25 @@ func cmdCompletion(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// readSecret prompts for a secret (env override for automation).
+// readSecret prompts for a secret (env override for automation); both paths
+// enforce the same length rule, or init could accept what issue rejects later.
 func readSecret(label, env string, confirm bool) []byte {
-	if v := os.Getenv(env); v != "" {
-		return []byte(v)
+	v := []byte(os.Getenv(env))
+	if len(v) == 0 {
+		prompt := func(p string) []byte {
+			fmt.Fprint(os.Stderr, p+": ")
+			b, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr)
+			die(err)
+			return b
+		}
+		v = prompt(label)
+		if confirm && string(v) != string(prompt("Confirm")) {
+			die(fmt.Errorf("mismatch"))
+		}
 	}
-	prompt := func(p string) []byte {
-		fmt.Fprint(os.Stderr, p+": ")
-		v, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprintln(os.Stderr)
-		die(err)
-		return v
-	}
-	v := prompt(label)
-	if confirm && string(v) != string(prompt("Confirm")) {
-		die(fmt.Errorf("mismatch"))
-	}
-	if len(v) < 8 {
-		die(fmt.Errorf("%s too short (min 8)", label))
+	if !auth.SecretLenOK(string(v)) {
+		die(fmt.Errorf("%s", auth.SecretLenErr(label)))
 	}
 	return v
 }

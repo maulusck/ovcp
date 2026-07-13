@@ -50,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/logout", s.wrap(auth.RoleReadonly, s.handleLogout))
 	mux.Handle("GET /api/me", s.wrap(auth.RoleReadonly, s.handleMe))
 	mux.Handle("GET /api/status", s.wrap(auth.RoleReadonly, s.handleStatus))
+	mux.Handle("GET /api/stats", s.wrap(auth.RoleReadonly, s.handleStats))
 	mux.Handle("GET /api/certs", s.wrap(auth.RoleReadonly, s.handleCertList))
 	mux.Handle("GET /api/config", s.wrap(auth.RoleReadonly, s.handleConfigGet))
 	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))

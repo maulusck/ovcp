@@ -40,3 +40,26 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- periodic aggregate snapshot (Stats tab charts); one row per sample tick.
+CREATE TABLE IF NOT EXISTS vpn_samples (
+  ts         INTEGER PRIMARY KEY,          -- unix
+  clients    INTEGER NOT NULL,
+  bytes_recv INTEGER NOT NULL,             -- sum across all connected clients at ts
+  bytes_sent INTEGER NOT NULL
+);
+
+-- one row per finished client session; a session missing from one sample to
+-- the next is logged here, so this table doubles as the disconnect log.
+CREATE TABLE IF NOT EXISTS client_sessions (
+  id              INTEGER PRIMARY KEY,
+  cn              TEXT NOT NULL,
+  real_address    TEXT NOT NULL,
+  connected_at    INTEGER NOT NULL,
+  disconnected_at INTEGER NOT NULL,
+  bytes_recv      INTEGER NOT NULL,
+  bytes_sent      INTEGER NOT NULL
+);
+-- prune-by-age is the only lookup pattern on this table; keeps the periodic
+-- DELETE an index scan instead of a full table scan as sessions accumulate.
+CREATE INDEX IF NOT EXISTS idx_client_sessions_disconnected ON client_sessions(disconnected_at);

@@ -191,9 +191,15 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	}
 	slog.Info("ovcp started", "version", version, "listen", listen)
 
+	// periodic connected-clients/traffic snapshot for the Stats tab; runs
+	// independently of the UI's own poll so history exists with no browser open.
+	statsStop := make(chan struct{})
+	go srv.RunStatsSampler(statsStop)
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+	close(statsStop)
 	ctl.Close()
 	if err := sup.Stop(); err != nil {
 		slog.Warn("openvpn stop", "err", err)
@@ -255,6 +261,12 @@ func issueCert(p *pki.PKI, kind pki.CertKind, cn string, days int, pass []byte, 
 	return ic, nil
 }
 
+// certFrom is the store row for a freshly issued cert — every issue path here writes this same shape.
+func certFrom(ic *pki.IssuedCert, kind string) store.Cert {
+	return store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: kind,
+		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter}
+}
+
 // writeServerCert persists a freshly issued server cert+key to the paths
 // `serve` reads and records it in the store. Shared by init (first issue)
 // and renew-server (reissue in place); takes effect on the next `vpn restart`.
@@ -265,8 +277,7 @@ func writeServerCert(pp paths, s *store.Store, ic *pki.IssuedCert) error {
 	if err := os.WriteFile(pp.ServerKey, ic.KeyPEM, 0o600); err != nil {
 		return err
 	}
-	return s.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "server",
-		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
+	return s.ReplaceCert(certFrom(ic, "server"))
 }
 
 // fillPaths sets the server-owned path fields on a config.

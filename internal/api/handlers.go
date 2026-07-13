@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -133,6 +134,12 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
 }
 
+// certFrom is the store row for a freshly issued cert — every issue path here writes this same shape.
+func certFrom(ic *pki.IssuedCert, kind string) store.Cert {
+	return store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: kind,
+		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter}
+}
+
 // issueClientCert issues a client cert, optionally password-protecting the
 // key, and records it in the store. Shared by handleIssue and handleExport.
 func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int) (*pki.IssuedCert, error) {
@@ -148,8 +155,9 @@ func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int)
 			return nil, err
 		}
 	}
-	s.Store.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "client",
-		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
+	if err := s.Store.AddCert(certFrom(ic, "client")); err != nil {
+		return nil, err
+	}
 	return ic, nil
 }
 
@@ -185,8 +193,10 @@ func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *st
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	s.Store.AddCert(store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: "server",
-		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter})
+	if err := s.Store.ReplaceCert(certFrom(ic, "server")); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
 	s.Store.Audit(u.Username, "renew_server", "cn="+s.DefaultRemote+" serial="+ic.SerialHex)
 	jsonOK(w, map[string]string{"serial": ic.SerialHex, "notAfter": ic.NotAfter.Format(time.RFC3339)})
 }
@@ -387,8 +397,8 @@ func (s *Server) handleUserAdd(w http.ResponseWriter, r *http.Request, u *store.
 		jsonErr(w, 400, "username and valid role required")
 		return
 	}
-	if len(in.Password) < 8 {
-		jsonErr(w, 400, "password too short (min 8)")
+	if !auth.SecretLenOK(in.Password) {
+		jsonErr(w, 400, auth.SecretLenErr("password"))
 		return
 	}
 	h, err := auth.HashPassword(in.Password)
@@ -445,8 +455,12 @@ func (s *Server) handleUserDisabled(w http.ResponseWriter, r *http.Request, u *s
 func (s *Server) handleUserPassword(w http.ResponseWriter, r *http.Request, u *store.User) {
 	name := r.PathValue("name")
 	var in struct{ Password string }
-	if !decode(r, &in) || len(in.Password) < 8 {
-		jsonErr(w, 400, "password too short (min 8)")
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	if !auth.SecretLenOK(in.Password) {
+		jsonErr(w, 400, auth.SecretLenErr("password"))
 		return
 	}
 	h, err := auth.HashPassword(in.Password)
@@ -531,6 +545,10 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *store.Us
 func (s *Server) pkiErr(w http.ResponseWriter, err error) {
 	if err == pki.ErrBadPassphrase {
 		jsonErr(w, 403, "wrong CA passphrase")
+		return
+	}
+	if errors.Is(err, store.ErrDuplicateCN) {
+		jsonErr(w, 400, err.Error())
 		return
 	}
 	jsonErr(w, 500, err.Error())

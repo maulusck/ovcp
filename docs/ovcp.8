@@ -45,6 +45,11 @@ the operator passphrase, used in memory and never persisted.
 \fBrotate\-ca\fR re\-encrypts it under a new passphrase without reissuing
 anything.
 .PP
+Every operator secret \(en the CA passphrase, admin/user passwords \(en
+must be at least 8 characters, enforced the same way whether set
+interactively, via \fBOVCP_CA_PASSPHRASE\fR / \fBOVCP_USER_PASSWORD\fR, or
+through the web UI.
+.PP
 Client private keys are embedded in the exported profile once and never
 stored server\-side (no escrow): a lost profile means revoke + reissue, not
 recovery. Certificates (public) are kept and downloadable anytime. Optionally
@@ -111,17 +116,19 @@ Certificates (public) are kept and can be re\-downloaded anytime with
 AES\-256 encrypted; OpenVPN prompts for the password on connect \(en
 client certs only, rejected for \fB\-kind\fR \fIserver\fR (openvpn cannot
 unlock an encrypted key non\-interactively at startup). \fB\-days\fR must
-be positive.
+be positive. Only one certificate per CN may be active (non\-revoked) at a
+time \(en \fBrevoke\fR the existing one first to reissue under the same CN.
 .TP
-.B export \fB\-cn\fR \fINAME\fR [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-key\-pass\fR \fIPW\fR]
+.B export \fB\-cn\fR \fINAME\fR [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR]
 Issue a fresh client certificate and print a complete inline
-\fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout. \fB\-remote\fR
-defaults to \fBOVCP_SERVER_CN\fR / the server cert's CN, and is only
-required if neither is set. \fB\-port\fR, \fB\-proto\fR, and the data
-cipher default to the server's configured values (set via the web UI's
-Settings tab \(en there is no CLI equivalent); pass \fB\-port\fR or
+\fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout, or write it to
+\fIPREFIX\fR\fI.ovpn\fR with \fB\-out\fR (same convention as \fBissue\fR).
+\fB\-remote\fR defaults to \fBOVCP_SERVER_CN\fR / the server cert's CN, and
+is only required if neither is set. \fB\-port\fR, \fB\-proto\fR, and the
+data cipher default to the server's configured values (set via the web
+UI's Settings tab \(en there is no CLI equivalent); pass \fB\-port\fR or
 \fB\-proto\fR to override. \fB\-key\-pass\fR password\-protects the
-embedded key.
+embedded key. Same one\-active\-cert\-per\-CN rule as \fBissue\fR.
 .TP
 .B revoke \fB\-serial\fR \fIHEX\fR
 Revoke a certificate and regenerate the CRL. OpenVPN rejects the client
@@ -137,7 +144,7 @@ the HTTP surface at all.
 .TP
 .B renew\-server [\fB\-days\fR \fIN\fR] [\fB\-server\-cn\fR \fICN\fR]
 Reissue the openvpn server certificate (a fresh keypair and serial),
-writing it to the same paths
+revoking the outgoing one and writing the new one to the same paths
 .B serve
 reads. Defaults to the existing server cert's CN (or \fBOVCP_SERVER_CN\fR);
 pass \fB\-server\-cn\fR explicitly right after a \fBbackup restore\fR, which
@@ -171,7 +178,8 @@ List issued certificates with status (valid, REVOKED, expired).
 .B status [\fB\-sock\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR]
 Overview: whether the openvpn worker is running (with its pid, via the
 control socket) and, if so, the connected clients (via the management
-socket).
+socket). Historical traffic/connection graphs and per\-client session
+history are web\-UI\-only (Stats tab); there is no CLI equivalent.
 .TP
 .B kill \fB\-cn\fR \fINAME\fR [\fB\-sock\fR \fIPATH\fR]
 Disconnect a client immediately.
@@ -292,8 +300,9 @@ OpenVPN static key for tls\-crypt (control channel encryption).
 Generated openvpn configuration. Managed by ovcp; do not edit.
 .TP
 .I $OVCP_DATA/ovcp.db
-SQLite database: users, sessions, certificate metadata, audit log.
-Private keys are never stored in the database.
+SQLite database: users, sessions, certificate metadata, audit log,
+connection stats (Stats tab; 24\-hour retention). Private keys are never
+stored in the database.
 .TP
 .I $OVCP_DATA/admin\-tls/
 Self\-signed certificate for the admin UI.

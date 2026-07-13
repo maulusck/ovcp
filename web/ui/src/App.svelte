@@ -4,6 +4,7 @@
   import { theme, setTheme, THEMES } from './theme.svelte.js'
   import Logo from './Logo.svelte'
   import Dashboard from './Dashboard.svelte'
+  import Stats from './Stats.svelte'
   import Certs from './Certs.svelte'
   import Settings from './Settings.svelte'
   import Users from './Users.svelte'
@@ -12,6 +13,7 @@
 
   const tabs = [
     ['dashboard', 'Dashboard'],
+    ['stats', 'Stats'],
     ['certs', 'Certificates'],
     ['settings', 'Settings'],
     ['users', 'Users'],
@@ -168,6 +170,8 @@
   <main class:wide={tab === 'logs'}>
     {#if tab === 'dashboard'}
       <Dashboard {canOperate} />
+    {:else if tab === 'stats'}
+      <Stats />
     {:else if tab === 'certs'}
       <Certs {canOperate} />
     {:else if tab === 'settings'}
