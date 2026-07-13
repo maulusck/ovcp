@@ -79,9 +79,11 @@ func (s *Server) logHandler(filename string) handler {
 	}
 }
 
-// handleLogsDownload bundles an unencrypted audit package: log files,
-// audit trail, and a status.json snapshot of data already served
-// individually (no new exposure; no keys/DB — that's `ovcp backup`).
+// handleLogsDownload bundles an unencrypted audit package: every regular
+// file in logs/ (not a fixed filename list, so logrotate's rotated/
+// compressed siblings and status.log come along too), audit trail, and a
+// status.json snapshot of data already served individually (no new
+// exposure; no keys/DB — that's `ovcp backup`).
 func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
 	w.Header().Set("Content-Type", "application/zip")
 	name := "ovcp-audit-" + time.Now().Format("20060102-150405") + ".zip"
@@ -91,16 +93,22 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
 	zw := zip.NewWriter(w)
 	defer zw.Close()
-	for _, filename := range []string{"openvpn.log", "ovcp.log"} {
-		data, err := os.ReadFile(filepath.Join(s.DataDir, "logs", filename))
-		if err != nil {
-			continue // missing log is not an error, same as the tailed view
+	// top-level only (logrotate never nests); IsRegular excludes symlinks
+	// and dirs, so a stray symlink in logs/ can't smuggle in an arbitrary file.
+	if entries, err := os.ReadDir(filepath.Join(s.DataDir, "logs")); err == nil {
+		for _, d := range entries {
+			info, err := d.Info()
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(s.DataDir, "logs", d.Name()))
+			if err != nil {
+				continue
+			}
+			if f, err := zw.Create(d.Name()); err == nil {
+				f.Write(data)
+			}
 		}
-		f, err := zw.Create(filename)
-		if err != nil {
-			continue
-		}
-		f.Write(data)
 	}
 	if entries, err := s.Store.AuditTail(auditDownloadLimit); err == nil {
 		var sb strings.Builder

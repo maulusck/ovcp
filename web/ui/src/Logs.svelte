@@ -77,8 +77,16 @@
   async function loadDebug() {
     try { debugOn = (await api('GET', '/debug')).debug } catch (x) { err = x.error }
   }
-  function refresh() { loadAudit(); LOGS.forEach((l) => loadLog(l.id)); loadDebug() }
+  let refreshing = $state(false)
+  async function refresh() {
+    if (refreshing) return
+    refreshing = true
+    try { await Promise.all([loadAudit(), ...LOGS.map((l) => loadLog(l.id)), loadDebug()]) }
+    finally { refreshing = false }
+  }
   refresh()
+
+  const setAllOpen = (open) => (openState = { audit: open, ...Object.fromEntries(LOGS.map((l) => [l.id, open])) })
 
   async function toggleDebug(e) {
     const want = e.target.checked
@@ -159,6 +167,10 @@
       <option value={30}>30s</option>
     </select>
   </label>
+  <button type="button" class="ghost" onclick={refresh} disabled={refreshing} title="Reload all three panels now">
+    {refreshing ? 'Refreshing…' : 'Refresh now'}</button>
+  <button type="button" class="ghost" onclick={() => setAllOpen(true)}>Expand all</button>
+  <button type="button" class="ghost" onclick={() => setAllOpen(false)}>Collapse all</button>
   <button type="button" class="ghost" onclick={downloadAllLogs}
     title="Full audit package: logs, audit trail, VPN/cert/user/config status — unencrypted, for security/ops review">
     Download audit package</button>
@@ -173,15 +185,15 @@
       {@render actions('audit', 'audit.log', auditText)}
       <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
       <div class="scrollbox" bind:this={boxes.audit} onpointerup={(e) => fitToContent(e.currentTarget)}>
-        <table>
+        <table class="logtable">
           <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
           <tbody>
             {#each entries as e}
               <tr>
-                <td>{fmtTime(new Date(e.TS))}</td>
+                <td class="muted">{fmtTime(new Date(e.TS))}</td>
                 <td>{e.Actor}</td>
                 <td>{e.Action}</td>
-                <td class="muted">{e.Detail}</td>
+                <td>{e.Detail}</td>
               </tr>
             {/each}
           </tbody>
@@ -253,13 +265,14 @@
   @media (min-width: 701px) {
     .scrollbox { height: calc(100vh - 320px); }
   }
-  /* denser than the default table: log rows are numerous, not a handful of audit entries. */
+  /* shared by all three panels (audit + openvpn + ovcp) — denser than the
+     default table, rows are numerous. first column (time) never wraps; last
+     column (message/detail, the free-text one) wraps anywhere. */
   .logtable { font-size: 12px; }
   .logtable th, .logtable td { padding: 2px 8px; }
-  /* time/level are short fixed tokens, never wrap (that's what turns "info"
-     into "inf\no" once the column gets squeezed) — only the message column wraps. */
-  .logtable td:nth-child(1), .logtable td:nth-child(2) { white-space: nowrap; }
-  .logtable td:nth-child(3) { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .logtable td:first-child { white-space: nowrap; }
+  .logtable td:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .logtable tbody tr:hover { background: var(--line); }
   .logtable .log-error { color: var(--bad); }
   .logtable .log-warn { color: var(--amber); }
   .logtable .log-debug { color: var(--dim); }

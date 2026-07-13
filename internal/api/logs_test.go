@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -135,6 +136,41 @@ func TestLogsDownloadZip(t *testing.T) {
 	content, _ := io.ReadAll(rc)
 	if string(content) != "line one\nline two\n" {
 		t.Fatalf("got %q", content)
+	}
+}
+
+// The archive isn't a fixed filename list: rotated/compressed logrotate
+// siblings and status.log must come along, and a symlink must not.
+func TestLogsDownloadWholeDir(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+	logsDir := filepath.Join(e.dir, "logs")
+	os.MkdirAll(logsDir, 0o750)
+	os.WriteFile(filepath.Join(logsDir, "ovcp.log"), []byte("current\n"), 0o644)
+	os.WriteFile(filepath.Join(logsDir, "openvpn.log.1"), []byte("rotated\n"), 0o644)
+	os.WriteFile(filepath.Join(logsDir, "status.log"), []byte("status dump\n"), 0o644)
+	os.Symlink(filepath.Join(logsDir, "ovcp.log"), filepath.Join(logsDir, "sneaky-link"))
+
+	r := e.req("GET", "/api/logs/download", "", false)
+	if r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	body, _ := io.ReadAll(r.Body)
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	for _, want := range []string{"ovcp.log", "openvpn.log.1", "status.log"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("missing %q in archive: %v", want, names)
+		}
+	}
+	if slices.Contains(names, "sneaky-link") {
+		t.Fatalf("symlink must be excluded: %v", names)
 	}
 }
 
