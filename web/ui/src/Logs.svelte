@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte'
-  import { api, downloadBlob, copyToClipboard } from './api.js'
+  import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus } from './api.js'
   let { isAdmin } = $props()
 
   // one shared format for every timestamp in this file (audit + both log
@@ -88,6 +88,13 @@
 
   const setAllOpen = (open) => (openState = { audit: open, ...Object.fromEntries(LOGS.map((l) => [l.id, open])) })
 
+  // per-panel filter (audit + each log) — one {open, query} per id, same
+  // shape/toggle as every other table (see api.js's toggleSearch).
+  let search = $state({ audit: { open: false, query: '' }, openvpn: { open: false, query: '' }, ovcp: { open: false, query: '' } })
+  const filteredEntries = $derived(
+    entries.filter((e) => matchesQuery(e, search.audit.query, (x) => x.Actor, (x) => x.Action, (x) => x.Detail)))
+  const visibleLines = (id) => lines[id].filter((line) => matchesQuery(line, search[id].query, (x) => x))
+
   async function toggleDebug(e) {
     const want = e.target.checked
     try { debugOn = (await api('POST', '/debug', { Debug: want })).debug }
@@ -100,7 +107,7 @@
     copied = panel
     setTimeout(() => (copied = ''), 1200)
   }
-  const auditText = () => entries.map(e =>
+  const auditText = () => filteredEntries.map(e =>
     `${fmtTime(new Date(e.TS))} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
 
   // the archive bundle takes no request input at all (fixed server-side
@@ -138,6 +145,10 @@
 
 {#snippet actions(id, filename, text)}
   <div class="panel-actions">
+    <button type="button" class="ghost" class:active={search[id].open} onclick={() => toggleSearch(search[id])}>Filter</button>
+    {#if search[id].open}
+      <input type="search" class="search-input" bind:value={search[id].query} placeholder="Filter…" use:autofocus />
+    {/if}
     <button type="button" class="ghost" onclick={() => copyText(id, text())}>
       {copied === id ? 'Copied' : 'Copy'}
     </button>
@@ -183,12 +194,15 @@
       <p class="muted">No entries yet.</p>
     {:else}
       {@render actions('audit', 'audit.log', auditText)}
+      {#if filteredEntries.length === 0}
+        <p class="muted">No entries match.</p>
+      {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
       <div class="scrollbox" bind:this={boxes.audit} onpointerup={(e) => fitToContent(e.currentTarget)}>
         <table class="logtable">
           <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
           <tbody>
-            {#each entries as e}
+            {#each filteredEntries as e}
               <tr>
                 <td class="muted">{fmtTime(new Date(e.TS))}</td>
                 <td>{e.Actor}</td>
@@ -199,6 +213,7 @@
           </tbody>
         </table>
       </div>
+      {/if}
     {/if}
   </details>
 
@@ -208,13 +223,16 @@
       {#if lines[l.id].length === 0}
         <p class="muted">No log yet.</p>
       {:else}
-        {@render actions(l.id, l.file, () => lines[l.id].join('\n'))}
+        {@render actions(l.id, l.file, () => visibleLines(l.id).join('\n'))}
+        {#if visibleLines(l.id).length === 0}
+          <p class="muted">No log lines match.</p>
+        {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
         <div class="scrollbox" bind:this={boxes[l.id]} onpointerup={(e) => fitToContent(e.currentTarget)}>
           <table class="logtable">
             <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
             <tbody>
-              {#each lines[l.id] as line}
+              {#each visibleLines(l.id) as line}
                 {@const p = parseLine(line)}
                 <tr>
                   <td class="muted">{p.time}</td>
@@ -225,6 +243,7 @@
             </tbody>
           </table>
         </div>
+        {/if}
       {/if}
     </details>
   {/each}
@@ -235,9 +254,6 @@
     display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
     gap: 6px 14px; margin-bottom: 10px; font-size: 12px;
   }
-  .poll-pick { display: flex; align-items: center; gap: 6px; margin: 0; }
-  .poll-pick select, .poll-pick input { width: auto; }
-  .poll-pick select { padding: 3px 6px; font-size: 12px; }
   .logs-head button.ghost, .panel-actions button.ghost { padding: 3px 10px; font-size: 12px; }
   .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
   /* grid not columns: columns rebalance every card while one resizes (bouncing).

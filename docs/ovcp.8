@@ -222,8 +222,11 @@ data directory, not something to expose over HTTP on a possibly\-live
 server. Follow with \fBrenew\-server\fR (the archive has no server cert)
 and \fBovcp vpn start\fR.
 .TP
-.B list
+.B list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
 List issued certificates with status (valid, REVOKED, expired).
+\fB\-status\fR/\fB\-kind\fR filter before printing (default \fBall\fR, today's
+behavior). \fB\-sort\fR reorders the filtered list (default: issued order);
+\fB\-desc\fR reverses it. Same filters/sort as the web UI's Certs tab.
 .TP
 .B status [\fB\-sock\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR]
 Overview: whether the openvpn worker is running (with its pid, via the
@@ -257,13 +260,15 @@ reports \(lqalready started\(rq rather than spawning a second process.
 .TP
 .B user add \fB\-name\fR \fINAME\fR [\fB\-role\fR admin|operator|readonly]
 .TQ
-.B user list
+.B user list [\fB\-sort\fR username|role|created] [\fB\-desc\fR]
 .TQ
 .B user del|disable|enable|passwd \fB\-name\fR \fINAME\fR
 .TQ
 .B user totp \fB\-name\fR \fINAME\fR [\fB\-off\fR]
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
 (certificates, disconnects), \fBreadonly\fR (default for \fBadd\fR).
+\fBuser list\fR's \fB\-sort\fR reorders (default: today's order); \fB\-desc\fR
+reverses it. Same as the web UI's Users tab.
 .B user totp
 prints an otpauth:// enrollment URL; \fB\-off\fR disables 2FA instead.
 .TP

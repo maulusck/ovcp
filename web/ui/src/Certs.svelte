@@ -1,11 +1,34 @@
 <script>
-  import { api, apiBlob, downloadBlob, copyToClipboard } from './api.js'
+  import {
+    api, apiBlob, downloadBlob, copyToClipboard, sortRows, matchesQuery,
+    toggleSort, sortMark, toggleSearch, autofocus,
+  } from './api.js'
   let { canOperate } = $props()
   let certs = $state([])
   let err = $state('')
   let ok = $state('')
   let form = $state({ cn: '', remote: '', passphrase: '', days: 365, keypass: '', splitTunnel: false, customOpts: '' })
   let redirectGW = $state(false)
+
+  const STATUS_KEY = 'ovcp_certs_status'
+  let statusFilter = $state(localStorage.getItem(STATUS_KEY) || 'all')
+  const KIND_KEY = 'ovcp_certs_kind'
+  let kindFilter = $state(localStorage.getItem(KIND_KEY) || 'all')
+  $effect(() => localStorage.setItem(STATUS_KEY, statusFilter))
+  $effect(() => localStorage.setItem(KIND_KEY, kindFilter))
+
+  let search = $state({ open: false, query: '' })
+  let sort = $state({ key: null, desc: false })
+  const SORT_GETTERS = { cn: (c) => c.CN, kind: (c) => c.Kind, expiry: (c) => new Date(c.NotAfter).getTime() }
+
+  const filtered = $derived.by(() => {
+    let out = certs
+    if (statusFilter === 'active') out = out.filter((c) => !c.Revoked)
+    else if (statusFilter === 'revoked') out = out.filter((c) => c.Revoked)
+    if (kindFilter !== 'all') out = out.filter((c) => c.Kind === kindFilter)
+    out = out.filter((c) => matchesQuery(c, search.query, (x) => x.CN, (x) => x.Serial))
+    return sort.key ? sortRows(out, SORT_GETTERS[sort.key], sort.desc) : out
+  })
 
   async function refresh() {
     try { certs = await api('GET', '/certs'); err = '' }
@@ -101,19 +124,46 @@
 {/if}
 
 <div class="card">
-  <h2>Certificates</h2>
+  <h2>Certificates
+    <button type="button" class="ghost" class:active={search.open} onclick={() => toggleSearch(search)}>Filter</button>
+    {#if search.open}
+      <input type="search" class="search-input" bind:value={search.query} placeholder="Filter by CN or serial…" use:autofocus />
+    {/if}
+  </h2>
+  <div class="row">
+    <label class="poll-pick">Status
+      <select bind:value={statusFilter}>
+        <option value="all">all</option>
+        <option value="active">active</option>
+        <option value="revoked">revoked</option>
+      </select>
+    </label>
+    <label class="poll-pick">Kind
+      <select bind:value={kindFilter}>
+        <option value="all">all</option>
+        <option value="client">client</option>
+        <option value="server">server</option>
+      </select>
+    </label>
+  </div>
   {#if err}<p class="err">{err}</p>{/if}
   {#if ok}<p class="ok">{ok}</p>{/if}
   {#if certs.length === 0}
     <p class="muted">No certificates yet.</p>
+  {:else if filtered.length === 0}
+    <p class="muted">No certificates match.</p>
   {:else}
     <table>
       <thead><tr>
-        <th>Common name</th><th>Kind</th><th>Status</th><th>Expires</th><th>Serial</th><th></th>
+        <th><button class="th-sort" onclick={() => toggleSort(sort, 'cn')}>Common name{sortMark(sort, 'cn')}</button></th>
+        <th><button class="th-sort" onclick={() => toggleSort(sort, 'kind')}>Kind{sortMark(sort, 'kind')}</button></th>
+        <th>Status</th>
+        <th><button class="th-sort" onclick={() => toggleSort(sort, 'expiry')}>Expires{sortMark(sort, 'expiry')}</button></th>
+        <th>Serial</th><th></th>
         {#if canOperate}<th></th>{/if}
       </tr></thead>
       <tbody>
-        {#each certs as c}
+        {#each filtered as c}
           <tr>
             <td>{c.CN}</td>
             <td>{c.Kind}</td>

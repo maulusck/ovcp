@@ -54,3 +54,48 @@ export function fmtBytes(n) {
   do { n /= 1024; i++ } while (n >= 1024 && i < u.length - 1)
   return n.toFixed(1) + ' ' + u[i]
 }
+
+// shared by every sortable table (Certs/Users/Dashboard/Stats): click-a-<th>
+// sort, no per-table comparator logic.
+export function sortRows(rows, get, desc = false) {
+  return [...rows].sort((a, b) => {
+    const av = get(a), bv = get(b), cmp = av < bv ? -1 : av > bv ? 1 : 0
+    return desc ? -cmp : cmp
+  })
+}
+
+// shared by every searchable table/panel: case-insensitive substring match
+// across whichever fields the caller says are searchable.
+export function matchesQuery(row, query, ...getters) {
+  if (!query) return true
+  const q = query.toLowerCase()
+  return getters.some((get) => String(get(row) ?? '').toLowerCase().includes(q))
+}
+
+// shared sort state: one {key, desc} object per table, mutated in place so
+// every sortable table (Certs/Users/Dashboard/Stats) shares the click/flip
+// logic and the indicator glyph instead of redefining both per component.
+export function toggleSort(sort, key) {
+  if (sort.key === key) sort.desc = !sort.desc
+  else { sort.key = key; sort.desc = false }
+}
+export function sortMark(sort, key) {
+  return sort.key === key ? (sort.desc ? ' ↓' : ' ↑') : ''
+}
+
+// shared search state: one {open, query} object per panel, mutated in place
+// — autofocus on open, autoclear on close — reused by every filterable
+// table/log panel (Certs/Users/Dashboard/Stats/Logs) instead of each
+// reimplementing the toggle.
+export function toggleSearch(search) {
+  search.open = !search.open
+  if (!search.open) search.query = ''
+}
+
+// use:autofocus — reliably focuses a conditionally-rendered element on
+// mount. The native `autofocus` attribute doesn't fire here: Svelte sets it
+// via a property assignment after the element is already inserted, which
+// misses the browser's "autofocus at insertion" window.
+export function autofocus(node) {
+  node.focus()
+}

@@ -1,11 +1,20 @@
 <script>
-  import { api, fmtBytes } from './api.js'
+  import {
+    api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus,
+  } from './api.js'
 
   let samples = $state([])
   let sessions = $state([])
   let revokedCNs = $state(new Set())
-  let cnFilter = $state('')
+  let search = $state({ open: false, query: '' })
   let err = $state('')
+
+  let sort = $state({ key: null, desc: false })
+  const SORT_GETTERS = {
+    cn: (s) => s.CN, disconnected: (s) => s.DisconnectedAt,
+    duration: (s) => new Date(s.DisconnectedAt) - new Date(s.ConnectedAt),
+    recv: (s) => s.BytesRecv, sent: (s) => s.BytesSent,
+  }
 
   const POLL_KEY = 'ovcp_stats_poll'
   let pollSec = $state(Number(localStorage.getItem(POLL_KEY) ?? 30))
@@ -29,8 +38,10 @@
 
   // per-client view: filter the same session history instead of a second
   // query — it's already capped at 200 rows, plenty to filter client-side.
-  const filtered = $derived(
-    cnFilter ? sessions.filter(s => s.CN.toLowerCase().includes(cnFilter.toLowerCase())) : sessions)
+  const filtered = $derived.by(() => {
+    const out = sessions.filter((s) => matchesQuery(s, search.query, (x) => x.CN))
+    return sort.key ? sortRows(out, SORT_GETTERS[sort.key], sort.desc) : out
+  })
 
   const dropsLast24h = $derived(
     sessions.filter(s => Date.now() - new Date(s.DisconnectedAt).getTime() < 86400000).length)
@@ -92,16 +103,24 @@
   </div>
 
   <div class="card wide">
-    <h2>Per-client sessions</h2>
+    <h2>Per-client sessions
+      <button type="button" class="ghost" class:active={search.open} onclick={() => toggleSearch(search)}>Filter</button>
+      {#if search.open}
+        <input type="search" class="search-input" bind:value={search.query} placeholder="Filter by common name…" use:autofocus />
+      {/if}
+    </h2>
     <p class="muted">{dropsLast24h} disconnect{dropsLast24h === 1 ? '' : 's'} in the last 24h</p>
-    <input class="cn-filter" placeholder="Filter by common name…" bind:value={cnFilter} />
     {#if filtered.length === 0}
-      <p class="muted">No completed sessions{cnFilter ? ' match' : ' yet'}.</p>
+      <p class="muted">No completed sessions{search.query ? ' match' : ' yet'}.</p>
     {:else}
       <table>
         <thead><tr>
-          <th>Common name</th><th>Real address</th><th>Disconnected</th>
-          <th>Duration</th><th>Received</th><th>Sent</th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'cn')}>Common name{sortMark(sort, 'cn')}</button></th>
+          <th>Real address</th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'disconnected')}>Disconnected{sortMark(sort, 'disconnected')}</button></th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'duration')}>Duration{sortMark(sort, 'duration')}</button></th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'recv')}>Received{sortMark(sort, 'recv')}</button></th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'sent')}>Sent{sortMark(sort, 'sent')}</button></th>
         </tr></thead>
         <tbody>
           {#each filtered as s}
@@ -122,8 +141,6 @@
 
 <style>
   .stats-head { display: flex; justify-content: flex-end; margin-bottom: 10px; font-size: 12px; }
-  .poll-pick { display: flex; align-items: center; gap: 6px; margin: 0; }
-  .poll-pick select { width: auto; padding: 3px 6px; font-size: 12px; }
   .stats-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
     gap: 22px; align-items: start;
@@ -135,7 +152,6 @@
   .spark polyline.sent { stroke: var(--bad); }
   .recv-label { color: var(--ok); }
   .sent-label { color: var(--bad); }
-  .cn-filter { max-width: 260px; margin: 0 0 12px; font-size: 13px; padding: 5px 8px; }
   .revoked {
     margin-left: 6px; font-family: var(--mono); font-size: 10px; text-transform: uppercase;
     color: var(--bad); border: 1px solid var(--bad); border-radius: 999px; padding: 1px 6px;

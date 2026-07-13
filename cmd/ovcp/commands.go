@@ -22,6 +22,7 @@ import (
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
+	"github.com/ovcp/ovcp/internal/store"
 )
 
 // command is one ovcp subcommand: its help text, its fixed set of
@@ -68,7 +69,7 @@ var commands = []command{
 	{name: "renew-server", usage: "[-days N] [-server-cn CN]   reissue the openvpn server cert (needs vpn restart)", run: cmdRenewServer},
 	{name: "custom-opts", usage: "edit raw server.conf directives in $EDITOR (fallback vi)", run: cmdCustomOpts},
 	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
-	{name: "list", usage: "list certificates", run: cmdList},
+	{name: "list", usage: "[-status all|active|revoked] [-kind all|client|server] [-sort cn|kind|expiry|serial] [-desc]   list certificates", run: cmdList},
 	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW] [-split-tunnel] [-custom-opts OPTS|-]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "kill", usage: "-cn NAME [-sock PATH]   disconnect client", run: cmdKill},
@@ -161,21 +162,80 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-func cmdList(_ *flag.FlagSet) func(ctx *cliContext) {
+// sortByFlag sorts rows in place by the named field (string-keyed getters,
+// so time fields sort correctly too via RFC3339's lexicographic order).
+// An empty key is a no-op ("no -sort = today's order"); an unrecognized one
+// is an error, not a silent no-op — a typo'd flag must never look like
+// "sort worked, this just happens to be the natural order."
+func sortByFlag[T any](rows []T, getters map[string]func(T) string, key string, desc bool) error {
+	if key == "" {
+		return nil
+	}
+	get, ok := getters[key]
+	if !ok {
+		keys := make([]string, 0, len(getters))
+		for k := range getters {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		return fmt.Errorf("-sort must be one of: %s", strings.Join(keys, "|"))
+	}
+	slices.SortFunc(rows, func(a, b T) int {
+		c := strings.Compare(get(a), get(b))
+		if desc {
+			c = -c
+		}
+		return c
+	})
+	return nil
+}
+
+var certSortGetters = map[string]func(store.Cert) string{
+	"cn":     func(c store.Cert) string { return c.CN },
+	"kind":   func(c store.Cert) string { return c.Kind },
+	"expiry": func(c store.Cert) string { return c.NotAfter.Format(time.RFC3339) },
+	"serial": func(c store.Cert) string { return c.Serial },
+}
+
+var userSortGetters = map[string]func(store.User) string{
+	"username": func(u store.User) string { return u.Username },
+	"role":     func(u store.User) string { return u.Role },
+	"created":  func(u store.User) string { return u.CreatedAt.Format(time.RFC3339) },
+}
+
+func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
+	status := fs.String("status", "all", "all|active|revoked")
+	kind := fs.String("kind", "all", "all|client|server")
+	sortBy := fs.String("sort", "", "cn|kind|expiry|serial (default: issued order)")
+	desc := fs.Bool("desc", false, "reverse sort order")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		certs, err := s.ListCerts()
 		die(err)
+		var out []store.Cert
 		for _, c := range certs {
-			status := "valid"
+			if *status == "active" && c.RevokedAt != nil {
+				continue
+			}
+			if *status == "revoked" && c.RevokedAt == nil {
+				continue
+			}
+			if *kind != "all" && c.Kind != *kind {
+				continue
+			}
+			out = append(out, c)
+		}
+		die(sortByFlag(out, certSortGetters, *sortBy, *desc))
+		for _, c := range out {
+			certStatus := "valid"
 			if c.RevokedAt != nil {
-				status = "REVOKED"
+				certStatus = "REVOKED"
 			} else if time.Now().After(c.NotAfter) {
-				status = "expired"
+				certStatus = "expired"
 			}
 			fmt.Printf("%-8s %-10s %-24s expires %s  %s\n",
-				status, c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
+				certStatus, c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
 		}
 	}
 }
@@ -580,9 +640,13 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			fmt.Println("user added:", *name, "("+*role+")")
 
 		case "list":
-			newFlags("user list").Parse(args[1:])
+			lfs := newFlags("user list")
+			sortBy := lfs.String("sort", "", "username|role|created (default: today's order)")
+			desc := lfs.Bool("desc", false, "reverse sort order")
+			lfs.Parse(args[1:])
 			users, err := s.ListUsers()
 			die(err)
+			die(sortByFlag(users, userSortGetters, *sortBy, *desc))
 			for _, u := range users {
 				st := "enabled"
 				if u.Disabled {

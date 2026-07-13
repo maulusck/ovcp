@@ -250,8 +250,9 @@
     transition: opacity .15s, background .15s;
   }
   :global(button:hover:not(:disabled)) { opacity: .85; }
-  :global(button:focus-visible), :global(input:focus-visible), :global(select:focus-visible) {
-    outline: 2px solid var(--amber); outline-offset: 1px;
+  :global(button:focus-visible), :global(input:focus-visible),
+  :global(select:focus-visible), :global(summary:focus-visible) {
+    outline: 1px solid var(--amber); outline-offset: 1px;
   }
   :global(button.ghost) {
     background: transparent; color: var(--dim); border: 1px solid var(--line);
@@ -259,6 +260,9 @@
   :global(button.ghost:hover:not(:disabled)) {
     background: var(--line); color: var(--text); opacity: 1;
   }
+  /* toggled-on state (e.g. the Filter button while its input is open) */
+  :global(button.ghost.active) { background: var(--amber); color: var(--ink); border-color: var(--amber); }
+  :global(button.ghost.active:hover:not(:disabled)) { background: var(--amber); opacity: .85; }
   :global(button:disabled) { opacity: .45; cursor: not-allowed; }
   :global(input), :global(select) {
     font: inherit; color: var(--text); background: var(--ink);
@@ -279,6 +283,18 @@
   :global(td) { padding: 7px 10px; border-bottom: 1px solid var(--line); }
   :global(.err) { color: var(--bad); font-size: 13px; }
   :global(.muted) { color: var(--dim); }
+  /* inline "Label [control]" pairs — filter dropdowns (Certs/Users), Logs tab's own options */
+  :global(.poll-pick) { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; }
+  :global(.poll-pick select), :global(.poll-pick input) { width: auto; }
+  :global(.poll-pick select) { padding: 3px 6px; font-size: 12px; }
+  /* toggled filter input, and click-to-sort <th>s — every table/log panel.
+     The toggle button itself is a plain .ghost (h2's own small variant below). */
+  :global(h2 button.ghost) { padding: 2px 8px; font-size: 11px; margin-left: 8px; vertical-align: middle; }
+  :global(.search-input) { width: auto; display: inline-block; margin-left: 8px; padding: 4px 8px; font-size: 12px; }
+  :global(.th-sort) {
+    background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer;
+  }
+  :global(.th-sort:hover) { color: var(--text); }
   /* shared by Certs.svelte and Users.svelte's forms/tables */
   :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
   :global(.req) { color: var(--bad); }

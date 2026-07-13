@@ -1,11 +1,21 @@
 <script>
-  import { api } from './api.js'
+  import { api, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus } from './api.js'
   let { isAdmin, me } = $props()
   let users = $state([])
   let err = $state('')
   let ok = $state('')
   let form = $state({ username: '', password: '', role: 'operator' })
   let enrolled = $state(null) // {username, secret, url, qr}
+
+  let search = $state({ open: false, query: '' })
+  let sort = $state({ key: null, desc: false })
+  const SORT_GETTERS = {
+    username: (u) => u.Username, role: (u) => u.Role, created: (u) => u.CreatedAt,
+  }
+  const filtered = $derived.by(() => {
+    const out = users.filter((u) => matchesQuery(u, search.query, (x) => x.Username))
+    return sort.key ? sortRows(out, SORT_GETTERS[sort.key], sort.desc) : out
+  })
 
   async function refresh() {
     try { users = await api('GET', '/users'); err = '' }
@@ -109,16 +119,27 @@
   {/if}
 
   <div class="card">
-    <h2>Users</h2>
+    <h2>Users
+      <button type="button" class="ghost" class:active={search.open} onclick={() => toggleSearch(search)}>Filter</button>
+      {#if search.open}
+        <input type="search" class="search-input" bind:value={search.query} placeholder="Filter by username…" use:autofocus />
+      {/if}
+    </h2>
     {#if users.length === 0}
       <p class="muted">No users yet.</p>
+    {:else if filtered.length === 0}
+      <p class="muted">No users match.</p>
     {:else}
       <table>
         <thead><tr>
-          <th>Username</th><th>Role</th><th>Status</th><th>2FA</th><th>Created</th><th></th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'username')}>Username{sortMark(sort, 'username')}</button></th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'role')}>Role{sortMark(sort, 'role')}</button></th>
+          <th>Status</th><th>2FA</th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'created')}>Created{sortMark(sort, 'created')}</button></th>
+          <th></th>
         </tr></thead>
         <tbody>
-          {#each users as u}
+          {#each filtered as u}
             <tr>
               <td>{u.Username}</td>
               <td>{u.Role}</td>

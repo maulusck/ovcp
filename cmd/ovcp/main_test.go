@@ -174,6 +174,90 @@ func TestLifecycle(t *testing.T) {
 	}
 }
 
+func TestSortByFlag(t *testing.T) {
+	type row struct{ name string }
+	rows := []row{{"charlie"}, {"alice"}, {"bob"}}
+	getters := map[string]func(row) string{"name": func(r row) string { return r.name }}
+
+	if err := sortByFlag(rows, getters, "", false); err != nil || rows[0].name != "charlie" {
+		t.Fatalf("empty key should be a no-op, got %v err=%v", rows, err)
+	}
+	if err := sortByFlag(rows, getters, "name", false); err != nil || rows[0].name != "alice" || rows[2].name != "charlie" {
+		t.Fatalf("want alice,bob,charlie, got %v err=%v", rows, err)
+	}
+	if err := sortByFlag(rows, getters, "name", true); err != nil || rows[0].name != "charlie" || rows[2].name != "alice" {
+		t.Fatalf("want charlie,bob,alice, got %v err=%v", rows, err)
+	}
+	if err := sortByFlag(rows, getters, "bogus", false); err == nil {
+		t.Fatal("unrecognized -sort value should error, not silently no-op")
+	}
+}
+
+func TestListFilterSort(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "bob"); r.code != 0 {
+		t.Fatalf("issue bob: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "alice"); r.code != 0 {
+		t.Fatalf("issue alice: %+v", r)
+	}
+	serial := serialOf(t, certLines(run(t, env, "list").stdout, "bob")[0])
+	if r := run(t, env, "revoke", "-serial", serial); r.code != 0 {
+		t.Fatalf("revoke: %+v", r)
+	}
+
+	if r := run(t, env, "list", "-status", "revoked"); len(certLines(r.stdout, "bob")) != 1 || len(certLines(r.stdout, "alice")) != 0 {
+		t.Fatalf("-status revoked should show only bob: %+v", r)
+	}
+	if r := run(t, env, "list", "-status", "active"); len(certLines(r.stdout, "alice")) != 1 || len(certLines(r.stdout, "bob")) != 0 {
+		t.Fatalf("-status active should exclude revoked bob: %+v", r)
+	}
+	if r := run(t, env, "list", "-kind", "server"); len(certLines(r.stdout, "vpn.example.com")) != 1 || len(certLines(r.stdout, "alice")) != 0 {
+		t.Fatalf("-kind server should show only the server cert: %+v", r)
+	}
+
+	r := run(t, env, "list", "-status", "all", "-sort", "cn")
+	rows := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(rows) != 3 || !strings.Contains(rows[0], "alice") {
+		t.Fatalf("-sort cn should put alice first: %+v", r)
+	}
+	r = run(t, env, "list", "-status", "all", "-sort", "cn", "-desc")
+	rows = strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(rows) != 3 || !strings.Contains(rows[0], "vpn.example.com") {
+		t.Fatalf("-sort cn -desc should put vpn.example.com first: %+v", r)
+	}
+
+	// an unrecognized -sort value must error, not silently fall back to
+	// unsorted output that looks like it worked.
+	if r := run(t, env, "list", "-sort", "name"); r.code == 0 {
+		t.Fatalf("-sort name (not a real field) should fail, not silently no-op: %+v", r)
+	}
+}
+
+func TestUserListSort(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	addUser := withEnv(env, "OVCP_USER_PASSWORD=some-password-1")
+	for _, name := range []string{"charlie", "alice", "bob"} {
+		if r := run(t, addUser, "user", "add", "-name", name, "-role", "operator"); r.code != 0 {
+			t.Fatalf("user add %s: %+v", name, r)
+		}
+	}
+	r := run(t, env, "user", "list", "-sort", "username")
+	if !strings.HasPrefix(strings.TrimSpace(r.stdout), "alice") {
+		t.Fatalf("-sort username should put alice first: %+v", r)
+	}
+	r = run(t, env, "user", "list", "-sort", "username", "-desc")
+	if !strings.HasPrefix(strings.TrimSpace(r.stdout), "charlie") {
+		t.Fatalf("-sort username -desc should put charlie first: %+v", r)
+	}
+}
+
 // TestIssueValidation covers the two footguns `issue` used to allow
 // silently: an encrypted server key (unbootable, openvpn can't prompt for
 // it non-interactively) and a non-positive validity (already-expired cert).
