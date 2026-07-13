@@ -254,7 +254,6 @@
     display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
     gap: 6px 14px; margin-bottom: 10px; font-size: 12px;
   }
-  .logs-head button.ghost, .panel-actions button.ghost { padding: 3px 10px; font-size: 12px; }
   .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
   /* grid not columns: columns rebalance every card while one resizes (bouncing).
      order is set inline from openState so open cards stay first without drag/drop.

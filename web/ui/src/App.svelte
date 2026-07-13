@@ -268,6 +268,7 @@
     font: inherit; color: var(--text); background: var(--ink);
     border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; width: 100%;
   }
+  :global(input:hover), :global(select:hover) { border-color: var(--amber); }
   :global(label) { display: block; font-size: 13px; color: var(--dim); margin-bottom: 10px; }
   :global(.card) {
     background: var(--panel); border: 1px solid var(--line);
@@ -288,9 +289,13 @@
   :global(.poll-pick select), :global(.poll-pick input) { width: auto; }
   :global(.poll-pick select) { padding: 3px 6px; font-size: 12px; }
   /* toggled filter input, and click-to-sort <th>s — every table/log panel.
-     The toggle button itself is a plain .ghost (h2's own small variant below). */
-  :global(h2 button.ghost) { padding: 2px 8px; font-size: 11px; margin-left: 8px; vertical-align: middle; }
-  :global(.search-input) { width: auto; display: inline-block; margin-left: 8px; padding: 4px 8px; font-size: 12px; }
+     One shared size for every small ghost button (h2's Filter toggle, Logs'
+     panel-actions row) and the filter input, so the input's box height
+     (border-box: padding + border + line-height) always matches the button
+     beside it instead of two independently-tuned numbers drifting apart. */
+  :global(h2 button.ghost), :global(.panel-actions button.ghost) { padding: 3px 10px; font-size: 12px; }
+  :global(h2 button.ghost) { margin-left: 8px; vertical-align: middle; }
+  :global(.search-input) { width: auto; display: inline-block; margin-left: 8px; padding: 3px 8px; font-size: 12px; }
   :global(.th-sort) {
     background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer;
   }
@@ -354,13 +359,14 @@
   @media (max-width: 700px) {
     header { padding: 8px 12px; gap: 10px; }
     main { padding: 12px; }
-    .brand strong, .acct-name, .avatar, .pill-text { display: none; } /* logo, status dot, role pill still identify things */
+    .brand :global(.glyph), .brand strong, .acct-name, .avatar, .pill-text { display: none; } /* status dot, role pill still identify things */
     nav { display: none; }
     .nav-mobile { display: block; position: relative; }
     .nav-mobile summary {
       display: block; list-style: none; cursor: pointer; color: var(--text); background: var(--ink);
       border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; font-size: 13px;
     }
+    .nav-mobile summary:hover { border-color: var(--amber); }
     .nav-mobile summary::-webkit-details-marker { display: none; }
     .nav-mobile summary::after { content: ' \25be'; }
     .nav-menu {
