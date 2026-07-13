@@ -44,8 +44,13 @@ type AuditEntry struct {
 }
 
 func Open(path string) (*Store, error) {
+	// 0751, not 0750: openvpn re-stats pki/crl.pem (a sibling under this
+	// same data dir) as an unprivileged user after startup, so every
+	// ancestor directory needs traversal for "other" — see pki.InitCA.
+	// The db file itself stays 0600 below so opening this dir doesn't
+	// newly expose it (sqlite's own default create mode is 0644).
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
+		if err := os.MkdirAll(dir, 0o751); err != nil {
 			return nil, err
 		}
 	}
@@ -56,6 +61,12 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
+	}
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(f, 0o600); err != nil && !os.IsNotExist(err) {
+			db.Close()
+			return nil, err
+		}
 	}
 	key, err := loadOrCreateTOTPKey(filepath.Join(filepath.Dir(path), "totp.key"))
 	if err != nil {

@@ -48,7 +48,11 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 	if _, err := os.Stat(p.caCertPath()); err == nil {
 		return ErrCAExists
 	}
-	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
+	// 0701, not 0700: openvpn re-stats crl.pem on every handshake after
+	// dropping to an unprivileged user (ovpnconf's user/group directives),
+	// so this dir needs traversal for "other" — the private keys inside
+	// stay protected by their own 0600, regardless of the dir's bits.
+	if err := os.MkdirAll(p.Dir, 0o701); err != nil {
 		return err
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
