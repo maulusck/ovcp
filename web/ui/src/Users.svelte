@@ -85,7 +85,7 @@
 {#if !isAdmin}
   <div class="card"><p class="muted">Admin access required to manage users.</p></div>
 {:else}
-  <form class="card issue" onsubmit={addUser}>
+  <form class="card form-card" onsubmit={addUser}>
     <h2>Add user</h2>
     <div class="grid">
       <label>Username <span class="req">*</span>
@@ -167,8 +167,6 @@
 {/if}
 
 <style>
-  .issue { margin-bottom: 18px; }
-  .small { font-size: 12px; margin: 8px 0; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .qr { background: #fff; padding: 8px; border-radius: 4px; }
   .secret { font-family: var(--mono); font-size: 13px; }

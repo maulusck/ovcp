@@ -88,7 +88,7 @@
 </script>
 
 {#if canOperate}
-  <form class="card issue" onsubmit={exportBundle}>
+  <form class="card form-card" onsubmit={exportBundle}>
     <h2>Issue client profile</h2>
     <div class="grid">
       <label>Common name <span class="req">*</span>
@@ -195,17 +195,6 @@
 </div>
 
 <style>
-  .issue { margin-bottom: 18px; }
-  .check { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
-  .check input { width: auto; }
-  .wide { grid-column: 1 / -1; }
-  .wide textarea {
-    width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
-    background: var(--ink); color: var(--text); border: 1px solid var(--line);
-    border-radius: 4px; padding: 7px 10px;
-  }
-  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
-  .small { font-size: 12px; margin: 8px 0 0; }
   .soon { color: var(--amber); }
   .serial {
     background: none; border: 0; padding: 0; color: var(--dim);

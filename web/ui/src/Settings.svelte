@@ -67,7 +67,7 @@
   }
 </script>
 
-<div class="card server-card">
+<div class="card form-card">
   <h2>Server configuration</h2>
   {#if !cfg}
     <p class="muted">Loading…</p>
@@ -144,16 +144,5 @@
 {/if}
 
 <style>
-  .server-card { margin-bottom: 18px; }
-  .check { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
-  .check input { width: auto; }
-  .wide { grid-column: 1 / -1; }
-  .wide textarea {
-    width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
-    background: var(--ink); color: var(--text); border: 1px solid var(--line);
-    border-radius: 4px; padding: 7px 10px;
-  }
-  .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
-  .small { font-size: 12px; margin: 8px 0; }
 </style>

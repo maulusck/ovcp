@@ -305,6 +305,20 @@
   :global(.req) { color: var(--bad); }
   :global(.ok) { color: var(--ok); font-size: 13px; }
   :global(.rv) { color: var(--bad); }
+  /* shared by Certs/Settings/Users' forms: top form card spacing, a
+     checkbox that shouldn't stretch to the grid's field width, a
+     full-width textarea field, a button row, and small print. */
+  :global(.form-card) { margin-bottom: 18px; }
+  :global(.check) { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+  :global(.check input) { width: auto; }
+  :global(.wide) { grid-column: 1 / -1; }
+  :global(.wide textarea) {
+    width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
+    background: var(--ink); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 7px 10px;
+  }
+  :global(.row) { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+  :global(.small) { font-size: 12px; margin: 8px 0; }
 
   .gate { min-height: 100vh; display: grid; place-items: center; }
   .login { width: min(340px, 92vw); }
