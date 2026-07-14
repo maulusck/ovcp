@@ -261,7 +261,7 @@
     background: transparent; color: var(--dim); border: 1px solid var(--line);
   }
   :global(button.ghost:hover:not(:disabled)) {
-    background: var(--line); color: var(--text); opacity: 1;
+    background: var(--line); color: var(--text); border-color: var(--text); opacity: 1;
   }
   /* toggled-on state (e.g. the Filter button while its input is open) */
   :global(button.ghost.active) { background: var(--amber); color: var(--ink); border-color: var(--amber); }
@@ -291,6 +291,7 @@
      its own padding+border on top of the td's, so an action row is taller
      than a plain-text row unless something clamps them to one shared floor. */
   :global(tbody tr:hover) { background: var(--line); }
+  :global(tbody tr:hover button.ghost) { border-color: var(--dim); }
   :global(tbody tr) { height: 42px; }
   /* row-action buttons (Certs' Renew/Revoke, Users' Set password/2FA/Enable/
      Delete, Dashboard's Disconnect) — same "operator button" family as
