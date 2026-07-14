@@ -17,6 +17,7 @@ import (
 
 	"rsc.io/qr"
 
+	"github.com/ovcp/ovcp/internal/api"
 	"github.com/ovcp/ovcp/internal/auth"
 	"github.com/ovcp/ovcp/internal/backup"
 	"github.com/ovcp/ovcp/internal/controller"
@@ -93,6 +94,8 @@ func helpText() string {
 	tw.Flush()
 	b.WriteString("\n-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before\n")
 	b.WriteString("the command, e.g. ovcp -data /tmp/ovcp init ...\n")
+	b.WriteString("-no-color/-log-json disable colors / emit JSON logs; both go before the command, like -data.\n")
+	b.WriteString("-json on list/status/audit/user list prints machine-readable JSON instead.\n")
 	b.WriteString("Full guide: ovcp(8).")
 	return b.String()
 }
@@ -162,6 +165,32 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// paint wraps s in ANSI color code (e.g. ansiGreen) unless colors are off;
+// one function so every command colors output the same way.
+func paint(code, s string) string {
+	if !colorOK(os.Stdout) {
+		return s
+	}
+	return ansi(code, s)
+}
+
+func red(s string) string    { return paint(ansiRed, s) }
+func green(s string) string  { return paint(ansiGreen, s) }
+func yellow(s string) string { return paint(ansiYellow, s) }
+
+// output is the one place every command's `-json` branch lives: JSON-encode
+// rows, or hand them to the command's own text renderer. One call per
+// command instead of an if/else at every print site.
+func output[T any](jsonOut bool, rows T, text func(T)) {
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		die(enc.Encode(rows))
+		return
+	}
+	text(rows)
+}
+
 // sortByFlag sorts rows in place by the named field (string-keyed getters,
 // so time fields sort correctly too via RFC3339's lexicographic order).
 // An empty key is a no-op ("no -sort = today's order"); an unrecognized one
@@ -203,11 +232,34 @@ var userSortGetters = map[string]func(store.User) string{
 	"created":  func(u store.User) string { return u.CreatedAt.Format(time.RFC3339) },
 }
 
+// certStatus classifies a cert for both the text and -json list output.
+func certStatus(c store.Cert) string {
+	switch {
+	case c.RevokedAt != nil:
+		return "REVOKED"
+	case time.Now().After(c.NotAfter):
+		return "expired"
+	default:
+		return "valid"
+	}
+}
+
+// certOut is what `list -json` prints: the fields a script wants, none of
+// the raw PEM bytes store.Cert also carries.
+type certOut struct {
+	Status   string    `json:"status"`
+	Kind     string    `json:"kind"`
+	CN       string    `json:"cn"`
+	Serial   string    `json:"serial"`
+	NotAfter time.Time `json:"expires"`
+}
+
 func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 	status := fs.String("status", "all", "all|active|revoked")
 	kind := fs.String("kind", "all", "all|client|server")
 	sortBy := fs.String("sort", "", "cn|kind|expiry|serial (default: issued order)")
 	desc := fs.Bool("desc", false, "reverse sort order")
+	jsonOut := fs.Bool("json", false, "machine-readable JSON output")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
@@ -227,16 +279,25 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 			out = append(out, c)
 		}
 		die(sortByFlag(out, certSortGetters, *sortBy, *desc))
+		rows := []certOut{}
 		for _, c := range out {
-			certStatus := "valid"
-			if c.RevokedAt != nil {
-				certStatus = "REVOKED"
-			} else if time.Now().After(c.NotAfter) {
-				certStatus = "expired"
-			}
-			fmt.Printf("%-8s %-10s %-24s expires %s  %s\n",
-				certStatus, c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
+			rows = append(rows, certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter})
 		}
+		output(*jsonOut, rows, func(rows []certOut) {
+			for _, c := range rows {
+				st := fmt.Sprintf("%-8s", c.Status) // pad first: color codes must not count toward width
+				switch c.Status {
+				case "REVOKED":
+					st = red(st)
+				case "expired":
+					st = yellow(st)
+				case "valid":
+					st = green(st)
+				}
+				fmt.Printf("%s %-10s %-24s expires %s  %s\n",
+					st, c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
+			}
+		})
 	}
 }
 
@@ -392,33 +453,60 @@ func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
-	sock := fs.String("sock", mgmtSock(), "mgmt socket")
-	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
-	return func(ctx *cliContext) {
-		// process line first (from serve); if serve/openvpn is down, there
-		// are no clients to list, so stop here.
-		r, err := controller.Control(*ctrl, "status")
-		if err != nil {
-			fmt.Println("OpenVPN: unknown —", err)
-			return
-		}
-		if r.Pid == 0 {
-			fmt.Println("OpenVPN: stopped")
-			return
-		}
-		fmt.Printf("OpenVPN: running (pid %d)\n", r.Pid)
-		cl, err := controller.NewClient(*sock).Status()
-		if err != nil {
-			fmt.Println("Clients: unavailable —", err)
-			return
-		}
-		fmt.Printf("Clients: %d connected\n", len(cl))
-		for _, c := range cl {
+// statusOut is what `status -json` prints: process state + connected
+// clients in one object, since scripts want both without screen-scraping.
+type statusOut struct {
+	Running bool                   `json:"running"`
+	Pid     int                    `json:"pid,omitempty"`
+	Error   string                 `json:"error,omitempty"`
+	Clients []controller.VPNClient `json:"clients"`
+}
+
+// printStatusText renders the one statusOut a status run ends up with,
+// whichever of the unknown/stopped/unavailable/running states it hit.
+func printStatusText(st statusOut) {
+	switch {
+	case st.Error != "" && !st.Running:
+		fmt.Println("OpenVPN: unknown —", st.Error)
+	case !st.Running:
+		fmt.Println(red("OpenVPN: stopped"))
+	case st.Error != "":
+		fmt.Printf("OpenVPN: running (pid %d)\n", st.Pid)
+		fmt.Println("Clients: unavailable —", st.Error)
+	default:
+		fmt.Println(green(fmt.Sprintf("OpenVPN: running (pid %d)", st.Pid)))
+		fmt.Printf("Clients: %d connected\n", len(st.Clients))
+		for _, c := range st.Clients {
 			fmt.Printf("  %-20s %-22s %-12s rx %d tx %d since %s\n",
 				c.CN, c.RealAddress, c.VirtualAddress, c.BytesRecv, c.BytesSent,
 				c.ConnectedSince.Format(time.RFC3339))
 		}
+	}
+}
+
+func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
+	sock := fs.String("sock", mgmtSock(), "mgmt socket")
+	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
+	jsonOut := fs.Bool("json", false, "machine-readable JSON output")
+	return func(ctx *cliContext) {
+		st := statusOut{Clients: []controller.VPNClient{}}
+		// process line first (from serve); if serve/openvpn is down, there
+		// are no clients to list, so stop here.
+		r, err := controller.Control(*ctrl, "status")
+		switch {
+		case err != nil:
+			st.Error = err.Error()
+		case r.Pid == 0:
+			// running=false, no clients: nothing more to check
+		default:
+			st.Running, st.Pid = true, r.Pid
+			if cl, err := controller.NewClient(*sock).Status(); err != nil {
+				st.Error = err.Error()
+			} else {
+				st.Clients = cl
+			}
+		}
+		output(*jsonOut, st, printStatusText)
 	}
 }
 
@@ -643,21 +731,30 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			lfs := newFlags("user list")
 			sortBy := lfs.String("sort", "", "username|role|created (default: today's order)")
 			desc := lfs.Bool("desc", false, "reverse sort order")
+			jsonOut := lfs.Bool("json", false, "machine-readable JSON output")
 			lfs.Parse(args[1:])
 			users, err := s.ListUsers()
 			die(err)
 			die(sortByFlag(users, userSortGetters, *sortBy, *desc))
+			rows := []api.UserSummary{}
 			for _, u := range users {
-				st := "enabled"
-				if u.Disabled {
-					st = "DISABLED"
-				}
-				tf := "-"
-				if u.TOTPSecret != "" {
-					tf = "2fa"
-				}
-				fmt.Printf("%-20s %-9s %-8s %s\n", u.Username, u.Role, st, tf)
+				rows = append(rows, api.NewUserSummary(u))
 			}
+			output(*jsonOut, rows, func(rows []api.UserSummary) {
+				for _, u := range rows {
+					st := fmt.Sprintf("%-8s", "enabled")
+					if u.Disabled {
+						st = red(fmt.Sprintf("%-8s", "DISABLED"))
+					} else {
+						st = green(st)
+					}
+					tf := "-"
+					if u.TOTP {
+						tf = "2fa"
+					}
+					fmt.Printf("%-20s %-9s %s %s\n", u.Username, u.Role, st, tf)
+				}
+			})
 
 		case "del":
 			dfs := newFlags("user del")
@@ -710,16 +807,19 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-func cmdAudit(_ *flag.FlagSet) func(ctx *cliContext) {
+func cmdAudit(fs *flag.FlagSet) func(ctx *cliContext) {
+	jsonOut := fs.Bool("json", false, "machine-readable JSON output")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		tail, err := s.AuditTail(50)
 		die(err)
-		for i := len(tail) - 1; i >= 0; i-- {
-			e := tail[i]
-			fmt.Printf("%s %-12s %-16s %s\n", e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail)
-		}
+		slices.Reverse(tail) // newest first, in both output modes
+		output(*jsonOut, tail, func(tail []store.AuditEntry) {
+			for _, e := range tail {
+				fmt.Printf("%s %-12s %-16s %s\n", e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail)
+			}
+		})
 	}
 }
 
@@ -756,12 +856,13 @@ func readSecret(label, env string, confirm bool) []byte {
 
 // printQR renders a QR code as terminal background-color blocks (the one
 // thing qrterminal added over rsc.io/qr itself — not worth a dependency).
+// Ignores -no-color/$NO_COLOR: these blocks are the QR code, not decoration.
 func printQR(text string) {
 	code, err := qr.Encode(text, qr.L)
 	if err != nil {
 		return
 	}
-	const black, white = "\033[40m  \033[0m", "\033[47m  \033[0m"
+	black, white := ansi("40", "  "), ansi("47", "  ")
 	fmt.Println(strings.Repeat(white, code.Size+2))
 	for y := 0; y <= code.Size; y++ {
 		fmt.Print(white)

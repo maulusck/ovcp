@@ -128,7 +128,7 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 
 // statusExport reuses the same reads /status, /certs, /users, /config
 // already do. Certs carry no secrets (keys are never stored); Users goes
-// through userSummary since store.User does (PassHash, TOTPSecret).
+// through UserSummary since store.User does (PassHash, TOTPSecret).
 type statusExport struct {
 	GeneratedAt time.Time
 	ServerCN    string
@@ -136,7 +136,7 @@ type statusExport struct {
 	VPNUp       bool
 	Clients     []controller.VPNClient
 	Certs       []store.Cert
-	Users       []userSummary
+	Users       []UserSummary
 	Config      ovpnconf.Config
 }
 
@@ -152,7 +152,7 @@ func (s *Server) statusExport() statusExport {
 		VPNUp:       err == nil,
 		Clients:     clients,
 		Certs:       []store.Cert{},
-		Users:       []userSummary{},
+		Users:       []UserSummary{},
 		Config:      s.LoadConfig(),
 	}
 	if certs, _ := s.Store.ListCerts(); certs != nil {
@@ -160,7 +160,7 @@ func (s *Server) statusExport() statusExport {
 	}
 	if users, err := s.Store.ListUsers(); err == nil {
 		for _, x := range users {
-			exp.Users = append(exp.Users, userSummary{x.Username, x.Role, x.Disabled, x.TOTPSecret != "", x.CreatedAt})
+			exp.Users = append(exp.Users, NewUserSummary(x))
 		}
 	}
 	return exp

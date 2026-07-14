@@ -4,6 +4,8 @@ ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for 
 .SH SYNOPSIS
 .B ovcp
 [\fB\-data\fR \fIDIR\fR]
+[\fB\-no\-color\fR]
+[\fB\-log\-json\fR]
 \fICOMMAND\fR
 [\fIOPTIONS\fR]
 .SH DESCRIPTION
@@ -222,17 +224,22 @@ data directory, not something to expose over HTTP on a possibly\-live
 server. Follow with \fBrenew\-server\fR (the archive has no server cert)
 and \fBovcp vpn start\fR.
 .TP
-.B list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
-List issued certificates with status (valid, REVOKED, expired).
-\fB\-status\fR/\fB\-kind\fR filter before printing (default \fBall\fR, today's
-behavior). \fB\-sort\fR reorders the filtered list (default: issued order);
-\fB\-desc\fR reverses it. Same filters/sort as the web UI's Certs tab.
+.B list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR] [\fB\-json\fR]
+List issued certificates with status (valid, REVOKED, expired), colored
+accordingly (see \fB\-no\-color\fR). \fB\-status\fR/\fB\-kind\fR filter before
+printing (default \fBall\fR, today's behavior). \fB\-sort\fR reorders the
+filtered list (default: issued order); \fB\-desc\fR reverses it. Same
+filters/sort as the web UI's Certs tab. \fB\-json\fR prints an array of
+\fB{status, kind, cn, serial, expires}\fR instead (see \fBMACHINE\-READABLE
+OUTPUT\fR).
 .TP
-.B status [\fB\-sock\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR]
+.B status [\fB\-sock\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR] [\fB\-json\fR]
 Overview: whether the openvpn worker is running (with its pid, via the
 control socket) and, if so, the connected clients (via the management
 socket). Historical traffic/connection graphs and per\-client session
 history are web\-UI\-only (Stats tab); there is no CLI equivalent.
+\fB\-json\fR prints one object \fB{running, pid, error, clients}\fR instead
+(see \fBMACHINE\-READABLE OUTPUT\fR).
 .TP
 .B kill \fB\-cn\fR \fINAME\fR [\fB\-sock\fR \fIPATH\fR]
 Disconnect a client immediately.
@@ -260,7 +267,7 @@ reports \(lqalready started\(rq rather than spawning a second process.
 .TP
 .B user add \fB\-name\fR \fINAME\fR [\fB\-role\fR admin|operator|readonly]
 .TQ
-.B user list [\fB\-sort\fR username|role|created] [\fB\-desc\fR]
+.B user list [\fB\-sort\fR username|role|created] [\fB\-desc\fR] [\fB\-json\fR]
 .TQ
 .B user del|disable|enable|passwd \fB\-name\fR \fINAME\fR
 .TQ
@@ -268,13 +275,18 @@ reports \(lqalready started\(rq rather than spawning a second process.
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
 (certificates, disconnects), \fBreadonly\fR (default for \fBadd\fR).
 \fBuser list\fR's \fB\-sort\fR reorders (default: today's order); \fB\-desc\fR
-reverses it. Same as the web UI's Users tab.
+reverses it, and its enabled/DISABLED status is colored (see
+\fB\-no\-color\fR). Same as the web UI's Users tab. \fB\-json\fR prints an
+array of \fB{Username, Role, Disabled, TOTP, CreatedAt}\fR instead \(en
+never the password hash or TOTP secret itself (see \fBMACHINE\-READABLE
+OUTPUT\fR).
 .B user totp
 prints an otpauth:// enrollment URL; \fB\-off\fR disables 2FA instead.
 .TP
-.B audit
+.B audit [\fB\-json\fR]
 Print the last 50 audit entries (logins, issues, revocations, kills,
-config changes).
+config changes), newest first. \fB\-json\fR prints the same entries as a
+JSON array instead (see \fBMACHINE\-READABLE OUTPUT\fR).
 .TP
 .B debug on|off
 Toggle verbose logging on a running \fBserve\fR (over the control socket,
@@ -291,8 +303,42 @@ path in \fBFILES\fR below is relative to. Must come before the command
 (\fBovcp \-data\fR \fIDIR\fR \fICOMMAND\fR), like \fBgit \-C\fR / \fBdocker
 \-H\fR.
 .TP
+.B \-no\-color
+Disable ANSI color: the status words in \fBlist\fR/\fBstatus\fR/\fBuser
+list\fR's text output, and the level tag in \fBovcp\fR's own log lines.
+Same effect as \fB$NO_COLOR\fR. Color is already off automatically when the
+relevant stream (stdout for table output, stderr for logs) isn't a
+terminal \(en piped, journal, redirected to a file. Must come before the
+command (\fBovcp \-no\-color\fR \fICOMMAND\fR), like \fB\-data\fR.
+.TP
+.B \-log\-json
+Emit \fBovcp\fR's own log lines \(en both the console/journal stream and
+the tee'd \fI$OVCP_DATA/logs/ovcp.log\fR \(en as one JSON object per line
+(\fBtime\fR, \fBlevel\fR, \fBmsg\fR, plus whatever attributes that log call
+carried) instead of \fBslog\fR's default \fBkey=value\fR text, for log
+shippers/parsers. The web UI's Logs tab parses either format. Orthogonal to
+\fB\-json\fR on individual commands (see \fBMACHINE\-READABLE OUTPUT\fR),
+which is about one command's own stdout, not ovcp's log stream. Must come
+before the command, like \fB\-data\fR.
+.TP
 .B \-h, \-\-help
 Print the command list (\fBCOMMANDS\fR above, condensed) and exit.
+.SH MACHINE\-READABLE OUTPUT
+\fB\-json\fR, accepted by \fBlist\fR, \fBstatus\fR, \fBaudit\fR, and
+\fBuser list\fR, replaces that command's aligned text table with JSON on
+stdout \(en an array for \fBlist\fR/\fBaudit\fR/\fBuser list\fR, one object
+for \fBstatus\fR (see each command's entry in \fBCOMMANDS\fR above for its
+exact fields). It is the one difference between the two output modes: the
+same rows/fields are computed either way, so nothing is present in text
+that is missing from JSON or vice versa. \fBuser list \-json\fR never
+includes the password hash or TOTP secret, in JSON any more than in text.
+Errors and diagnostics (a missing CA, a permission error, an unreachable
+socket) always go to stderr as plain text regardless of \fB\-json\fR;
+it only changes the successful result written to stdout. Pass \fB\-json\fR
+after the command, e.g. \fBovcp list \-json\fR, \fBovcp user list \-json\fR.
+.PP
+This is unrelated to \fB\-log\-json\fR above, which is about \fBovcp\fR's
+own log stream, not a single command's result.
 .SH ENVIRONMENT
 .TP
 .B OVCP_DATA
@@ -332,8 +378,10 @@ Unprivileged account openvpn drops to after startup (default \fInobody\fR
 since Alpine has no \fInogroup\fR.
 .TP
 .B NO_COLOR
-Disable ANSI color in \fBovcp\fR's own log output. Color is already off
-when stderr isn't a terminal (piped, journal, redirected to a file).
+Same as \fB\-no\-color\fR: disable ANSI color in \fBlist\fR/\fBstatus\fR/
+\fBuser list\fR's table output and in \fBovcp\fR's own log lines. Color is
+already off automatically when the relevant stream isn't a terminal
+(piped, journal, redirected to a file).
 .SH FILES
 All paths below are rooted at \fB$OVCP_DATA\fR (default \fI/var/lib/ovcp\fR)
 \(en set it once and everything follows, including these.
@@ -366,7 +414,9 @@ Self\-signed certificate for the admin UI.
 openvpn's stdout/stderr, appended across restarts.
 .TP
 .I $OVCP_DATA/logs/ovcp.log
-ovcp's own log, mirrored to stderr/journal.
+ovcp's own log, mirrored to stderr/journal. \fBkey=value\fR text by
+default, or one JSON object per line with \fB\-log\-json\fR (see
+\fBOPTIONS\fR).
 .TP
 .I $OVCP_DATA/logs/status.log
 openvpn's periodic status dump (connected clients); not the audit log.
@@ -415,6 +465,12 @@ edit the server's own extra directives:
 ovcp export \-cn dana\-phone \-remote vpn.example.com \e
   \-custom\-opts "block\-outside\-dns,ping\-restart 30" > dana\-phone.ovpn
 ovcp custom\-opts
+.RE
+.fi
+Scripting: list expired CNs without parsing column output (needs \fBjq\fR):
+.nf
+.RS
+ovcp list \-json | jq \-r '.[] | select(.status == "expired") | .cn'
 .RE
 .fi
 .SH PRIVILEGES

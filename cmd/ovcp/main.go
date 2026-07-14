@@ -40,16 +40,39 @@ var version = "dev"
 // runtime via the control socket, no restart needed.
 var logLevel = new(slog.LevelVar)
 
+// ANSI color codes, the one place any of them is spelled out as a number —
+// both the log-level colorizer below and commands.go's paint() build on
+// these instead of repeating "31"/"32"/etc.
+const (
+	ansiCyan   = "36"
+	ansiGreen  = "32"
+	ansiYellow = "33"
+	ansiRed    = "31"
+)
+
+// ansi wraps s in color code (e.g. ansiGreen); caller decides whether color
+// is wanted (see colorOK) — this is just the escape-sequence primitive.
+func ansi(code, s string) string { return "\x1b[" + code + "m" + s + "\x1b[0m" }
+
 var logLevelColor = map[string]string{
-	"level=DEBUG": "\x1b[36mlevel=DEBUG\x1b[0m",
-	"level=INFO":  "\x1b[32mlevel=INFO\x1b[0m",
-	"level=WARN":  "\x1b[33mlevel=WARN\x1b[0m",
-	"level=ERROR": "\x1b[31mlevel=ERROR\x1b[0m",
+	"level=DEBUG": ansi(ansiCyan, "level=DEBUG"),
+	"level=INFO":  ansi(ansiGreen, "level=INFO"),
+	"level=WARN":  ansi(ansiYellow, "level=WARN"),
+	"level=ERROR": ansi(ansiRed, "level=ERROR"),
 }
 
-// colorStderr colorizes slog.TextHandler's "level=X" token by wrapping
-// stderr; skipped for NO_COLOR or a non-interactive stderr (piped, journal,
-// redirected to a file) so only an actual terminal ever sees escape codes.
+// noColor is the single on/off switch for every ANSI escape ovcp ever
+// writes — log level tags and the `-json`-adjacent table commands alike.
+// Set from $NO_COLOR or -no-color in main, before anything prints.
+var noColor = os.Getenv("NO_COLOR") != ""
+
+// colorOK reports whether f may receive ANSI escapes: colors aren't off and
+// f is an actual terminal, not a pipe/file/journal.
+func colorOK(f *os.File) bool {
+	return !noColor && term.IsTerminal(int(f.Fd()))
+}
+
+// colorStderr colorizes slog.TextHandler's "level=X" token by wrapping stderr.
 type colorStderr struct{}
 
 func (colorStderr) Write(p []byte) (int, error) {
@@ -64,11 +87,26 @@ func (colorStderr) Write(p []byte) (int, error) {
 	return len(p), err
 }
 
+// logJSON switches slog's default handler to JSON lines, for log
+// shippers/parsers. Set from -log-json in main; also makes logWriter skip
+// colorStderr, whose "level=X" byte-matching doesn't exist in JSON output.
+var logJSON bool
+
 func logWriter() io.Writer {
-	if os.Getenv("NO_COLOR") != "" || !term.IsTerminal(int(os.Stderr.Fd())) {
+	if logJSON || !colorOK(os.Stderr) {
 		return os.Stderr
 	}
 	return colorStderr{}
+}
+
+// newLogHandler is the one place that picks slog's wire format, reused by
+// main's initial logger and runServe's tee-to-file reconfigure.
+func newLogHandler(w io.Writer) slog.Handler {
+	opts := &slog.HandlerOptions{Level: logLevel}
+	if logJSON {
+		return slog.NewJSONHandler(w, opts)
+	}
+	return slog.NewTextHandler(w, opts)
 }
 
 // cliContext bundles the runtime dependencies command bodies need. Built
@@ -83,10 +121,14 @@ type cliContext struct {
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(logWriter(), &slog.HandlerOptions{Level: logLevel})))
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, helpText()) }
 	dataDir := flag.String("data", cmp.Or(os.Getenv("OVCP_DATA"), "/var/lib/ovcp"), "data directory")
+	noColorFlag := flag.Bool("no-color", false, "disable ANSI colors (also: $NO_COLOR)")
+	logJSONFlag := flag.Bool("log-json", false, "emit logs as JSON lines instead of text (for log shippers)")
 	flag.Parse()
+	noColor = noColor || *noColorFlag
+	logJSON = *logJSONFlag
+	slog.SetDefault(slog.New(newLogHandler(logWriter())))
 	args := flag.Args()
 	if len(args) == 0 {
 		usage()
@@ -124,7 +166,7 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	// tail it; unbounded growth, same as openvpn.log — no rotation here either.
 	os.MkdirAll(pp.LogsDir, 0o750)
 	if lf, err := os.OpenFile(pp.OvcpLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); err == nil {
-		slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(logWriter(), lf), &slog.HandlerOptions{Level: logLevel})))
+		slog.SetDefault(slog.New(newLogHandler(io.MultiWriter(logWriter(), lf))))
 	}
 	if os.Geteuid() != 0 {
 		slog.Warn("not root; ovcp owns the PKI and starts openvpn, both need root")

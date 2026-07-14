@@ -7,14 +7,21 @@
   // tables) — 24h, no AM/PM, no date/time comma, browser locale otherwise.
   const fmtTime = (d) => d.toLocaleString(undefined, { hour12: false }).replace(',', '')
 
-  // Splits a line into time/level/msg. Two known prefixes: ovcp's own
-  // "time=... level=X ..." and openvpn's "YYYY-MM-DD HH:MM:SS ..." (see the
-  // fixture in internal/api/logs_test.go). The raw timestamp is reformatted
-  // with fmtTime so all three panels show one consistent format instead of
-  // three raw wire formats (and the ISO string's "Z" never leaks through —
-  // fmtTime always renders in the browser's local time).
+  // Splits a line into time/level/msg: ovcp's "time=... level=X ..." text,
+  // ovcp's -log-json JSON-lines form, or openvpn's "YYYY-MM-DD HH:MM:SS ...".
+  // fmtTime reformats the timestamp so every panel shares one display format.
   function parseLine(line) {
     let raw = '', msg = line, level
+    if (line[0] === '{') {
+      try {
+        const j = JSON.parse(line)
+        const extra = Object.keys(j).filter(k => k !== 'time' && k !== 'level' && k !== 'msg')
+          .map(k => `${k}=${j[k]}`).join(' ')
+        raw = j.time; level = (j.level || 'info').toLowerCase()
+        msg = extra ? `${j.msg} ${extra}` : j.msg
+        return { time: fmtTime(new Date(raw)), level, msg }
+      } catch { /* not JSON after all — fall through to text parsing */ }
+    }
     let m = line.match(/^time=(\S+)\s+level=(\w+)\s+(.*)$/)
     if (m) {
       raw = m[1]; level = m[2].toLowerCase(); msg = m[3]
