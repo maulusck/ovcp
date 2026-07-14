@@ -15,7 +15,7 @@ const (
 	// are keyed by CN, not cert serial, so history survives cert revocation/
 	// reissue same as the audit log does (cn/serial recorded as plain text,
 	// no FK) — nothing to clean up when a client cert is revoked.
-	statsRetention = 24 * time.Hour
+	StatsRetention = 24 * time.Hour
 )
 
 // RunStatsSampler polls live VPN status on a fixed interval, persisting an
@@ -52,17 +52,13 @@ func (s *Server) statsTick(prev map[string]controller.VPNClient) (next map[strin
 	if err != nil {
 		return prev // VPN down/restarting; skip this tick, not an error
 	}
+	now := time.Now()
 	curByCN := make(map[string]controller.VPNClient, len(cur))
-	var recv, sent uint64
 	for _, c := range cur {
 		curByCN[c.CN] = c
-		recv += c.BytesRecv
-		sent += c.BytesSent
-	}
-
-	now := time.Now()
-	if err := s.Store.AddSample(store.Sample{TS: now, Clients: len(cur), BytesRecv: recv, BytesSent: sent}); err != nil {
-		slog.Warn("stats sample write failed", "err", err)
+		if err := s.Store.AddClientSample(now, c.CN, c.BytesRecv, c.BytesSent); err != nil {
+			slog.Warn("stats sample write failed", "cn", c.CN, "err", err)
+		}
 	}
 	for cn, was := range prev {
 		if _, stillUp := curByCN[cn]; stillUp {
@@ -77,14 +73,24 @@ func (s *Server) statsTick(prev map[string]controller.VPNClient) (next map[strin
 			slog.Warn("stats session write failed", "cn", cn, "err", err)
 		}
 	}
-	if err := s.Store.PruneStats(now.Add(-statsRetention)); err != nil {
+	if err := s.Store.PruneStats(now.Add(-StatsRetention)); err != nil {
 		slog.Warn("stats prune failed", "err", err)
 	}
 	return curByCN
 }
 
+// handleStats serves the global aggregate, or one client's own series when
+// ?cn= is given — same shape either way, so the frontend's chart code
+// doesn't care which it got.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, u *store.User) {
-	samples, err := s.Store.Samples(time.Now().Add(-statsRetention))
+	since := time.Now().Add(-StatsRetention)
+	var samples []store.Sample
+	var err error
+	if cn := r.URL.Query().Get("cn"); cn != "" {
+		samples, err = s.Store.ClientSamples(cn, since)
+	} else {
+		samples, err = s.Store.Samples(since)
+	}
 	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return

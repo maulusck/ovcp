@@ -174,6 +174,34 @@ func TestLifecycle(t *testing.T) {
 	}
 }
 
+// TestStats covers the snapshot (non-follow) path against an empty history
+// — no live openvpn in this test binary, so samples/sessions are always
+// empty, but that's enough to exercise the text/json branches and the
+// -follow/-json guard without needing a real mgmt socket.
+func TestStats(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "stats"); r.code != 0 || !strings.Contains(r.stdout, "no samples yet") {
+		t.Fatalf("stats (empty): %+v", r)
+	}
+	if r := run(t, env, "stats", "-cn", "alice"); r.code != 0 || !strings.Contains(r.stdout, "no samples yet") {
+		t.Fatalf("stats -cn (empty): %+v", r)
+	}
+	r := run(t, env, "stats", "-json")
+	if r.code != 0 {
+		t.Fatalf("stats -json: %+v", r)
+	}
+	var out statsSnapshot
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.Samples == nil || out.Sessions == nil {
+		t.Fatalf("stats -json shape: want empty arrays, not null: %+v err=%v", r, err)
+	}
+	if r := run(t, env, "stats", "-follow", "-json"); r.code == 0 || !strings.Contains(r.stderr, "-follow") {
+		t.Fatalf("stats -follow -json should be rejected: %+v", r)
+	}
+}
+
 func TestSortByFlag(t *testing.T) {
 	type row struct{ name string }
 	rows := []row{{"charlie"}, {"alice"}, {"bob"}}

@@ -41,13 +41,19 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
--- periodic aggregate snapshot (Stats tab charts); one row per sample tick.
-CREATE TABLE IF NOT EXISTS vpn_samples (
-  ts         INTEGER PRIMARY KEY,          -- unix
-  clients    INTEGER NOT NULL,
-  bytes_recv INTEGER NOT NULL,             -- sum across all connected clients at ts
-  bytes_sent INTEGER NOT NULL
+DROP TABLE IF EXISTS vpn_samples; -- superseded by client_samples below
+
+-- periodic per-client snapshot (Stats tab charts); one row per connected
+-- client per sample tick. The global view (Connected clients/Rate/Volume)
+-- is a GROUP BY ts over this table; the per-client view is a WHERE cn = ?.
+CREATE TABLE IF NOT EXISTS client_samples (
+  ts         INTEGER NOT NULL,             -- unix
+  cn         TEXT NOT NULL,
+  bytes_recv INTEGER NOT NULL,             -- that client's own cumulative counter at ts (OpenVPN's, resets on reconnect)
+  bytes_sent INTEGER NOT NULL,
+  PRIMARY KEY (ts, cn)
 );
+CREATE INDEX IF NOT EXISTS idx_client_samples_cn ON client_samples(cn, ts);
 
 -- one row per finished client session; a session missing from one sample to
 -- the next is logged here, so this table doubles as the disconnect log.

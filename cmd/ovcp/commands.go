@@ -73,6 +73,7 @@ var commands = []command{
 	{name: "list", usage: "[-status all|active|revoked] [-kind all|client|server] [-sort cn|kind|expiry|serial] [-desc]   list certificates", run: cmdList},
 	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW] [-split-tunnel] [-custom-opts OPTS|-]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
+	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N] [-json]   traffic history, or a live top-like follow view", run: cmdStats},
 	{name: "kill", usage: "-cn NAME [-sock PATH]   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
@@ -95,7 +96,7 @@ func helpText() string {
 	b.WriteString("\n-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before\n")
 	b.WriteString("the command, e.g. ovcp -data /tmp/ovcp init ...\n")
 	b.WriteString("-no-color/-log-json disable colors / emit JSON logs; both go before the command, like -data.\n")
-	b.WriteString("-json on list/status/audit/user list prints machine-readable JSON instead.\n")
+	b.WriteString("-json on list/status/audit/stats/user list prints machine-readable JSON instead.\n")
 	b.WriteString("Full guide: ovcp(8).")
 	return b.String()
 }

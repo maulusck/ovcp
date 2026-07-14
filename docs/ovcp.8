@@ -236,9 +236,18 @@ OUTPUT\fR).
 .B status [\fB\-sock\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR] [\fB\-json\fR]
 Overview: whether the openvpn worker is running (with its pid, via the
 control socket) and, if so, the connected clients (via the management
-socket). Historical traffic/connection graphs and per\-client session
-history are web\-UI\-only (Stats tab); there is no CLI equivalent.
-\fB\-json\fR prints one object \fB{running, pid, error, clients}\fR instead
+socket). Traffic history and per\-client sessions are \fBstats\fR's job,
+not this command's. \fB\-json\fR prints one object
+\fB{running, pid, error, clients}\fR instead (see \fBMACHINE\-READABLE
+OUTPUT\fR).
+.TP
+.B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR \fIN\fR] [\fB\-json\fR]
+Traffic history: recent throughput/volume and finished client sessions,
+globally or for one client (\fB\-cn\fR). Same data as the web UI's Stats
+tab. \fB\-follow\fR switches to a live top\-like view instead \(en polls the
+management socket directly every \fB\-interval\fR seconds (default 2) and
+redraws in place, sorted busiest\-first when global; ignores \fB\-json\fR.
+\fB\-json\fR (snapshot mode only) prints \fB{samples, sessions}\fR instead
 (see \fBMACHINE\-READABLE OUTPUT\fR).
 .TP
 .B kill \fB\-cn\fR \fINAME\fR [\fB\-sock\fR \fIPATH\fR]
@@ -324,14 +333,17 @@ before the command, like \fB\-data\fR.
 .B \-h, \-\-help
 Print the command list (\fBCOMMANDS\fR above, condensed) and exit.
 .SH MACHINE\-READABLE OUTPUT
-\fB\-json\fR, accepted by \fBlist\fR, \fBstatus\fR, \fBaudit\fR, and
-\fBuser list\fR, replaces that command's aligned text table with JSON on
-stdout \(en an array for \fBlist\fR/\fBaudit\fR/\fBuser list\fR, one object
-for \fBstatus\fR (see each command's entry in \fBCOMMANDS\fR above for its
-exact fields). It is the one difference between the two output modes: the
-same rows/fields are computed either way, so nothing is present in text
-that is missing from JSON or vice versa. \fBuser list \-json\fR never
-includes the password hash or TOTP secret, in JSON any more than in text.
+\fB\-json\fR, accepted by \fBlist\fR, \fBstatus\fR, \fBstats\fR,
+\fBaudit\fR, and \fBuser list\fR, replaces that command's aligned text
+output with JSON on stdout \(en an array for \fBlist\fR/\fBaudit\fR/
+\fBuser list\fR, one object for \fBstatus\fR/\fBstats\fR (see each
+command's entry in \fBCOMMANDS\fR above for its exact fields). It is the
+one difference between the two output modes: the same rows/fields are
+computed either way, so nothing is present in text that is missing from
+JSON or vice versa (\fBstats \-follow\fR is the one exception \(en a live
+view, not a single result, so \fB\-json\fR doesn't apply to it). \fBuser
+list \-json\fR never includes the password hash or TOTP secret, in JSON
+any more than in text.
 Errors and diagnostics (a missing CA, a permission error, an unreachable
 socket) always go to stderr as plain text regardless of \fB\-json\fR;
 it only changes the successful result written to stdout. Pass \fB\-json\fR

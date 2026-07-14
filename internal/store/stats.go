@@ -19,17 +19,21 @@ type ClientSession struct {
 	BytesSent      uint64
 }
 
-func (s *Store) AddSample(sm Sample) error {
+// AddClientSample records one connected client's byte counters at ts —
+// the sampler calls this once per connected client per tick.
+func (s *Store) AddClientSample(ts time.Time, cn string, bytesRecv, bytesSent uint64) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO vpn_samples(ts, clients, bytes_recv, bytes_sent) VALUES (?,?,?,?)`,
-		sm.TS.Unix(), sm.Clients, sm.BytesRecv, sm.BytesSent)
+		`INSERT OR REPLACE INTO client_samples(ts, cn, bytes_recv, bytes_sent) VALUES (?,?,?,?)`,
+		ts.Unix(), cn, bytesRecv, bytesSent)
 	return err
 }
 
-// Samples returns aggregate snapshots since the given time, oldest first (chart order).
+// Samples returns the whole-VPN aggregate since the given time, oldest first
+// (chart order): connected-client count and summed byte counters per tick.
 func (s *Store) Samples(since time.Time) ([]Sample, error) {
 	rows, err := s.db.Query(
-		`SELECT ts, clients, bytes_recv, bytes_sent FROM vpn_samples WHERE ts >= ? ORDER BY ts`, since.Unix())
+		`SELECT ts, COUNT(*), SUM(bytes_recv), SUM(bytes_sent) FROM client_samples
+		 WHERE ts >= ? GROUP BY ts ORDER BY ts`, since.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -39,6 +43,29 @@ func (s *Store) Samples(since time.Time) ([]Sample, error) {
 		var sm Sample
 		var ts int64
 		if err := rows.Scan(&ts, &sm.Clients, &sm.BytesRecv, &sm.BytesSent); err != nil {
+			return nil, err
+		}
+		sm.TS = time.Unix(ts, 0)
+		out = append(out, sm)
+	}
+	return out, rows.Err()
+}
+
+// ClientSamples returns one client's own byte-counter series since the given
+// time, oldest first. Clients is left unset — a per-CN row isn't a count.
+func (s *Store) ClientSamples(cn string, since time.Time) ([]Sample, error) {
+	rows, err := s.db.Query(
+		`SELECT ts, bytes_recv, bytes_sent FROM client_samples
+		 WHERE cn = ? AND ts >= ? ORDER BY ts`, cn, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Sample
+	for rows.Next() {
+		var sm Sample
+		var ts int64
+		if err := rows.Scan(&ts, &sm.BytesRecv, &sm.BytesSent); err != nil {
 			return nil, err
 		}
 		sm.TS = time.Unix(ts, 0)
@@ -81,7 +108,7 @@ func (s *Store) Sessions(limit int) ([]ClientSession, error) {
 // PruneStats drops samples/sessions older than before, bounding table growth
 // (called every sampler tick — cheap no-op deletes most of the time).
 func (s *Store) PruneStats(before time.Time) error {
-	if _, err := s.db.Exec(`DELETE FROM vpn_samples WHERE ts < ?`, before.Unix()); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM client_samples WHERE ts < ?`, before.Unix()); err != nil {
 		return err
 	}
 	_, err := s.db.Exec(`DELETE FROM client_sessions WHERE disconnected_at < ?`, before.Unix())
