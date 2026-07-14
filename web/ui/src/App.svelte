@@ -289,11 +289,13 @@
   :global(.poll-pick select), :global(.poll-pick input) { width: auto; }
   :global(.poll-pick select) { padding: 3px 6px; font-size: 12px; }
   /* toggled filter input, and click-to-sort <th>s — every table/log panel.
-     One shared size for every small ghost button (h2's Filter toggle, Logs'
-     panel-actions row) and the filter input, so the input's box height
-     (border-box: padding + border + line-height) always matches the button
-     beside it instead of two independently-tuned numbers drifting apart. */
-  :global(h2 button.ghost), :global(.panel-actions button.ghost) { padding: 3px 10px; font-size: 12px; }
+     One shared size for every small ghost button (h2's Filter toggle,
+     Logs'/Stats' own toolbar rows, Logs' per-panel actions row) and the
+     filter input, so the input's box height (border-box: padding + border
+     + line-height) always matches the button and .poll-pick select beside
+     it instead of independently-tuned numbers drifting apart. */
+  :global(h2 button.ghost), :global(.panel-actions button.ghost),
+  :global(.logs-head button.ghost), :global(.stats-head button.ghost) { padding: 3px 10px; font-size: 12px; }
   :global(h2 button.ghost) { margin-left: 8px; vertical-align: middle; }
   :global(.search-input) { width: auto; display: inline-block; margin-left: 8px; padding: 3px 8px; font-size: 12px; }
   :global(.th-sort) {
