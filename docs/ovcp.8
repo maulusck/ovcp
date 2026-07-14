@@ -485,6 +485,12 @@ Scripting: list expired CNs without parsing column output (needs \fBjq\fR):
 ovcp list \-json | jq \-r '.[] | select(.status == "expired") | .cn'
 .RE
 .fi
+Watch one client's live bandwidth while troubleshooting a slow connection:
+.nf
+.RS
+ovcp stats \-cn dana\-phone \-follow
+.RE
+.fi
 .SH PRIVILEGES
 .B ovcp
 runs as root and is the sole owner of the PKI and configuration

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ovcp/ovcp/internal/auth"
 	"github.com/ovcp/ovcp/internal/controller"
@@ -330,6 +331,54 @@ func TestExportSplitTunnelRejected(t *testing.T) {
 	r := e.req("POST", "/api/certs/export", `{"CN":"bob","Passphrase":"`+pass+`","SplitTunnel":true}`, true)
 	if r.StatusCode != 400 {
 		t.Fatalf("split-tunnel without server redirect should 400, got %s", r.Status)
+	}
+}
+
+// TestStatsEndpoint covers the ?cn= branch handleStats gained when
+// vpn_samples (global-only) became client_samples (per-CN): global must
+// aggregate across clients, ?cn= must return only that one's own series.
+func TestStatsEndpoint(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+
+	t0 := time.Now().Add(-time.Minute)
+	t1 := t0.Add(time.Minute)
+	die := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := store.Open(filepath.Join(e.dir, "t.db"))
+	die(err)
+	defer s.Close()
+	die(s.AddClientSample(t0, "alice", 100, 200))
+	die(s.AddClientSample(t0, "bob", 10, 20))
+	die(s.AddClientSample(t1, "alice", 150, 250))
+
+	var out struct {
+		Samples []struct {
+			Clients              int
+			BytesRecv, BytesSent uint64
+		}
+	}
+
+	r := e.req("GET", "/api/stats", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || len(out.Samples) != 2 || out.Samples[0].Clients != 2 || out.Samples[0].BytesRecv != 110 {
+		t.Fatalf("global samples: status=%d %+v", r.StatusCode, out.Samples)
+	}
+
+	r = e.req("GET", "/api/stats?cn=alice", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || len(out.Samples) != 2 || out.Samples[1].BytesRecv != 150 {
+		t.Fatalf("alice-scoped samples: status=%d %+v", r.StatusCode, out.Samples)
+	}
+
+	r = e.req("GET", "/api/stats?cn=nobody", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || len(out.Samples) != 0 {
+		t.Fatalf("unknown cn should be an empty series, not an error: status=%d %+v", r.StatusCode, out.Samples)
 	}
 }
 
