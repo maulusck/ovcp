@@ -33,6 +33,15 @@ type RevokedEntry struct {
 	RevokedAt time.Time
 }
 
+// MaxCNLen bounds every CN this package issues a cert for: RFC 5280's own
+// upper limit on an X.509 CommonName (ub-common-name = 64 bytes), the type
+// a cn here actually is. Enforced once, here, at issuance — the one place
+// a CN longer than this could ever come to exist — so every other bound
+// downstream (internal/api's stats endpoint, which rejects a ?cn= query
+// past this same length) can never see a legitimately-issued CN it treats
+// as invalid.
+const MaxCNLen = 64
+
 func New(dir string) *PKI { return &PKI{Dir: dir} }
 
 func (p *PKI) caCertPath() string { return filepath.Join(p.Dir, "ca.crt") }
@@ -154,6 +163,9 @@ const (
 // The private key is generated here and returned; it is the caller's job to
 // hand it to the operator (client bundle) or write it for openvpn (server).
 func (p *PKI) Issue(kind CertKind, cn string, days int, passphrase []byte) (*IssuedCert, error) {
+	if n := len(cn); n == 0 || n > MaxCNLen {
+		return nil, fmt.Errorf("pki: cn must be 1-%d bytes, got %d", MaxCNLen, n)
+	}
 	caCert, caKey, err := p.loadCA(passphrase)
 	if err != nil {
 		return nil, err

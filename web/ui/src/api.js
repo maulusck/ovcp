@@ -55,6 +55,12 @@ export function fmtBytes(n) {
   return n.toFixed(1) + ' ' + u[i]
 }
 
+// BytesRecvRate/BytesSentRate on a Sample are already bytes/sec, computed
+// server-side (internal/store's Rate) — this only adds the "/s", it never
+// re-derives a rate from raw counters (that's the CLI's -follow view's job
+// live, and the DB's job historically; the UI just displays what it's given).
+export function fmtRate(n) { return fmtBytes(n) + '/s' }
+
 // shared by every sortable table (Certs/Users/Dashboard/Stats): click-a-<th>
 // sort, no per-table comparator logic.
 export function sortRows(rows, get, desc = false) {

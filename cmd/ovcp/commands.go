@@ -74,7 +74,7 @@ var commands = []command{
 	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW] [-split-tunnel] [-custom-opts OPTS|-]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N] [-json]   traffic history, or a live top-like follow view", run: cmdStats},
-	{name: "kill", usage: "-cn NAME [-sock PATH]   disconnect client", run: cmdKill},
+	{name: "kill", usage: "-cn NAME [-ctrl PATH]   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
@@ -486,7 +486,6 @@ func printStatusText(st statusOut) {
 }
 
 func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
-	sock := fs.String("sock", mgmtSock(), "mgmt socket")
 	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 	jsonOut := fs.Bool("json", false, "machine-readable JSON output")
 	return func(ctx *cliContext) {
@@ -501,7 +500,11 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 			// running=false, no clients: nothing more to check
 		default:
 			st.Running, st.Pid = true, r.Pid
-			if cl, err := controller.NewClient(*sock).Status(); err != nil {
+			// via serve's control socket, not a second dial to openvpn's own
+			// mgmt socket — openvpn only ever serves one connected mgmt
+			// client, and serve (still running, just proven above) already
+			// holds that slot for its whole life.
+			if cl, err := controller.Clients(*ctrl); err != nil {
 				st.Error = err.Error()
 			} else {
 				st.Clients = cl
@@ -512,13 +515,13 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 }
 
 func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
-	sock := fs.String("sock", mgmtSock(), "mgmt socket")
+	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 	cn := fs.String("cn", "", "client CN (required)")
 	return func(ctx *cliContext) {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
 		}
-		die(controller.NewClient(*sock).Kill(*cn))
+		die(controller.Kill(*ctrl, *cn))
 		s := ctx.openStore()
 		defer s.Close()
 		s.Audit("cli", "kill", "cn="+*cn)

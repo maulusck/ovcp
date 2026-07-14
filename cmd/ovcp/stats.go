@@ -25,16 +25,16 @@ type statsSnapshot struct {
 
 func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 	cn := fs.String("cn", "", "client CN (default: global aggregate)")
-	follow := fs.Bool("follow", false, "live top-like view, polls the mgmt socket directly (ignores -json)")
+	follow := fs.Bool("follow", false, "live top-like view, via a running serve's control socket (ignores -json)")
 	interval := fs.Int("interval", 2, "poll interval in seconds, -follow only")
-	sock := fs.String("sock", mgmtSock(), "mgmt socket, -follow only")
+	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket, -follow only")
 	jsonOut := fs.Bool("json", false, "machine-readable JSON output (snapshot mode only)")
 	return func(ctx *cliContext) {
 		if *follow {
 			if *jsonOut {
 				die(fmt.Errorf("-json is not supported with -follow"))
 			}
-			followStats(*sock, *cn, *interval)
+			followStats(*ctrl, *cn, *interval)
 			return
 		}
 		s := ctx.openStore()
@@ -73,23 +73,6 @@ func filterSessionsByCN(sessions []store.ClientSession, cn string) []store.Clien
 	return out
 }
 
-// rate returns bytes/sec between two samples of the same series (the global
-// aggregate, or one CN's own counters). OpenVPN's per-client counter resets
-// on reconnect, so a negative delta clamps to 0 instead of going negative.
-func rate(prev, cur store.Sample) (recvPerSec, sentPerSec float64) {
-	dt := cur.TS.Sub(prev.TS).Seconds()
-	if dt <= 0 {
-		return 0, 0
-	}
-	delta := func(a, b uint64) float64 {
-		if b <= a {
-			return 0
-		}
-		return float64(b-a) / dt
-	}
-	return delta(prev.BytesRecv, cur.BytesRecv), delta(prev.BytesSent, cur.BytesSent)
-}
-
 // fmtBytes mirrors web/ui/src/api.js's fmtBytes: same units, same thresholds.
 func fmtBytes(n uint64) string {
 	if n < 1024 {
@@ -104,7 +87,7 @@ func fmtBytes(n uint64) string {
 	return fmt.Sprintf("%.1f %s", v, units[i])
 }
 
-func fmtRate(bytesPerSec float64) string { return fmtBytes(uint64(bytesPerSec)) + "/s" }
+func fmtRate(bytesPerSec uint64) string { return fmtBytes(bytesPerSec) + "/s" }
 
 // fmtDur mirrors web/ui/src/Stats.svelte's fmtDur: same thresholds.
 func fmtDur(d time.Duration) string {
@@ -128,9 +111,8 @@ func printStatsText(o statsSnapshot, cn string) {
 		} else {
 			fmt.Printf("%s   recv %s   sent %s\n", cn, fmtBytes(last.BytesRecv), fmtBytes(last.BytesSent))
 		}
-		if len(o.Samples) >= 2 {
-			rx, tx := rate(o.Samples[len(o.Samples)-2], last)
-			fmt.Printf("rate: rx %s   tx %s\n", fmtRate(rx), fmtRate(tx))
+		if len(o.Samples) >= 2 { // the first sample always has rate 0 — no baseline yet
+			fmt.Printf("rate: rx %s   tx %s\n", fmtRate(last.BytesRecvRate), fmtRate(last.BytesSentRate))
 		}
 		fmt.Printf("%d sample(s), oldest %s\n", len(o.Samples), o.Samples[0].TS.Format(time.RFC3339))
 	}
@@ -153,13 +135,20 @@ func printStatsText(o statsSnapshot, cn string) {
 	}
 }
 
-// followStats polls the mgmt socket directly (bypassing the DB/sampler
-// entirely) at intervalSec and redraws a small in-place block, top-style.
-func followStats(sock, cn string, intervalSec int) {
+// followStats polls a running serve's control socket (bypassing the DB/
+// sampler entirely, for sub-minute liveliness) at intervalSec and redraws a
+// small in-place block, top-style.
+//
+// This goes through serve, not a direct dial to openvpn's own mgmt socket:
+// OpenVPN's management interface serves exactly one connected client, ever,
+// and serve already holds that slot for its whole life — a second direct
+// dial doesn't get refused, it just hangs until openvpn's accept queue
+// backs up and every mgmt-dependent command (this, `status`, `kill`) starts
+// failing with "resource temporarily unavailable". See ServeControl.
+func followStats(ctrl, cn string, intervalSec int) {
 	if intervalSec <= 0 {
 		intervalSec = 2
 	}
-	mc := controller.NewClient(sock)
 	tty := term.IsTerminal(int(os.Stdout.Fd()))
 	if tty {
 		fmt.Print("\x1b[?25l") // hide cursor
@@ -174,17 +163,15 @@ func followStats(sock, cn string, intervalSec int) {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; restore(); os.Exit(0) }()
 
-	var prevG store.Sample
-	haveG := false
 	// ponytail: prevC never evicts CNs that leave for good — fine for an
 	// interactive session (bounded by distinct clients seen this run); add
-	// a sweep if -f is ever left running unattended for days.
+	// a sweep if -follow is ever left running unattended for days.
 	prevC := map[string]store.Sample{}
 	printed := 0
 	for {
-		clients, err := mc.Status()
+		clients, err := controller.Clients(ctrl)
 		now := time.Now()
-		lines := followLines(clients, err, cn, now, &prevG, &haveG, prevC)
+		lines := followLines(clients, err, cn, now, prevC)
 		redraw(lines, &printed, tty)
 		time.Sleep(time.Duration(intervalSec) * time.Second)
 	}
@@ -216,49 +203,45 @@ func redraw(lines []string, printed *int, tty bool) {
 }
 
 // followLines renders one frame: a header, then either a single client's
-// detail (-cn set) or a per-client table sorted busiest-first (global),
-// like top. prevG/haveG/prevC persist across calls so each frame gets a real
-// rate instead of just a cumulative counter.
-func followLines(clients []controller.VPNClient, err error, cn string, now time.Time,
-	prevG *store.Sample, haveG *bool, prevC map[string]store.Sample) []string {
+// detail (-cn set) or a per-client table sorted busiest-first (global), like
+// top. prevC (one entry per CN, updated in place every frame) is the only
+// state carried across calls — the global rate is derived from it exactly
+// like store.Samples derives it from the DB: sum each still-connected
+// client's own clamped delta, divide once, never diff the aggregate itself.
+func followLines(clients []controller.VPNClient, err error, cn string, now time.Time, prevC map[string]store.Sample) []string {
 	if err != nil {
 		return []string{red("VPN unreachable — " + err.Error())}
 	}
-
 	byCN := make(map[string]controller.VPNClient, len(clients))
-	var recv, sent uint64
 	for _, c := range clients {
 		byCN[c.CN] = c
-		recv += c.BytesRecv
-		sent += c.BytesSent
 	}
-	curG := store.Sample{TS: now, Clients: len(clients), BytesRecv: recv, BytesSent: sent}
-	var grx, gtx float64
-	if *haveG {
-		grx, gtx = rate(*prevG, curG)
-	}
-	*prevG, *haveG = curG, true
 
 	if cn == "" {
+		type row struct {
+			cn         string
+			rx, tx     uint64
+			recv, sent uint64
+		}
+		rows := make([]row, 0, len(clients))
+		var recvDelta, sentDelta uint64
+		var dt time.Duration
+		for _, c := range clients {
+			var rx, tx uint64
+			if old, ok := prevC[c.CN]; ok {
+				dt = now.Sub(old.TS) // same for every client seen last tick
+				rx, tx = store.Rate(old.BytesRecv, c.BytesRecv, dt), store.Rate(old.BytesSent, c.BytesSent, dt)
+				recvDelta += store.ClampedDelta(old.BytesRecv, c.BytesRecv)
+				sentDelta += store.ClampedDelta(old.BytesSent, c.BytesSent)
+			}
+			prevC[c.CN] = store.Sample{TS: now, BytesRecv: c.BytesRecv, BytesSent: c.BytesSent}
+			rows = append(rows, row{c.CN, rx, tx, c.BytesRecv, c.BytesSent})
+		}
+		grx, gtx := store.Rate(0, recvDelta, dt), store.Rate(0, sentDelta, dt)
 		lines := []string{fmt.Sprintf("%s · %d client(s)   rx %s   tx %s",
 			green("vpn up"), len(clients), fmtRate(grx), fmtRate(gtx))}
 		if len(clients) == 0 {
 			return lines
-		}
-		type row struct {
-			cn         string
-			rx, tx     float64
-			recv, sent uint64
-		}
-		rows := make([]row, 0, len(clients))
-		for _, c := range clients {
-			cur := store.Sample{TS: now, BytesRecv: c.BytesRecv, BytesSent: c.BytesSent}
-			var rx, tx float64
-			if old, ok := prevC[c.CN]; ok {
-				rx, tx = rate(old, cur)
-			}
-			prevC[c.CN] = cur
-			rows = append(rows, row{c.CN, rx, tx, c.BytesRecv, c.BytesSent})
 		}
 		sort.Slice(rows, func(i, j int) bool { return rows[i].rx+rows[i].tx > rows[j].rx+rows[j].tx })
 		lines = append(lines, fmt.Sprintf("%-20s %-11s %-11s %-12s %-12s", "CN", "RECV/s", "SENT/s", "TOTAL RECV", "TOTAL SENT"))
@@ -280,12 +263,12 @@ func followLines(clients []controller.VPNClient, err error, cn string, now time.
 	if !ok {
 		return []string{yellow(cn + ": not connected")}
 	}
-	cur := store.Sample{TS: now, BytesRecv: c.BytesRecv, BytesSent: c.BytesSent}
-	var rx, tx float64
+	var rx, tx uint64
 	if old, ok := prevC[cn]; ok {
-		rx, tx = rate(old, cur)
+		dt := now.Sub(old.TS)
+		rx, tx = store.Rate(old.BytesRecv, c.BytesRecv, dt), store.Rate(old.BytesSent, c.BytesSent, dt)
 	}
-	prevC[cn] = cur
+	prevC[cn] = store.Sample{TS: now, BytesRecv: c.BytesRecv, BytesSent: c.BytesSent}
 	return []string{
 		fmt.Sprintf("%s · connected since %s", green(cn), c.ConnectedSince.Format("15:04:05")),
 		fmt.Sprintf("rx %s   tx %s   total recv %s   total sent %s", fmtRate(rx), fmtRate(tx), fmtBytes(c.BytesRecv), fmtBytes(c.BytesSent)),

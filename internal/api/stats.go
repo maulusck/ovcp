@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 )
 
@@ -83,10 +84,15 @@ func (s *Server) statsTick(prev map[string]controller.VPNClient) (next map[strin
 // ?cn= is given — same shape either way, so the frontend's chart code
 // doesn't care which it got.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, u *store.User) {
+	cn := r.URL.Query().Get("cn")
+	if len(cn) > pki.MaxCNLen {
+		jsonErr(w, 400, "cn too long")
+		return
+	}
 	since := time.Now().Add(-StatsRetention)
 	var samples []store.Sample
 	var err error
-	if cn := r.URL.Query().Get("cn"); cn != "" {
+	if cn != "" {
 		samples, err = s.Store.ClientSamples(cn, since)
 	} else {
 		samples, err = s.Store.Samples(since)

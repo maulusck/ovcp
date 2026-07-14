@@ -17,10 +17,17 @@ var fakePid int
 
 func (f *fakeLife) Pid() int { return fakePid }
 
+// noMgmt is a *Client that's never actually dialed — every test below that
+// doesn't exercise "clients"/"kill" just needs a valid argument to pass.
+func noMgmt(t *testing.T) *Client {
+	t.Helper()
+	return NewClient(filepath.Join(t.TempDir(), "unused-mgmt.sock"))
+}
+
 func TestControlRoundTrip(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
-	l, err := ServeControl(sock, lc, new(slog.LevelVar))
+	l, err := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +55,7 @@ func TestControlChangedFlag(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	// pid flips 0 -> 100 across the call: reported as changed
 	lc := &flipLife{before: 0, after: 100}
-	l, _ := ServeControl(sock, lc, new(slog.LevelVar))
+	l, _ := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar))
 	defer l.Close()
 	r, err := Control(sock, "start")
 	if err != nil || r.Pid != 100 || !r.Changed {
@@ -60,7 +67,7 @@ func TestControlDebugToggle(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
 	level := new(slog.LevelVar)
-	l, err := ServeControl(sock, lc, level)
+	l, err := ServeControl(sock, lc, noMgmt(t), level)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +84,32 @@ func TestControlDebugToggle(t *testing.T) {
 	}
 	if level.Level() != slog.LevelInfo {
 		t.Fatalf("level = %v, want Info", level.Level())
+	}
+}
+
+// TestControlClientsAndKill covers the two ops added so status/kill/stats
+// -follow can get live mgmt data through serve's control socket instead of
+// dialing openvpn's own management socket a second time (see ServeControl:
+// openvpn only ever serves one connected mgmt client, and serve already
+// holds that slot).
+func TestControlClientsAndKill(t *testing.T) {
+	mgmtSock, _ := fakeMgmt(t)
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	l, err := ServeControl(sock, &fakeLife{}, NewClient(mgmtSock), new(slog.LevelVar))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	cl, err := Clients(sock)
+	if err != nil || len(cl) != 1 || cl[0].CN != "alice" {
+		t.Fatalf("Clients: %+v err=%v", cl, err)
+	}
+	if err := Kill(sock, "alice"); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if err := Kill(sock, "nobody"); err == nil {
+		t.Fatal("Kill of an unknown cn should error")
 	}
 }
 

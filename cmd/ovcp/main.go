@@ -175,9 +175,10 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	defer s.Close()
 
 	sup := newSupervisor(dataDir)
+	mgmt := controller.NewClient(sock)
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
-		Mgmt:       controller.NewClient(sock),
+		Mgmt:       mgmt,
 		VPN:        sup,
 		DataDir:    dataDir,
 		ConfigPath: pp.ServerConf,
@@ -223,8 +224,11 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	}
 
 	// bring the worker up as a reaped foreground child, and expose the
-	// control socket so `ovcp vpn <op>` can drive it while we run.
-	ctl, err := controller.ServeControl(ctrlSock(), sup, logLevel)
+	// control socket so `ovcp vpn`/`ovcp status`/`ovcp kill`/`ovcp stats
+	// -follow` can all drive/query us while we run — see ServeControl for
+	// why mgmt is threaded through here rather than each of those dialing
+	// openvpn's own management socket a second time.
+	ctl, err := controller.ServeControl(ctrlSock(), sup, mgmt, logLevel)
 	die(err)
 	defer ctl.Close()
 	if err := sup.Start(); err != nil {

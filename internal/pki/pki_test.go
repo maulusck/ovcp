@@ -86,6 +86,23 @@ func TestIssueAndVerify(t *testing.T) {
 	}
 }
 
+// TestIssueCNLength guards the write side of the same bound internal/api's
+// stats endpoint enforces on the read side (?cn=) — a CN this rejects can
+// never exist, so that endpoint can never see a legitimately-issued CN it
+// treats as invalid.
+func TestIssueCNLength(t *testing.T) {
+	p := newCA(t)
+	if _, err := p.Issue(KindClient, "", 365, pass); err == nil {
+		t.Fatal("empty cn should be rejected")
+	}
+	if _, err := p.Issue(KindClient, strings.Repeat("a", MaxCNLen), 365, pass); err != nil {
+		t.Fatalf("cn at exactly MaxCNLen should be accepted: %v", err)
+	}
+	if _, err := p.Issue(KindClient, strings.Repeat("a", MaxCNLen+1), 365, pass); err == nil {
+		t.Fatal("cn over MaxCNLen should be rejected")
+	}
+}
+
 func TestServerCertEKU(t *testing.T) {
 	p := newCA(t)
 	ic, err := p.Issue(KindServer, "vpn.example.com", 825, pass)

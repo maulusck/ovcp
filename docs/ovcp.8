@@ -233,25 +233,29 @@ filters/sort as the web UI's Certs tab. \fB\-json\fR prints an array of
 \fB{status, kind, cn, serial, expires}\fR instead (see \fBMACHINE\-READABLE
 OUTPUT\fR).
 .TP
-.B status [\fB\-sock\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR] [\fB\-json\fR]
-Overview: whether the openvpn worker is running (with its pid, via the
-control socket) and, if so, the connected clients (via the management
-socket). Traffic history and per\-client sessions are \fBstats\fR's job,
-not this command's. \fB\-json\fR prints one object
+.B status [\fB\-ctrl\fR \fIPATH\fR] [\fB\-json\fR]
+Overview: whether the openvpn worker is running (with its pid) and, if so,
+the connected clients \(en both via the control socket, see
+\fBOVCP_CTRL_SOCK\fR. Traffic history and per\-client sessions are
+\fBstats\fR's job, not this command's. \fB\-json\fR prints one object
 \fB{running, pid, error, clients}\fR instead (see \fBMACHINE\-READABLE
 OUTPUT\fR).
 .TP
-.B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR \fIN\fR] [\fB\-json\fR]
+.B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR \fIN\fR] [\fB\-ctrl\fR \fIPATH\fR] [\fB\-json\fR]
 Traffic history: recent throughput/volume and finished client sessions,
-globally or for one client (\fB\-cn\fR). Same data as the web UI's Stats
-tab. \fB\-follow\fR switches to a live top\-like view instead \(en polls the
-management socket directly every \fB\-interval\fR seconds (default 2) and
-redraws in place, sorted busiest\-first when global; ignores \fB\-json\fR.
+globally or for one client (\fB\-cn\fR), read straight from the database
+\(en works even with \fBserve\fR not running. Same data as the web UI's
+Stats tab. \fB\-follow\fR switches to a live top\-like view instead: polls
+a running \fBserve\fR's control socket (not the database) every
+\fB\-interval\fR seconds (default 2) and redraws in place, sorted
+busiest\-first when global; ignores \fB\-json\fR, and needs \fBserve\fR
+running.
 \fB\-json\fR (snapshot mode only) prints \fB{samples, sessions}\fR instead
 (see \fBMACHINE\-READABLE OUTPUT\fR).
 .TP
-.B kill \fB\-cn\fR \fINAME\fR [\fB\-sock\fR \fIPATH\fR]
-Disconnect a client immediately.
+.B kill \fB\-cn\fR \fINAME\fR [\fB\-ctrl\fR \fIPATH\fR]
+Disconnect a client immediately, via a running \fBserve\fR's control
+socket (see \fBOVCP_CTRL_SOCK\fR).
 .TP
 .B vpn start|stop|restart|reconnect|status
 Manage or inspect the openvpn worker owned by a running
@@ -366,10 +370,17 @@ connected clients) may be bound before the tun interface exists
 .TP
 .B OVCP_MGMT_SOCK
 OpenVPN management socket path (default \fI/run/ovcp/mgmt.sock\fR).
+Read/written only by \fBserve\fR itself (and \fBinit\fR/\fBserve\fR, when
+writing it into server.conf) \(en OpenVPN's management interface serves
+exactly one connected client, ever, and \fBserve\fR holds that connection
+for its whole life. Nothing else dials this socket directly.
 .TP
 .B OVCP_CTRL_SOCK
-ovcp control socket for \fBvpn\fR subcommands (default
-\fI/run/ovcp/control.sock\fR); the CLI talks to a running \fBserve\fR here.
+ovcp control socket for \fBvpn\fR/\fBstatus\fR/\fBkill\fR/\fBdebug\fR/
+\fBstats \-follow\fR (default \fI/run/ovcp/control.sock\fR); the CLI talks
+to a running \fBserve\fR here for anything needing live openvpn state \(en
+\fBserve\fR itself proxies that from its own \fBOVCP_MGMT_SOCK\fR
+connection, per above.
 .TP
 .B OVCP_SERVER_CN
 Default client \fBremote\fR for \fBexport\fR and CN for the admin UI

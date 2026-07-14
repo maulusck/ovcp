@@ -1,13 +1,22 @@
 <script>
   import {
-    api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus,
+    api, fmtBytes, fmtRate, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus,
   } from './api.js'
+  import { vpn } from './status.svelte.js'
 
-  let samples = $state([])
+  // globalSamples backs "Connected clients" (a per-client scope has no
+  // count) and is what "Rate"/"Volume" fall back to for scope === '' —
+  // scopeSamples only diverges from it when a specific CN is picked, and
+  // even then it's the exact same /api/stats?cn= shape, computed the exact
+  // same way server-side (internal/store's Rate/ClampedDelta) — the UI never
+  // re-derives a rate from raw counters itself.
+  let globalSamples = $state([])
+  let scopeSamples = $state([])
   let sessions = $state([])
   let revokedCNs = $state(new Set())
   let search = $state({ open: false, query: '' })
   let err = $state('')
+  let scope = $state('') // '' = Global
 
   let sort = $state({ key: null, desc: false })
   const SORT_GETTERS = {
@@ -19,20 +28,41 @@
   const POLL_KEY = 'ovcp_stats_poll'
   let pollSec = $state(Number(localStorage.getItem(POLL_KEY) ?? 30))
 
-  async function load() {
+  let refreshing = $state(false)
+  async function refresh() {
+    if (refreshing) return
+    refreshing = true
+    try { await loadGlobal() } // loadScoped follows automatically (see the $effect below)
+    finally { refreshing = false }
+  }
+
+  async function loadGlobal() {
     try {
       const [d, certs] = await Promise.all([api('GET', '/stats'), api('GET', '/certs')])
-      samples = d.samples || []
+      globalSamples = d.samples || []
       sessions = d.sessions || []
       revokedCNs = new Set(certs.filter(c => c.Revoked).map(c => c.CN))
     } catch (x) { err = x.error }
   }
-  load()
+  async function loadScoped() {
+    if (!scope) { scopeSamples = globalSamples; return }
+    try { scopeSamples = (await api('GET', '/stats?cn=' + encodeURIComponent(scope))).samples || [] }
+    catch (x) { err = x.error }
+  }
+  loadGlobal()
+  $effect(() => { loadScoped() }) // re-runs on scope change and on every globalSamples refresh alike
+
+  // the selected client can disconnect (it drops out of the dropdown, which
+  // is populated live from vpn.clientList) — fall back to Global instead of
+  // silently polling a CN that's no longer an option.
+  $effect(() => {
+    if (scope && vpn.up && !vpn.clientList.some((c) => c.CN === scope)) scope = ''
+  })
 
   $effect(() => {
     localStorage.setItem(POLL_KEY, pollSec)
     if (!pollSec) return
-    const t = setInterval(load, pollSec * 1000)
+    const t = setInterval(refresh, pollSec * 1000)
     return () => clearInterval(t)
   })
 
@@ -63,41 +93,68 @@
 
 <div class="stats-head">
   {#if err}<p class="err">{err}</p>{/if}
+  <label class="poll-pick">Scope
+    <select bind:value={scope}>
+      <option value="">Global</option>
+      {#each vpn.clientList as c}
+        <option value={c.CN}>{c.CN}</option>
+      {/each}
+    </select>
+  </label>
   <label class="poll-pick">Auto-refresh
     <select bind:value={pollSec}>
       <option value={0}>Off</option>
+      <option value={5}>5s</option>
       <option value={15}>15s</option>
       <option value={30}>30s</option>
       <option value={60}>60s</option>
     </select>
   </label>
+  <button type="button" class="ghost" onclick={refresh} disabled={refreshing} title="Reload now">
+    {refreshing ? 'Refreshing…' : 'Refresh now'}</button>
 </div>
 
 <div class="stats-grid">
   <div class="card">
     <h2>Connected clients</h2>
-    {#if samples.length < 2}
+    {#if globalSamples.length < 2}
       <p class="muted">Not enough history yet — sampled every minute.</p>
     {:else}
       <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
-        <polyline points={points(samples.map(s => s.Clients))} />
+        <polyline points={points(globalSamples.map(s => s.Clients))} />
       </svg>
-      <p class="muted">{samples.at(-1).Clients} now · last {samples.length} samples</p>
+      <p class="muted">{globalSamples.at(-1).Clients} now · last {globalSamples.length} samples</p>
     {/if}
   </div>
 
   <div class="card">
-    <h2>Traffic</h2>
-    {#if samples.length < 2}
+    <h2>Rate{#if scope} · {scope}{/if}</h2>
+    {#if scopeSamples.length < 2}
       <p class="muted">Not enough history yet — sampled every minute.</p>
     {:else}
       <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
-        <polyline class="recv" points={points(samples.map(s => s.BytesRecv))} />
-        <polyline class="sent" points={points(samples.map(s => s.BytesSent))} />
+        <polyline class="recv" points={points(scopeSamples.map(s => s.BytesRecvRate))} />
+        <polyline class="sent" points={points(scopeSamples.map(s => s.BytesSentRate))} />
+      </svg>
+      <p class="muted">
+        <span class="recv-label">rx</span> / <span class="sent-label">tx</span>
+        — {fmtRate(scopeSamples.at(-1).BytesRecvRate)} / {fmtRate(scopeSamples.at(-1).BytesSentRate)}
+      </p>
+    {/if}
+  </div>
+
+  <div class="card">
+    <h2>Volume{#if scope} · {scope}{/if}</h2>
+    {#if scopeSamples.length < 2}
+      <p class="muted">Not enough history yet — sampled every minute.</p>
+    {:else}
+      <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
+        <polyline class="recv" points={points(scopeSamples.map(s => s.BytesRecv))} />
+        <polyline class="sent" points={points(scopeSamples.map(s => s.BytesSent))} />
       </svg>
       <p class="muted">
         <span class="recv-label">received</span> / <span class="sent-label">sent</span>
-        — {fmtBytes(samples.at(-1).BytesRecv)} / {fmtBytes(samples.at(-1).BytesSent)} now
+        — {fmtBytes(scopeSamples.at(-1).BytesRecv)} / {fmtBytes(scopeSamples.at(-1).BytesSent)} now
       </p>
     {/if}
   </div>
@@ -140,7 +197,10 @@
 </div>
 
 <style>
-  .stats-head { display: flex; justify-content: flex-end; margin-bottom: 10px; font-size: 12px; }
+  .stats-head {
+    display: flex; flex-wrap: wrap; justify-content: flex-end;
+    gap: 6px 14px; margin-bottom: 10px; font-size: 12px;
+  }
   .stats-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
     gap: 22px; align-items: start;

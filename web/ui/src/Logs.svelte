@@ -183,6 +183,7 @@
       <option value={5}>5s</option>
       <option value={15}>15s</option>
       <option value={30}>30s</option>
+      <option value={60}>60s</option>
     </select>
   </label>
   <button type="button" class="ghost" onclick={refresh} disabled={refreshing} title="Reload all three panels now">

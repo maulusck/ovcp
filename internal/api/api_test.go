@@ -380,6 +380,14 @@ func TestStatsEndpoint(t *testing.T) {
 	if r.StatusCode != 200 || len(out.Samples) != 0 {
 		t.Fatalf("unknown cn should be an empty series, not an error: status=%d %+v", r.StatusCode, out.Samples)
 	}
+
+	// same bound pki.Issue enforces at creation (TestIssueCNLength) — a cn
+	// that long could never have been issued, so rejecting it here can
+	// never reject one that's actually in use.
+	r = e.req("GET", "/api/stats?cn="+strings.Repeat("a", pki.MaxCNLen+1), "", false)
+	if r.StatusCode != 400 {
+		t.Fatalf("cn over MaxCNLen should 400, got %d", r.StatusCode)
+	}
 }
 
 func TestDebugToggle(t *testing.T) {
