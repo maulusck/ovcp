@@ -61,7 +61,9 @@ const (
 func SecretLenOK(v string) bool { return len(v) >= MinSecretLen }
 
 // SecretLenErr is the one rejection message every call site shares.
-func SecretLenErr(label string) string { return fmt.Sprintf("%s too short (min %d)", label, MinSecretLen) }
+func SecretLenErr(label string) string {
+	return fmt.Sprintf("%s too short (min %d)", label, MinSecretLen)
+}
 
 // HashPassword → PHC string: $argon2id$v=19$m=..,t=..,p=..$salt$hash
 func HashPassword(password string) (string, error) {
