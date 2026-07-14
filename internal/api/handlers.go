@@ -135,12 +135,6 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
 }
 
-// certFrom is the store row for a freshly issued cert — every issue path here writes this same shape.
-func certFrom(ic *pki.IssuedCert, kind string) store.Cert {
-	return store.Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: kind,
-		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter}
-}
-
 // issueClientCert issues a client cert, optionally password-protecting the
 // key, and records it in the store. Shared by handleIssue and handleExport.
 func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int) (*pki.IssuedCert, error) {
@@ -156,7 +150,7 @@ func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int)
 			return nil, err
 		}
 	}
-	if err := s.Store.AddCert(certFrom(ic, "client")); err != nil {
+	if err := s.Store.AddCert(store.CertFrom(ic, "client")); err != nil {
 		return nil, err
 	}
 	return ic, nil
@@ -194,7 +188,7 @@ func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *st
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	if err := s.Store.ReplaceCert(certFrom(ic, "server")); err != nil {
+	if err := s.Store.ReplaceCert(store.CertFrom(ic, "server")); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/ovcp/ovcp/internal/pki"
 )
 
 //go:embed schema.sql
@@ -33,6 +35,13 @@ type Cert struct {
 	IssuedAt  time.Time
 	NotAfter  time.Time
 	RevokedAt *time.Time
+}
+
+// CertFrom is the store row for a freshly issued cert — every issue path
+// (CLI and API) writes this same shape.
+func CertFrom(ic *pki.IssuedCert, kind string) Cert {
+	return Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: kind,
+		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter}
 }
 
 type AuditEntry struct {

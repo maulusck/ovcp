@@ -129,7 +129,7 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		die(err)
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.AddCert(certFrom(ic, *kindS)))
+		die(s.AddCert(store.CertFrom(ic, *kindS)))
 		s.Audit("cli", "issue", fmt.Sprintf("cn=%s kind=%s serial=%s", *cn, *kindS, ic.SerialHex))
 		if *out != "" {
 			die(os.WriteFile(*out+".crt", ic.CertPEM, 0o644))
@@ -345,7 +345,7 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
 		ic, err := issueCert(ctx.p, pki.KindClient, *cn, 365, pass, *keyPass)
 		die(err)
-		die(s.AddCert(certFrom(ic, "client")))
+		die(s.AddCert(store.CertFrom(ic, "client")))
 		s.Audit("cli", "issue", "cn="+*cn+" (export)")
 		caPEM, err := ctx.p.CACertPEM()
 		die(err)
