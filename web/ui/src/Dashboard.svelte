@@ -1,7 +1,7 @@
 <script>
   import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus } from './api.js'
   import { vpn, pollOnce } from './status.svelte.js'
-  let { canOperate } = $props()
+  let { canOperate, goToCert } = $props()
   let err = $state('')
 
   // no local poll loop: App.svelte already polls status app-wide (for the
@@ -53,7 +53,8 @@
       <tbody>
         {#each filtered as c}
           <tr>
-            <td>{c.CN}</td>
+            <td><button type="button" class="cn-link" onclick={() => goToCert(c.CN)}
+              title="Jump to this certificate in the Certificates tab">{c.CN}</button></td>
             <td>{c.RealAddress}</td>
             <td>{c.VirtualAddress}</td>
             <td>{fmtBytes(c.BytesRecv)}</td>
@@ -68,3 +69,11 @@
     </table>
   {/if}
 </div>
+
+<style>
+  .cn-link {
+    background: none; border: 0; padding: 0; color: inherit;
+    font: inherit; cursor: pointer;
+  }
+  .cn-link:hover { color: var(--amber); text-decoration: underline dotted; }
+</style>

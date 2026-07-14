@@ -27,6 +27,9 @@
   let user = $state(null)
   let tab = $state(tabs.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
   let navOpen = $state(false)
+  // set by Dashboard's CN click, consumed (and cleared) by Certs to scroll/flash the matching row
+  let focusCN = $state('')
+  function goToCert(cn) { tab = 'certs'; focusCN = cn }
   let login = $state({ username: '', password: '', totp: '' })
   let step = $state('creds') // creds | totp
   let err = $state('')
@@ -171,11 +174,11 @@
   </header>
   <main class:wide={tab === 'logs'}>
     {#if tab === 'dashboard'}
-      <Dashboard {canOperate} />
+      <Dashboard {canOperate} {goToCert} />
     {:else if tab === 'stats'}
       <Stats />
     {:else if tab === 'certs'}
-      <Certs {canOperate} />
+      <Certs {canOperate} bind:focusCN />
     {:else if tab === 'settings'}
       <Settings {isAdmin} />
     {:else if tab === 'users'}
@@ -282,6 +285,18 @@
     font-family: system-ui, sans-serif; font-size: 12px;
   }
   :global(td) { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  /* every data row hoverable (Certs/Dashboard/Users/Stats alike) — one rule,
+     not a per-table hover style. Explicit row height is the fix for rows
+     drifting apart in height: a row-action <button> nested in a <td> stacks
+     its own padding+border on top of the td's, so an action row is taller
+     than a plain-text row unless something clamps them to one shared floor. */
+  :global(tbody tr:hover) { background: var(--line); }
+  :global(tbody tr) { height: 42px; }
+  /* row-action buttons (Certs' Renew/Revoke, Users' Set password/2FA/Enable/
+     Delete, Dashboard's Disconnect) — same "operator button" family as
+     Settings' Start/Stop/Restart/Backup, just shorter to fit inside a
+     table row instead of a toolbar. */
+  :global(td button.ghost) { padding: 4px 14px; }
   :global(.err) { color: var(--bad); font-size: 13px; }
   :global(.muted) { color: var(--dim); }
   /* inline "Label [control]" pairs — filter dropdowns (Certs/Users), Logs tab's own options */

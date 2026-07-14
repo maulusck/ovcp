@@ -1,9 +1,10 @@
 <script>
+  import { tick } from 'svelte'
   import {
     api, apiBlob, downloadBlob, copyToClipboard, sortRows, matchesQuery,
     toggleSort, sortMark, toggleSearch, autofocus,
   } from './api.js'
-  let { canOperate } = $props()
+  let { canOperate, focusCN = $bindable('') } = $props()
   let certs = $state([])
   let err = $state('')
   let ok = $state('')
@@ -36,6 +37,23 @@
   }
   refresh()
   api('GET', '/config').then(c => (redirectGW = c.RedirectGW)).catch(() => {})
+
+  // arrival from Dashboard's "jump to this cert" click: clear whatever
+  // filters might be hiding it, then scroll to and flash the matching row.
+  $effect(() => {
+    if (!focusCN || certs.length === 0) return
+    statusFilter = 'all'; kindFilter = 'all'; search.query = ''
+    const cn = focusCN
+    tick().then(() => {
+      const el = document.querySelector(`tr[data-cn="${CSS.escape(cn)}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.classList.add('flash')
+        setTimeout(() => el.classList.remove('flash'), 1500)
+      }
+    })
+    focusCN = ''
+  })
 
   async function exportBundle(e) {
     e.preventDefault()
@@ -164,7 +182,7 @@
       </tr></thead>
       <tbody>
         {#each filtered as c}
-          <tr>
+          <tr data-cn={c.CN}>
             <td>{c.CN}</td>
             <td>{c.Kind}</td>
             <td class={status(c).cls}>{status(c).text}</td>
@@ -202,4 +220,6 @@
   }
   .serial:hover { color: var(--text); text-decoration: underline dotted; }
   .dl { color: var(--amber); font-size: 12px; font-family: system-ui, sans-serif; }
+  :global(tr.flash) { animation: flash 1.5s ease-out; }
+  @keyframes flash { 0% { background: var(--amber); } 100% { background: transparent; } }
 </style>
