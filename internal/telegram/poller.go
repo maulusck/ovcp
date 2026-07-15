@@ -225,16 +225,48 @@ func (p *Poller) handle(ctx context.Context, b *bot, admin string, u update) {
 }
 
 const (
-	cmdStatus = "status"
-	cmdMenu   = "menu"
+	cmdStatus    = "status"
+	cmdMenu      = "menu"
+	cmdStart     = "start"
+	cmdStop      = "stop"
+	cmdRestart   = "restart"
+	cmdReconnect = "reconnect"
+)
+
+// Reply-keyboard button labels double as the text Telegram sends back on tap
+// (there's no callback_data on a reply keyboard, unlike inline buttons) — so
+// they're matched directly in handleCommand's switch below, same as the
+// slash form.
+const (
+	lblStart     = "▶ start"
+	lblStop      = "⏹ stop"
+	lblRestart   = "🔄 restart"
+	lblReconnect = "🔌 reconnect"
+	lblStatus    = "📊 status"
+)
+
+// opsKeyboard is the persistent reply keyboard /menu (and /start) hands out
+// — real buttons that replace the device keyboard, not a one-off attached to
+// a single message. Status alone on its row: it's the one you check without
+// touching anything else, gets the wide button.
+var opsKeyboard = rkb(
+	[]string{lblStart, lblStop},
+	[]string{lblRestart, lblReconnect},
+	[]string{lblStatus},
 )
 
 // botCommands drives Telegram's own "/" autocomplete menu (setMyCommands,
 // registered on every poller start) — handleCommand's switch dispatches on
 // these same consts, so the menu can't list something it doesn't handle.
+// Same suite as the reply keyboard: whichever's faster, typing `/stop` or
+// tapping the button, both land on the same op.
 var botCommands = []botCommand{
-	{cmdStatus, "VPN status and connected client count"},
-	{cmdMenu, "Start/Stop/Restart buttons"},
+	{cmdStatus, "pid, uptime, client count"},
+	{cmdMenu, "hand out the control-panel keyboard"},
+	{cmdStart, "bring the tunnel up"},
+	{cmdStop, "bring it down (asks first)"},
+	{cmdRestart, "full bounce (asks first)"},
+	{cmdReconnect, "SIGUSR1: renegotiate, no restart"},
 }
 
 type botCommand struct {
@@ -244,28 +276,32 @@ type botCommand struct {
 
 func (p *Poller) handleCommand(ctx context.Context, b *bot, chatID int64, cmd string) {
 	switch cmd {
-	case "/" + cmdStatus, cmdStatus:
+	case "/" + cmdStatus, cmdStatus, lblStatus:
 		b.sendMessage(ctx, chatID, p.statusText(), nil)
-	case "/" + cmdMenu, cmdMenu, "/start":
-		b.sendMessage(ctx, chatID, "VPN control:", kb(
-			[]inlineButton{btn("▶ Start", "start"), btn("⏹ Stop", "stop")},
-			[]inlineButton{btn("🔄 Restart", "restart"), btn("📊 Status", "status")}))
-	case "start":
-		b.sendMessage(ctx, chatID, resultText("▶ Started.", p.vpn.Start()), nil)
-	case "stop":
-		b.sendMessage(ctx, chatID, "Stop the VPN? This disconnects all clients.", kb(
-			[]inlineButton{btn("Yes, stop", "stop_confirm"), btn("Cancel", "cancel")}))
-	case "restart":
-		b.sendMessage(ctx, chatID, "Restart the VPN? Connected clients will briefly drop.", kb(
-			[]inlineButton{btn("Yes, restart", "restart_confirm"), btn("Cancel", "cancel")}))
+	case "/" + cmdMenu, cmdMenu:
+		b.sendMessage(ctx, chatID, menuText, opsKeyboard)
+	case "/" + cmdStart, cmdStart, lblStart: // also Telegram's own greeting trigger — matches unix `start` semantics, no confirmation needed
+		b.sendMessage(ctx, chatID, resultText("▶ up.", p.vpn.Start()), nil)
+	case "/" + cmdStop, cmdStop, lblStop:
+		b.sendMessage(ctx, chatID, "stop the tunnel? every client drops.", kb(
+			[]inlineButton{btn("yes, stop", "stop_confirm"), btn("cancel", "cancel")}))
+	case "/" + cmdRestart, cmdRestart, lblRestart:
+		b.sendMessage(ctx, chatID, "restart? full bounce, clients briefly drop.", kb(
+			[]inlineButton{btn("yes, restart", "restart_confirm"), btn("cancel", "cancel")}))
+	case "/" + cmdReconnect, cmdReconnect, lblReconnect:
+		b.sendMessage(ctx, chatID, resultText("🔌 kicked (SIGUSR1).", p.vpn.Reconnect()), nil)
 	case "stop_confirm":
-		b.sendMessage(ctx, chatID, resultText("⏹ Stopped.", p.vpn.Stop()), nil)
+		b.sendMessage(ctx, chatID, resultText("⏹ down.", p.vpn.Stop()), nil)
 	case "restart_confirm":
-		b.sendMessage(ctx, chatID, resultText("🔄 Restarted.", p.vpn.Restart()), nil)
+		b.sendMessage(ctx, chatID, resultText("🔄 bounced.", p.vpn.Restart()), nil)
 	case "cancel":
-		b.sendMessage(ctx, chatID, "Cancelled.", nil)
+		b.sendMessage(ctx, chatID, "cancelled.", nil)
 	}
 }
+
+// menuText: old-school sysadmin tone for the /menu control panel — a status
+// line, not a greeting.
+const menuText = "ovcp control panel. pick your poison:"
 
 func resultText(ok string, err error) string {
 	if err != nil {
