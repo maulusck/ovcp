@@ -24,6 +24,7 @@ import (
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
+	"github.com/ovcp/ovcp/internal/telegram"
 )
 
 // command is one ovcp subcommand: its help text, its fixed set of
@@ -57,9 +58,10 @@ func (c command) flagNames() []string {
 
 var (
 	vpnOps    = []string{"start", "stop", "restart", "reconnect", "status"}
-	userOps   = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
-	backupOps = []string{"create", "restore"}
-	debugOps  = []string{"on", "off"}
+	userOps     = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
+	backupOps   = []string{"create", "restore"}
+	debugOps    = []string{"on", "off"}
+	telegramOps = []string{"token", "start", "stop", "restart", "status"}
 )
 
 var commands = []command{
@@ -77,6 +79,7 @@ var commands = []command{
 	{name: "kill", usage: "-cn NAME [-ctrl PATH]   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
+	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status [-json]   notify+control bot", sub: telegramOps, run: cmdTelegram},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
 	{name: "audit", usage: "last 50 audit entries", run: cmdAudit},
 	{name: "serve", usage: "[-listen ADDR] [-sock PATH]   run admin UI + API", run: cmdServe},
@@ -704,6 +707,68 @@ func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
 		_, err := controller.Control(*ctrl, "debug "+op)
 		die(err)
 		fmt.Println("debug logging", op)
+	}
+}
+
+func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		args := fs.Args()
+		if len(args) < 1 || !slices.Contains(telegramOps, args[0]) {
+			die(fmt.Errorf("usage: ovcp telegram %s", strings.Join(telegramOps, "|")))
+		}
+		op := args[0]
+
+		if op == "token" {
+			tfs := newFlags("telegram token")
+			admin := tfs.String("admin", "", "admin Telegram numeric id or @username (required)")
+			tfs.Parse(args[1:])
+			if *admin == "" {
+				die(fmt.Errorf("-admin required (the only Telegram identity the bot will ever respond to)"))
+			}
+			token := readSecret("Telegram bot token", "OVCP_TELEGRAM_TOKEN", false)
+			s := ctx.openStore()
+			defer s.Close()
+			die(telegram.SetCredentials(s, string(token), *admin))
+			s.Audit("cli", "telegram_configure", "admin="+*admin)
+			fmt.Println("telegram: token saved, admin set to", *admin)
+			fmt.Println("run 'ovcp telegram start' (or restart serve) to bring the bot up")
+			return
+		}
+
+		ofs := newFlags("telegram " + op)
+		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+		jsonOut := ofs.Bool("json", false, "machine-readable JSON output (status only)")
+		ofs.Parse(args[1:])
+
+		var st controller.TelegramStatus
+		var err error
+		switch op {
+		case "start":
+			st, err = controller.TelegramStart(*ctrl)
+		case "stop":
+			st, err = controller.TelegramStop(*ctrl)
+		case "restart":
+			st, err = controller.TelegramRestart(*ctrl)
+		case "status":
+			st, err = controller.TelegramGetStatus(*ctrl)
+		}
+		die(err)
+		if op != "status" {
+			s := ctx.openStore()
+			s.Audit("cli", "telegram_"+op, fmt.Sprintf("running=%t", st.Running))
+			s.Close()
+		}
+		output(*jsonOut, st, func(st controller.TelegramStatus) {
+			if !st.TokenSet {
+				fmt.Println("telegram: not configured (run 'ovcp telegram token -admin ...')")
+				return
+			}
+			state := "stopped"
+			if st.Running {
+				state = "running"
+			}
+			fmt.Printf("telegram: %s, admin %s\n", state, st.Admin)
+		})
 	}
 }
 

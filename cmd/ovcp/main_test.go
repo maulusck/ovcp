@@ -627,6 +627,24 @@ func TestUserManagement(t *testing.T) {
 // TestUnreachableServe covers the CLI's error wiring when no `serve` process
 // is up: every remote-control command should fail cleanly with a nonzero
 // exit rather than hang or panic.
+// TestTelegramTokenValidation covers what's reachable without a real
+// Telegram API call: -admin is required, and an unknown telegram op errors.
+// The success path (valid token accepted, saved) is covered in
+// internal/telegram's own tests against a mocked API — this binary talks to
+// the real api.telegram.org, which a unit test must not depend on.
+func TestTelegramTokenValidation(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "telegram", "token"); r.code == 0 {
+		t.Fatalf("telegram token without -admin should fail: %+v", r)
+	}
+	if r := run(t, env, "telegram", "bogus"); r.code == 0 {
+		t.Fatalf("telegram bogus should fail: %+v", r)
+	}
+}
+
 func TestUnreachableServe(t *testing.T) {
 	env := withEnv(baseEnv(t), "OVCP_CTRL_SOCK="+filepath.Join(t.TempDir(), "control.sock"))
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -638,6 +656,9 @@ func TestUnreachableServe(t *testing.T) {
 	}
 	if r := run(t, env, "debug", "on"); r.code == 0 {
 		t.Fatalf("debug on with no serve running should fail: %+v", r)
+	}
+	if r := run(t, env, "telegram", "status"); r.code == 0 {
+		t.Fatalf("telegram status with no serve running should fail: %+v", r)
 	}
 	// status is deliberately soft: no worker to report on isn't a CLI error.
 	if r := run(t, env, "status"); r.code != 0 || !strings.Contains(r.stdout, "OpenVPN: unknown") {

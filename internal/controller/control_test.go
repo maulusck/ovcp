@@ -17,13 +17,15 @@ var fakePid int
 
 func (f *fakeLife) Pid() int { return fakePid }
 
+const fakeTelegramAdmin = "@alice"
+
 type fakeTelegram struct{ started, stopped, restarted int }
 
 func (f *fakeTelegram) Start() error   { f.started++; return nil }
 func (f *fakeTelegram) Stop() error    { f.stopped++; return nil }
 func (f *fakeTelegram) Restart() error { f.restarted++; return nil }
 func (f *fakeTelegram) Status() TelegramStatus {
-	return TelegramStatus{Running: f.started > f.stopped, TokenSet: true, Admin: "@alice"}
+	return TelegramStatus{Running: f.started > f.stopped, TokenSet: true, Admin: fakeTelegramAdmin}
 }
 
 // noMgmt is a *Client that's never actually dialed — every test below that
@@ -136,7 +138,7 @@ func TestControlTelegramOps(t *testing.T) {
 		t.Fatalf("TelegramStart: %+v err=%v tg=%+v", st, err, tg)
 	}
 	st, err = TelegramGetStatus(sock)
-	if err != nil || !st.Running || !st.TokenSet || st.Admin != "@alice" {
+	if err != nil || !st.Running || !st.TokenSet || st.Admin != fakeTelegramAdmin {
 		t.Fatalf("TelegramGetStatus: %+v err=%v", st, err)
 	}
 	if st, err = TelegramStop(sock); err != nil || st.Running || tg.stopped != 1 {

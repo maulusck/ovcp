@@ -12,7 +12,9 @@ import (
 	"time"
 )
 
-const apiBase = "https://api.telegram.org/bot"
+// apiBase is a var, not a const, so tests can point it at an httptest
+// server instead of hitting the real Telegram API.
+var apiBase = "https://api.telegram.org/bot"
 
 type bot struct {
 	token string
