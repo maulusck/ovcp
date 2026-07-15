@@ -1,4 +1,4 @@
-# OVCP — self-hosted OpenVPN control plane
+# <img src="web/ui/public/favicon.svg" width="28" height="28" align="top" alt=""> OVCP — self-hosted OpenVPN control plane
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
@@ -24,7 +24,7 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
 - **Encrypted backup/restore** — one command exports CA, CRL, tls-crypt key,
   config, and database into a single encrypted archive.
 - **Prod-ready deployment** — systemd unit, `.deb`/`.rpm` packages, an
-  all-in-one container image, and an SELinux policy, all included.
+  all-in-one container image, and a SELinux policy, all included.
 
 ## Requirements
 

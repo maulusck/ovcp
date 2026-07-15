@@ -1,6 +1,7 @@
 /bin/
 /dist/
 /web/dist/
+/data/
 node_modules/
 .vscode
 nohup.out
