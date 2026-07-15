@@ -6,15 +6,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeLife struct{}
 
-func (fakeLife) Start() error     { return nil }
-func (fakeLife) Stop() error      { return nil }
-func (fakeLife) Restart() error   { return nil }
-func (fakeLife) Reconnect() error { return nil }
-func (fakeLife) Pid() int         { return 0 }
+func (fakeLife) Start() error         { return nil }
+func (fakeLife) Stop() error          { return nil }
+func (fakeLife) Restart() error       { return nil }
+func (fakeLife) Reconnect() error     { return nil }
+func (fakeLife) Pid() int             { return 0 }
+func (fakeLife) StartedAt() time.Time { return time.Time{} }
 
 func TestMatches(t *testing.T) {
 	cases := []struct {
