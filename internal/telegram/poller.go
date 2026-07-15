@@ -311,15 +311,17 @@ func resultText(ok string, err error) string {
 }
 
 func (p *Poller) statusText() string {
+	ovcpUptime := time.Since(controller.ProcessStartedAt).Round(time.Second)
 	pid := p.vpn.Pid()
 	if pid == 0 {
-		return "🔴 VPN down."
+		return fmt.Sprintf("🔴 VPN down.\novcp up %s", ovcpUptime)
 	}
 	n := 0
 	if cl, err := p.mgmt.Status(); err == nil {
 		n = len(cl)
 	}
-	return fmt.Sprintf("🟢 VPN up (pid %d) · %d client(s) connected", pid, n)
+	vpnUptime := time.Since(p.vpn.StartedAt()).Round(time.Second)
+	return fmt.Sprintf("🟢 VPN up (pid %d, up %s) · %d client(s) connected\novcp up %s", pid, vpnUptime, n, ovcpUptime)
 }
 
 // Notify best-effort pushes text to the linked admin chat. No-op if not

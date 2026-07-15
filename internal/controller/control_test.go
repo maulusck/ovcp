@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 type fakeLife struct{ started, stopped, restarted, reconnected int }
@@ -15,7 +16,12 @@ func (f *fakeLife) Reconnect() error { f.reconnected++; return nil }
 
 var fakePid int
 
-func (f *fakeLife) Pid() int { return fakePid }
+func (f *fakeLife) Pid() int             { return fakePid }
+func (f *fakeLife) StartedAt() time.Time { return fakeStartedAt }
+
+// fakeStartedAt: zero by default (matches "not running"); tests that care
+// about the wire format's timestamp field set it directly.
+var fakeStartedAt time.Time
 
 const fakeTelegramAdmin = "@alice"
 
@@ -172,3 +178,4 @@ func (f *flipLife) Pid() int {
 	}
 	return f.after
 }
+func (f *flipLife) StartedAt() time.Time { return time.Time{} }

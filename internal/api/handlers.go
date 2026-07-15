@@ -72,16 +72,23 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {
+	// ovcp's own uptime is always known here — this handler only runs
+	// inside a live serve process.
+	ovcpUptime := int64(time.Since(controller.ProcessStartedAt).Seconds())
 	clients, err := s.Mgmt.Status()
 	if err != nil {
 		// VPN down/restarting is a normal state for the panel, not a 500.
-		jsonOK(w, map[string]any{"vpn_up": false, "clients": []any{}})
+		jsonOK(w, map[string]any{"vpn_up": false, "clients": []any{}, "ovcp_uptime_seconds": ovcpUptime})
 		return
 	}
 	if clients == nil {
 		clients = []controller.VPNClient{}
 	}
-	jsonOK(w, map[string]any{"vpn_up": true, "clients": clients})
+	jsonOK(w, map[string]any{
+		"vpn_up": true, "clients": clients,
+		"vpn_uptime_seconds":  int64(time.Since(s.VPN.StartedAt()).Seconds()),
+		"ovcp_uptime_seconds": ovcpUptime,
+	})
 }
 
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request, u *store.User) {

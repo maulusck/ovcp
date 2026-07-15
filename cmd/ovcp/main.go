@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
@@ -271,6 +272,7 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 		slog.Warn("openvpn stop", "err", err)
 	}
 	hs.Close()
+	slog.Info("ovcp stopped", "uptime", time.Since(controller.ProcessStartedAt).Round(time.Second))
 }
 
 // ctrlSock is the serve control socket path (CLI ↔ serve for vpn ops).

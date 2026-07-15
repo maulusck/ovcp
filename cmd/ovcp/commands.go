@@ -478,10 +478,22 @@ func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
 // statusOut is what `status -json` prints: process state + connected
 // clients in one object, since scripts want both without screen-scraping.
 type statusOut struct {
-	Running bool                   `json:"running"`
-	Pid     int                    `json:"pid,omitempty"`
-	Error   string                 `json:"error,omitempty"`
-	Clients []controller.VPNClient `json:"clients"`
+	Running    bool                   `json:"running"`
+	Pid        int                    `json:"pid,omitempty"`
+	Uptime     string                 `json:"uptime,omitempty"`     // openvpn child, empty if not running
+	OvcpUptime string                 `json:"ovcpUptime,omitempty"` // serve process, empty if unreachable
+	Error      string                 `json:"error,omitempty"`
+	Clients    []controller.VPNClient `json:"clients"`
+}
+
+// fmtUptime renders a Go duration string ("3h2m1s"), or "" for the zero
+// time (not running / not known) — stdlib formatting is plenty for a
+// status line, no need for a custom "3h 2m" pretty-printer.
+func fmtUptime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return time.Since(t).Round(time.Second).String()
 }
 
 // printStatusText renders the one statusOut a status run ends up with,
@@ -493,16 +505,19 @@ func printStatusText(st statusOut) {
 	case !st.Running:
 		fmt.Println(red("OpenVPN: stopped"))
 	case st.Error != "":
-		fmt.Printf("OpenVPN: running (pid %d)\n", st.Pid)
+		fmt.Printf("OpenVPN: running (pid %d, up %s)\n", st.Pid, st.Uptime)
 		fmt.Println("Clients: unavailable —", st.Error)
 	default:
-		fmt.Println(green(fmt.Sprintf("OpenVPN: running (pid %d)", st.Pid)))
+		fmt.Println(green(fmt.Sprintf("OpenVPN: running (pid %d, up %s)", st.Pid, st.Uptime)))
 		fmt.Printf("Clients: %d connected\n", len(st.Clients))
 		for _, c := range st.Clients {
 			fmt.Printf("  %-20s %-22s %-12s rx %d tx %d since %s\n",
 				c.CN, c.RealAddress, c.VirtualAddress, c.BytesRecv, c.BytesSent,
 				c.ConnectedSince.Format(time.RFC3339))
 		}
+	}
+	if st.OvcpUptime != "" {
+		fmt.Println("ovcp: up", st.OvcpUptime)
 	}
 }
 
@@ -518,9 +533,13 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 		case err != nil:
 			st.Error = err.Error()
 		case r.Pid == 0:
-			// running=false, no clients: nothing more to check
+			// running=false, no clients: nothing more to check, but serve
+			// answered so it's up even with the tunnel down
+			st.OvcpUptime = fmtUptime(r.ServeStartedAt)
 		default:
 			st.Running, st.Pid = true, r.Pid
+			st.Uptime = fmtUptime(r.StartedAt)
+			st.OvcpUptime = fmtUptime(r.ServeStartedAt)
 			// via serve's control socket, not a second dial to openvpn's own
 			// mgmt socket — openvpn only ever serves one connected mgmt
 			// client, and serve (still running, just proven above) already
