@@ -1,4 +1,7 @@
-# <img src="web/ui/public/favicon.svg" width="28" height="28" align="top" alt=""> OVCP — self-hosted OpenVPN control plane
+<h1 style="display:flex; align-items:center; gap:10px; margin:0">
+  <img src="web/ui/public/favicon.svg" width="34" height="34" alt="">
+  OVCP — self-hosted OpenVPN control plane
+</h1>
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
