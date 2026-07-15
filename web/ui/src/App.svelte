@@ -330,10 +330,12 @@
   :global(.req) { color: var(--bad); }
   :global(.ok) { color: var(--ok); font-size: 13px; }
   :global(.rv) { color: var(--bad); }
-  /* shared by Certs/Settings/Users' forms: top form card spacing, a
-     checkbox that shouldn't stretch to the grid's field width, a
-     full-width textarea field, a button row, and small print. */
-  :global(.form-card) { margin-bottom: 18px; }
+  /* stacked sibling cards (Certs/Settings/Users) always get a gap, not just
+     the ones a page happens to mark .form-card */
+  :global(.card + .card) { margin-top: 18px; }
+  /* shared by Certs/Settings/Users' forms: a checkbox that shouldn't
+     stretch to the grid's field width, a full-width textarea field, a
+     button row, and small print. */
   :global(.check) { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   :global(.check input) { width: auto; }
   :global(.wide) { grid-column: 1 / -1; }

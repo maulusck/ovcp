@@ -106,7 +106,7 @@
 </script>
 
 {#if canOperate}
-  <form class="card form-card" onsubmit={exportBundle}>
+  <form class="card" onsubmit={exportBundle}>
     <h2>Issue client profile</h2>
     <div class="grid">
       <label>Common name <span class="req">*</span>

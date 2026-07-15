@@ -85,7 +85,7 @@
 {#if !isAdmin}
   <div class="card"><p class="muted">Admin access required to manage users.</p></div>
 {:else}
-  <form class="card form-card" onsubmit={addUser}>
+  <form class="card" onsubmit={addUser}>
     <h2>Add user</h2>
     <div class="grid">
       <label>Username <span class="req">*</span>

@@ -86,17 +86,19 @@
     } catch (x) { tgErr = x.error }
   }
 
+  let tgBusy = $state(false)
   async function telegramOp(op) {
-    tgErr = ''; tgOk = ''
+    tgErr = ''; tgOk = ''; tgBusy = true
     try { tg = await api('POST', '/telegram/' + op) }
     catch (x) { tgErr = x.error }
+    finally { tgBusy = false }
   }
   const tgStart = () => telegramOp('start')
   const tgStop = () => telegramOp('stop')
   const tgRestart = () => telegramOp('restart')
 </script>
 
-<div class="card form-card">
+<div class="card">
   <h2>Server configuration</h2>
   {#if !cfg}
     <p class="muted">Loading…</p>
@@ -160,6 +162,29 @@
 
 {#if isAdmin}
   <div class="card">
+    <h2>Telegram bot</h2>
+    <p class="muted small">Notify-only, plus a Start/Stop/Restart menu from one linked admin chat — see Docs for details.</p>
+    {#if tgErr}<p class="err">{tgErr}</p>{/if}
+    {#if tgOk}<p class="ok">{tgOk}</p>{/if}
+    {#if tg}
+      <p class="tg-status" class:running={tg.running}>
+        {#if !tg.tokenSet}not configured
+        {:else}<span class="dot" class:pulse={tgBusy}>{tg.running ? '●' : '○'}</span> {tg.running ? 'running' : 'stopped'} · admin: {tg.admin}{/if}
+      </p>
+    {/if}
+    <div class="row">
+      <button type="button" class="ghost" onclick={setTelegramToken} disabled={tgBusy}>
+        {tg?.tokenSet ? 'Regenerate token' : 'Set token'}</button>
+      {#if tg?.tokenSet}
+        <button type="button" class="ghost" onclick={tgStart} disabled={tgBusy}
+          title="Bring the poller up (also starts automatically when serve starts, if a token is set)">Start</button>
+        <button type="button" class="ghost" onclick={tgStop} disabled={tgBusy}>Stop</button>
+        <button type="button" class="ghost" onclick={tgRestart} disabled={tgBusy}>Restart</button>
+      {/if}
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Backup</h2>
     <p class="muted small">Encrypted export of the CA, CRL, tls-crypt key, config, and database.
       Never includes the openvpn server certificate or key — restoring reissues those fresh
@@ -170,33 +195,11 @@
     <button type="button" class="ghost" onclick={downloadBackup}
       title="Download an encrypted archive of the CA, CRL, tls-crypt key, config, and database">Download backup</button>
   </div>
-
-  <div class="card">
-    <h2>Telegram bot</h2>
-    <p class="muted small">Notify-only by default (revoke, user add/del, CA rotate, cert-expiry
-      warnings), plus /status and /menu (Start/Stop/Restart) from the linked admin chat — anyone
-      else the bot hears from gets a 403 and nothing else.</p>
-    {#if tgErr}<p class="err">{tgErr}</p>{/if}
-    {#if tgOk}<p class="ok">{tgOk}</p>{/if}
-    {#if tg}
-      <p class="muted">
-        {#if !tg.tokenSet}not configured
-        {:else}{tg.running ? 'running' : 'stopped'} · admin {tg.admin}{/if}
-      </p>
-    {/if}
-    <div class="row">
-      <button type="button" class="ghost" onclick={setTelegramToken}>
-        {tg?.tokenSet ? 'Regenerate token' : 'Set token'}</button>
-      {#if tg?.tokenSet}
-        <button type="button" class="ghost" onclick={tgStart}
-          title="Bring the poller up (also starts automatically when serve starts, if a token is set)">Start</button>
-        <button type="button" class="ghost" onclick={tgStop}>Stop</button>
-        <button type="button" class="ghost" onclick={tgRestart}>Restart</button>
-      {/if}
-    </div>
-  </div>
 {/if}
 
 <style>
   .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
+  .tg-status { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  .tg-status.running { color: var(--ok); }
+  .tg-status .dot.pulse { display: inline-block; animation: pulse 1s ease-in-out infinite; }
 </style>
