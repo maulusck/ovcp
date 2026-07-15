@@ -30,11 +30,11 @@ deb rpm archlinux: release ## build package (needs nfpm)
 	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
 	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@
 
-apk: ui ## build .apk (needs nfpm + podman/docker: bin/ovcp must be musl, not this host's glibc)
+apk: ui completions ## build .apk (needs nfpm + podman/docker: cross-builds against musl)
 	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
 	@test -n "$(CTR)" || { echo "missing: podman or docker (musl build for apk)"; exit 1; }
 	$(CTR) run --rm -v $(CURDIR):/src:Z -w /src docker.io/library/golang:alpine \
-		sh -c 'apk add --no-cache make gcc musl-dev >/dev/null && make build completions VERSION=$(VERSION)'
+		sh -c 'apk add --no-cache gcc musl-dev >/dev/null && CGO_ENABLED=1 go build -ldflags "$(LDFLAGS)" -o bin/ovcp-musl ./cmd/ovcp'
 	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p apk
 
 help: ## show targets

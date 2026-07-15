@@ -30,7 +30,7 @@ overrides:
     contents:
       - src: LICENSE
         dst: /usr/share/doc/ovcp/LICENSE
-      - src: bin/ovcp
+      - src: bin/ovcp-musl
         dst: /usr/bin/ovcp
       - src: deploy/openrc/ovcp.initd
         dst: /etc/init.d/ovcp
