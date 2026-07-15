@@ -233,6 +233,10 @@ var userSortGetters = map[string]func(store.User) string{
 	"created":  func(u store.User) string { return u.CreatedAt.Format(time.RFC3339) },
 }
 
+// certExpiryWarnDays mirrors web/ui/src/Certs.svelte's EXPIRY_WARN_DAYS — JS
+// can't share the Go constant, keep the two in sync if this ever changes.
+const certExpiryWarnDays = 30
+
 // certStatus classifies a cert for both the text and -json list output.
 func certStatus(c store.Cert) string {
 	switch {
@@ -240,6 +244,8 @@ func certStatus(c store.Cert) string {
 		return "REVOKED"
 	case time.Now().After(c.NotAfter):
 		return "expired"
+	case time.Until(c.NotAfter) <= certExpiryWarnDays*24*time.Hour:
+		return "expiring"
 	default:
 		return "valid"
 	}
@@ -288,9 +294,9 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 			for _, c := range rows {
 				st := fmt.Sprintf("%-8s", c.Status) // pad first: color codes must not count toward width
 				switch c.Status {
-				case "REVOKED":
+				case "REVOKED", "expired":
 					st = red(st)
-				case "expired":
+				case "expiring":
 					st = yellow(st)
 				case "valid":
 					st = green(st)

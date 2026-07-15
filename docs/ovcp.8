@@ -225,8 +225,10 @@ server. Follow with \fBrenew\-server\fR (the archive has no server cert)
 and \fBovcp vpn start\fR.
 .TP
 .B list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR] [\fB\-json\fR]
-List issued certificates with status (valid, REVOKED, expired), colored
-accordingly (see \fB\-no\-color\fR). \fB\-status\fR/\fB\-kind\fR filter before
+List issued certificates with status (valid, expiring, REVOKED, expired;
+expiring is anything within 30 days of \fBNotAfter\fR, matching the web
+UI's Certs tab), colored accordingly (see \fB\-no\-color\fR).
+\fB\-status\fR/\fB\-kind\fR filter before
 printing (default \fBall\fR, today's behavior). \fB\-sort\fR reorders the
 filtered list (default: issued order); \fB\-desc\fR reverses it. Same
 filters/sort as the web UI's Certs tab. \fB\-json\fR prints an array of

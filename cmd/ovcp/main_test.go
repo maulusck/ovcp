@@ -265,6 +265,48 @@ func TestListFilterSort(t *testing.T) {
 	}
 }
 
+// TestListExpiring covers the "expiring" status tier (certExpiryWarnDays):
+// a cert inside the warn window but not yet expired, in both text and -json.
+func TestListExpiring(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "soon", "-days", "10"); r.code != 0 {
+		t.Fatalf("issue soon: %+v", r)
+	}
+	if r := run(t, env, "issue", "-cn", "fine", "-days", "400"); r.code != 0 {
+		t.Fatalf("issue fine: %+v", r)
+	}
+
+	r := run(t, env, "list")
+	if rows := certLines(r.stdout, "soon"); len(rows) != 1 || !strings.Contains(rows[0], "expiring") {
+		t.Fatalf("expected soon expiring: %+v", r)
+	}
+	if rows := certLines(r.stdout, "fine"); len(rows) != 1 || !strings.Contains(rows[0], "valid") {
+		t.Fatalf("expected fine valid: %+v", r)
+	}
+
+	r = run(t, env, "list", "-json")
+	if r.code != 0 {
+		t.Fatalf("list -json: %+v", r)
+	}
+	var rows []certOut
+	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
+		t.Fatalf("list -json unmarshal: %v: %+v", err, r)
+	}
+	status := map[string]string{}
+	for _, c := range rows {
+		status[c.CN] = c.Status
+	}
+	if status["soon"] != "expiring" {
+		t.Fatalf("want soon expiring in -json, got %q: %+v", status["soon"], rows)
+	}
+	if status["fine"] != "valid" {
+		t.Fatalf("want fine valid in -json, got %q: %+v", status["fine"], rows)
+	}
+}
+
 func TestUserListSort(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
