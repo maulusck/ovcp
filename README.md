@@ -24,6 +24,9 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
   key-encrypted) or a scannable QR code, from the CLI or the UI.
 - **Live stats & audit log** — per-client traffic/connection history, a
   live top-like `stats -follow`, and an audit trail of every admin action.
+- **Optional Telegram bot** — push notifications for revokes, user changes,
+  and cert-expiry warnings, plus a narrow Start/Stop/Restart menu gated to
+  one linked admin chat. Off by default; nothing else depends on it.
 - **Encrypted backup/restore** — one command exports CA, CRL, tls-crypt key,
   config, and database into a single encrypted archive.
 - **Prod-ready deployment** — systemd unit, `.deb`/`.rpm` packages, an
