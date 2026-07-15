@@ -73,10 +73,13 @@ func (b *bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
 	return out, err
 }
 
-func (b *bot) sendMessage(ctx context.Context, chatID int64, text string, kb *inlineKeyboard) {
+// markup is either *inlineKeyboard (buttons on this one message, e.g. a
+// confirm/cancel) or *replyKeyboard (persistent, replaces the device
+// keyboard until reissued) — nil for neither.
+func (b *bot) sendMessage(ctx context.Context, chatID int64, text string, markup any) {
 	body := map[string]any{"chat_id": chatID, "text": text}
-	if kb != nil {
-		body["reply_markup"] = kb
+	if markup != nil {
+		body["reply_markup"] = markup
 	}
 	if err := b.call(ctx, "sendMessage", body, nil); err != nil { // best-effort: nothing to retry on
 		slog.Debug("telegram: sendMessage failed", "chat", chatID, "err", err)
@@ -134,3 +137,15 @@ type inlineButton struct {
 
 func kb(rows ...[]inlineButton) *inlineKeyboard { return &inlineKeyboard{InlineKeyboard: rows} }
 func btn(text, data string) inlineButton        { return inlineButton{Text: text, CallbackData: data} }
+
+// replyKeyboard replaces the device keyboard with real buttons — unlike
+// inlineKeyboard (attached to one message, dismissed with it), this persists
+// across the whole chat until reissued or removed.
+type replyKeyboard struct {
+	Keyboard       [][]string `json:"keyboard"`
+	ResizeKeyboard bool       `json:"resize_keyboard"` // shrink to fit the labels, not full device height
+}
+
+func rkb(rows ...[]string) *replyKeyboard {
+	return &replyKeyboard{Keyboard: rows, ResizeKeyboard: true}
+}

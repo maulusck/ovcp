@@ -1,6 +1,20 @@
 package telegram
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+type fakeLife struct{}
+
+func (fakeLife) Start() error     { return nil }
+func (fakeLife) Stop() error      { return nil }
+func (fakeLife) Restart() error   { return nil }
+func (fakeLife) Reconnect() error { return nil }
+func (fakeLife) Pid() int         { return 0 }
 
 func TestMatches(t *testing.T) {
 	cases := []struct {
@@ -40,5 +54,41 @@ func TestShouldReplyUnauthorized(t *testing.T) {
 	// blocking is per-id: an unrelated sender is unaffected
 	if !p.shouldReplyUnauthorized(other, "mallory") {
 		t.Fatal("a different id must not be affected by attacker's block")
+	}
+}
+
+// TestHandleCommandCoversRegisteredSurface guards against the menu (either
+// the "/" autocomplete list or the reply-keyboard buttons) listing an op
+// handleCommand's switch doesn't actually dispatch — every identifier it
+// hands the admin must produce a reply.
+func TestHandleCommandCoversRegisteredSurface(t *testing.T) {
+	var sent int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/sendMessage") {
+			sent++
+		}
+		w.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	defer srv.Close()
+	defer SetAPIBaseForTesting(srv.URL + "/bot")()
+
+	p := &Poller{vpn: fakeLife{}}
+	b := newBot("t")
+	ctx := context.Background()
+
+	var identifiers []string
+	for _, c := range botCommands {
+		identifiers = append(identifiers, "/"+c.Command, c.Command)
+	}
+	for _, row := range opsKeyboard.Keyboard {
+		identifiers = append(identifiers, row...)
+	}
+
+	for _, id := range identifiers {
+		before := sent
+		p.handleCommand(ctx, b, 1, id)
+		if sent == before {
+			t.Errorf("handleCommand(%q) produced no reply — menu lists an op the switch doesn't handle", id)
+		}
 	}
 }
