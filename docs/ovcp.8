@@ -554,14 +554,27 @@ the same; the Containerfile is plain OCI.
 .PP
 Client \fBRealAddress\fR (openvpn's own \fBstatus 3\fR/CLIENT_LIST, not
 ovcp's HTTP layer) can come back as one container\-internal address for
-every client instead of distinct public IPs. Usual cause: Docker's
-userland\-proxy (\fBdocker\-proxy\fR, used for published ports unless
-disabled) terminates the connection at the bridge and re\-sends it into
-the container, replacing the source address with the docker0 gateway's.
-Fix: run the daemon with \fB\-\-userland\-proxy=false\fR (check via
-\fBdocker info | grep \-i userland\fR), or \fBnetwork_mode: host\fR; in
-Kubernetes set \fBservice.spec.externalTrafficPolicy: Local\fR (the
-default \fBCluster\fR policy has the same effect).
+every client instead of distinct public IPs. Root cause, on any runtime:
+a published UDP port routed through a userspace proxy instead of
+kernel\-level DNAT replaces the real source address with the proxy's own.
+Which runtime does this varies:
+.RS
+.IP \(bu 2
+\fBDocker\fR: \fBdocker\-proxy\fR (userland\-proxy), on by default. Fix:
+run the daemon with \fB\-\-userland\-proxy=false\fR (check via
+\fBdocker info | grep \-i userland\fR) \(en pure kernel DNAT, no loss of
+network isolation (unlike \fBnetwork_mode: host\fR, not recommended here).
+.IP \(bu 2
+\fBPodman\fR: rootful is already kernel DNAT (netavark), unaffected.
+Rootless defaults to \fBpasta\fR since Podman 5.0, which also preserves
+the source address \(en only the older \fBslirp4netns\fR backend (still
+selectable, or the default pre\-5.0) has this problem. Fix: drop
+\fB\-\-network slirp4netns\fR (let it use the pasta default), or run
+rootful.
+.IP \(bu 2
+\fBKubernetes\fR: kube\-proxy's default \fBCluster\fR traffic policy SNATs
+external traffic. Fix: set \fBservice.spec.externalTrafficPolicy: Local\fR.
+.RE
 .SS packages
 .B make deb
 (or \fBmake rpm\fR) builds a distro package via \fBnfpm\fR, installing the

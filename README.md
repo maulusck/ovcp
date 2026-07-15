@@ -96,9 +96,10 @@ podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
   -v ovcp:/var/lib/ovcp ovcp
 ```
 
-Every client showing the same `RealAddress`? That's Docker's userland-proxy
-rewriting the source address, not an ovcp bug — see `man ovcp`'s
-**DEPLOYMENT** → **container** section for the fix.
+Every client showing the same `RealAddress`? That's your container
+runtime's userspace port proxy rewriting the source address, not an ovcp
+bug — see `man ovcp`'s **DEPLOYMENT** → **container** section for the fix
+(Docker, Podman, and Kubernetes each have a different one).
 
 ## CLI
 
