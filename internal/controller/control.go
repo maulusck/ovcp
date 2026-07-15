@@ -21,6 +21,24 @@ type Lifecycle interface {
 	Pid() int // 0 when not running
 }
 
+// TelegramStatus is telegram.Poller.Status()'s shape — defined here (not in
+// package telegram, which already imports controller) so ServeControl can
+// serialize it without an import cycle.
+type TelegramStatus struct {
+	Running  bool   `json:"running"`
+	TokenSet bool   `json:"tokenSet"`
+	Admin    string `json:"admin"`
+}
+
+// TelegramController is the telegram poller's control surface (implemented
+// by *telegram.Poller).
+type TelegramController interface {
+	Start() error
+	Stop() error
+	Restart() error
+	Status() TelegramStatus
+}
+
 // ControlResult is what a control op reports back: the openvpn pid afterwards
 // (0 if stopped) and whether this op actually changed the process (a fresh
 // spawn, a replacement, or a stop) versus a no-op.
@@ -41,7 +59,7 @@ type ControlResult struct {
 // live client list must go through *this* socket instead of dialing
 // mgmt.sock a second time — this net.Listener, unlike openvpn's mgmt
 // protocol, is a normal multi-client accept loop.
-func ServeControl(sockPath string, lc Lifecycle, mgmt *Client, level *slog.LevelVar) (net.Listener, error) {
+func ServeControl(sockPath string, lc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o750); err != nil {
 		return nil, err
 	}
@@ -57,13 +75,13 @@ func ServeControl(sockPath string, lc Lifecycle, mgmt *Client, level *slog.Level
 			if err != nil {
 				return // listener closed
 			}
-			go serveControlConn(c, lc, mgmt, level)
+			go serveControlConn(c, lc, mgmt, level, tc)
 		}
 	}()
 	return l, nil
 }
 
-func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelVar) {
+func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(60 * time.Second)) // restart may take a few s
 	line, err := bufio.NewReader(c).ReadString('\n')
@@ -90,6 +108,29 @@ func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelV
 			return
 		}
 		data, _ := json.Marshal(cl)
+		fmt.Fprintf(c, "OK %s\n", data)
+		return
+	}
+	if op == "telegram-status" {
+		data, _ := json.Marshal(tc.Status())
+		fmt.Fprintf(c, "OK %s\n", data)
+		return
+	}
+	if op == "telegram-start" || op == "telegram-stop" || op == "telegram-restart" {
+		var opErr error
+		switch op {
+		case "telegram-start":
+			opErr = tc.Start()
+		case "telegram-stop":
+			opErr = tc.Stop()
+		case "telegram-restart":
+			opErr = tc.Restart()
+		}
+		if opErr != nil {
+			fmt.Fprintf(c, "ERR %s\n", opErr)
+			return
+		}
+		data, _ := json.Marshal(tc.Status())
 		fmt.Fprintf(c, "OK %s\n", data)
 		return
 	}
@@ -191,4 +232,27 @@ func Clients(sockPath string) ([]VPNClient, error) {
 func Kill(sockPath, cn string) error {
 	_, err := controlRequest(sockPath, "kill "+cn)
 	return err
+}
+
+// TelegramStart/Stop/Restart drive the telegram poller in a running serve;
+// TelegramGetStatus reports its current state. Same "serve must be
+// running" requirement as Control — the poller's live state, like
+// openvpn's, only exists in that process.
+func TelegramStart(sockPath string) (TelegramStatus, error)   { return telegramOp(sockPath, "telegram-start") }
+func TelegramStop(sockPath string) (TelegramStatus, error)    { return telegramOp(sockPath, "telegram-stop") }
+func TelegramRestart(sockPath string) (TelegramStatus, error) { return telegramOp(sockPath, "telegram-restart") }
+func TelegramGetStatus(sockPath string) (TelegramStatus, error) {
+	return telegramOp(sockPath, "telegram-status")
+}
+
+func telegramOp(sockPath, op string) (TelegramStatus, error) {
+	var st TelegramStatus
+	payload, err := controlRequest(sockPath, op)
+	if err != nil {
+		return st, err
+	}
+	if err := json.Unmarshal([]byte(payload), &st); err != nil {
+		return st, fmt.Errorf("controller: bad %s response: %w", op, err)
+	}
+	return st, nil
 }

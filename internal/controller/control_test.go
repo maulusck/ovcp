@@ -17,6 +17,15 @@ var fakePid int
 
 func (f *fakeLife) Pid() int { return fakePid }
 
+type fakeTelegram struct{ started, stopped, restarted int }
+
+func (f *fakeTelegram) Start() error   { f.started++; return nil }
+func (f *fakeTelegram) Stop() error    { f.stopped++; return nil }
+func (f *fakeTelegram) Restart() error { f.restarted++; return nil }
+func (f *fakeTelegram) Status() TelegramStatus {
+	return TelegramStatus{Running: f.started > f.stopped, TokenSet: true, Admin: "@alice"}
+}
+
 // noMgmt is a *Client that's never actually dialed — every test below that
 // doesn't exercise "clients"/"kill" just needs a valid argument to pass.
 func noMgmt(t *testing.T) *Client {
@@ -27,7 +36,7 @@ func noMgmt(t *testing.T) *Client {
 func TestControlRoundTrip(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
-	l, err := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar))
+	l, err := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +64,7 @@ func TestControlChangedFlag(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	// pid flips 0 -> 100 across the call: reported as changed
 	lc := &flipLife{before: 0, after: 100}
-	l, _ := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar))
+	l, _ := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
 	defer l.Close()
 	r, err := Control(sock, "start")
 	if err != nil || r.Pid != 100 || !r.Changed {
@@ -67,7 +76,7 @@ func TestControlDebugToggle(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
 	level := new(slog.LevelVar)
-	l, err := ServeControl(sock, lc, noMgmt(t), level)
+	l, err := ServeControl(sock, lc, noMgmt(t), level, &fakeTelegram{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +104,7 @@ func TestControlDebugToggle(t *testing.T) {
 func TestControlClientsAndKill(t *testing.T) {
 	mgmtSock, _ := fakeMgmt(t)
 	sock := filepath.Join(t.TempDir(), "control.sock")
-	l, err := ServeControl(sock, &fakeLife{}, NewClient(mgmtSock), new(slog.LevelVar))
+	l, err := ServeControl(sock, &fakeLife{}, NewClient(mgmtSock), new(slog.LevelVar), &fakeTelegram{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +119,31 @@ func TestControlClientsAndKill(t *testing.T) {
 	}
 	if err := Kill(sock, "nobody"); err == nil {
 		t.Fatal("Kill of an unknown cn should error")
+	}
+}
+
+func TestControlTelegramOps(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	tg := &fakeTelegram{}
+	l, err := ServeControl(sock, &fakeLife{}, noMgmt(t), new(slog.LevelVar), tg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	st, err := TelegramStart(sock)
+	if err != nil || !st.Running || tg.started != 1 {
+		t.Fatalf("TelegramStart: %+v err=%v tg=%+v", st, err, tg)
+	}
+	st, err = TelegramGetStatus(sock)
+	if err != nil || !st.Running || !st.TokenSet || st.Admin != "@alice" {
+		t.Fatalf("TelegramGetStatus: %+v err=%v", st, err)
+	}
+	if st, err = TelegramStop(sock); err != nil || st.Running || tg.stopped != 1 {
+		t.Fatalf("TelegramStop: %+v err=%v tg=%+v", st, err, tg)
+	}
+	if _, err := TelegramRestart(sock); err != nil || tg.restarted != 1 {
+		t.Fatalf("TelegramRestart: err=%v tg=%+v", err, tg)
 	}
 }
 

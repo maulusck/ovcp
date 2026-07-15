@@ -25,7 +25,19 @@ type Store struct {
 	// there's no operator passphrase available at automatic login time, so
 	// this lives in a plain machine-local file next to the database.
 	totpKey []byte
+	// fires after Audit() — the one choke point every audited action routes
+	// through, instead of hooking each call site.
+	auditHook AuditHook
 }
+
+type AuditHook func(actor, action, detail string)
+
+// OnAudit sets fn to run after every Audit(). Set once at startup.
+func (s *Store) OnAudit(fn AuditHook) { s.auditHook = fn }
+
+// ExpiryWarnDays mirrors web/ui/src/Certs.svelte's EXPIRY_WARN_DAYS — JS
+// can't share this constant, keep both in sync if it ever changes.
+const ExpiryWarnDays = 30
 
 type Cert struct {
 	Serial    string
@@ -241,6 +253,9 @@ func (s *Store) Audit(actor, action, detail string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO audit_log(ts, actor, action, detail) VALUES (?,?,?,?)`,
 		time.Now().Unix(), actor, action, detail)
+	if err == nil && s.auditHook != nil {
+		s.auditHook(actor, action, detail)
+	}
 	return err
 }
 

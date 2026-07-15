@@ -30,6 +30,7 @@ import (
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
+	"github.com/ovcp/ovcp/internal/telegram"
 	"github.com/ovcp/ovcp/web"
 )
 
@@ -176,6 +177,8 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 
 	sup := newSupervisor(dataDir)
 	mgmt := controller.NewClient(sock)
+	tg := telegram.New(s, sup, mgmt)
+	s.OnAudit(tg.OnAudit)
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
 		Mgmt:       mgmt,
@@ -228,11 +231,16 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	// -follow` can all drive/query us while we run — see ServeControl for
 	// why mgmt is threaded through here rather than each of those dialing
 	// openvpn's own management socket a second time.
-	ctl, err := controller.ServeControl(ctrlSock(), sup, mgmt, logLevel)
+	ctl, err := controller.ServeControl(ctrlSock(), sup, mgmt, logLevel, tg)
 	die(err)
 	defer ctl.Close()
 	if err := sup.Start(); err != nil {
 		slog.Warn("openvpn start", "err", err)
+	}
+	if tg.Status().TokenSet {
+		if err := tg.Start(); err != nil {
+			slog.Warn("telegram start", "err", err)
+		}
 	}
 	slog.Info("ovcp started", "version", version, "listen", listen)
 
@@ -240,11 +248,15 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	// independently of the UI's own poll so history exists with no browser open.
 	statsStop := make(chan struct{})
 	go srv.RunStatsSampler(statsStop)
+	tgStop := make(chan struct{})
+	go tg.RunExpirySweeper(tgStop)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	close(statsStop)
+	close(tgStop)
+	tg.Stop()
 	ctl.Close()
 	if err := sup.Stop(); err != nil {
 		slog.Warn("openvpn stop", "err", err)

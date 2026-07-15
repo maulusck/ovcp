@@ -166,3 +166,14 @@ func TestAudit(t *testing.T) {
 		t.Fatalf("tail: %+v err=%v", tail, err)
 	}
 }
+
+func TestAuditHook(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	defer s.Close()
+	var got []string
+	s.OnAudit(func(actor, action, detail string) { got = append(got, actor+" "+action+" "+detail) })
+	s.Audit("admin", "revoke", "serial=abc")
+	if len(got) != 1 || got[0] != "admin revoke serial=abc" {
+		t.Fatalf("hook not fired correctly: %v", got)
+	}
+}
