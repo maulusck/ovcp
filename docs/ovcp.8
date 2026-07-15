@@ -551,6 +551,17 @@ the UI and the VPN across network interfaces, bind each published port to
 the right address, e.g.
 \fB\-p 203.0.113.7:1194:1194/udp \-p 192.168.1.10:8443:8443\fR. docker works
 the same; the Containerfile is plain OCI.
+.PP
+Client \fBRealAddress\fR (openvpn's own \fBstatus 3\fR/CLIENT_LIST, not
+ovcp's HTTP layer) can come back as one container\-internal address for
+every client instead of distinct public IPs. Usual cause: Docker's
+userland\-proxy (\fBdocker\-proxy\fR, used for published ports unless
+disabled) terminates the connection at the bridge and re\-sends it into
+the container, replacing the source address with the docker0 gateway's.
+Fix: run the daemon with \fB\-\-userland\-proxy=false\fR (check via
+\fBdocker info | grep \-i userland\fR), or \fBnetwork_mode: host\fR; in
+Kubernetes set \fBservice.spec.externalTrafficPolicy: Local\fR (the
+default \fBCluster\fR policy has the same effect).
 .SS packages
 .B make deb
 (or \fBmake rpm\fR) builds a distro package via \fBnfpm\fR, installing the
