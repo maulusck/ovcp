@@ -238,9 +238,15 @@ func Kill(sockPath, cn string) error {
 // TelegramGetStatus reports its current state. Same "serve must be
 // running" requirement as Control — the poller's live state, like
 // openvpn's, only exists in that process.
-func TelegramStart(sockPath string) (TelegramStatus, error)   { return telegramOp(sockPath, "telegram-start") }
-func TelegramStop(sockPath string) (TelegramStatus, error)    { return telegramOp(sockPath, "telegram-stop") }
-func TelegramRestart(sockPath string) (TelegramStatus, error) { return telegramOp(sockPath, "telegram-restart") }
+func TelegramStart(sockPath string) (TelegramStatus, error) {
+	return telegramOp(sockPath, "telegram-start")
+}
+func TelegramStop(sockPath string) (TelegramStatus, error) {
+	return telegramOp(sockPath, "telegram-stop")
+}
+func TelegramRestart(sockPath string) (TelegramStatus, error) {
+	return telegramOp(sockPath, "telegram-restart")
+}
 func TelegramGetStatus(sockPath string) (TelegramStatus, error) {
 	return telegramOp(sockPath, "telegram-status")
 }

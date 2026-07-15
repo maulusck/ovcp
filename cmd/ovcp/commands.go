@@ -56,8 +56,24 @@ func (c command) flagNames() []string {
 	return names
 }
 
+// opArg validates fs's first positional argument against ops (the
+// "usage: ovcp NAME op1|op2|..." error every op-dispatched command shares)
+// and returns it along with everything after it, for the caller to parse
+// with its own FlagSet. Op-dispatched commands must never register flags
+// on fs itself: main()'s dispatch loop calls fs.Parse before the op is even
+// known, and flag.Parse stops scanning at the first non-flag token — a flag
+// placed after the op (ovcp NAME op -flag value, the usual shell-command
+// order) would silently never be parsed otherwise.
+func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []string) {
+	args := fs.Args()
+	if len(args) < 1 || !slices.Contains(ops, args[0]) {
+		die(fmt.Errorf("usage: ovcp %s %s", name, strings.Join(ops, "|")))
+	}
+	return args[0], args[1:]
+}
+
 var (
-	vpnOps    = []string{"start", "stop", "restart", "reconnect", "status"}
+	vpnOps      = []string{"start", "stop", "restart", "reconnect", "status"}
 	userOps     = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
 	backupOps   = []string{"create", "restore"}
 	debugOps    = []string{"on", "off"}
@@ -76,7 +92,7 @@ var commands = []command{
 	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW] [-split-tunnel] [-custom-opts OPTS|-]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N] [-json]   traffic history, or a live top-like follow view", run: cmdStats},
-	{name: "kill", usage: "-cn NAME [-ctrl PATH]   disconnect client", run: cmdKill},
+	{name: "kill", usage: "-cn NAME   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
 	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status [-json]   notify+control bot", sub: telegramOps, run: cmdTelegram},
@@ -535,12 +551,11 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 }
 
 func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
-	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 	return func(ctx *cliContext) {
-		op := fs.Arg(0)
-		if !slices.Contains(vpnOps, op) {
-			die(fmt.Errorf("usage: ovcp vpn %s", strings.Join(vpnOps, "|")))
-		}
+		op, rest := opArg(fs, "vpn", vpnOps)
+		ofs := newFlags("vpn " + op)
+		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+		ofs.Parse(rest)
 		r, err := controller.Control(*ctrl, op)
 		die(err)
 		if op != "status" { // status is read-only, don't audit
@@ -648,21 +663,16 @@ func cmdRotateCA(_ *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// cmdBackup and cmdUser take no top-level flags: fs exists only so the
-// dispatcher's fs.Parse(args) stops at the first positional token (the
-// op), leaving it and everything after in fs.Args(). Each op then builds
-// and parses its own FlagSet, same as before this refactor.
+// cmdBackup and cmdUser take no top-level flags: opArg's rest is fed to a
+// fresh FlagSet per op, same as vpn/debug/telegram.
 func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		args := fs.Args()
-		if len(args) < 1 || !slices.Contains(backupOps, args[0]) {
-			die(fmt.Errorf("usage: ovcp backup create [-out FILE] | ovcp backup restore [-force] FILE"))
-		}
-		switch args[0] {
+		op, rest := opArg(fs, "backup", backupOps)
+		switch op {
 		case "create":
 			cfs := newFlags("backup create")
 			out := cfs.String("out", "", "output file (default: ovcp-backup-<timestamp>.ovcpbak)")
-			cfs.Parse(args[1:])
+			cfs.Parse(rest)
 			if *out == "" {
 				*out = "ovcp-backup-" + time.Now().Format("20060102-150405") + ".ovcpbak"
 			}
@@ -680,7 +690,7 @@ func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 		case "restore":
 			rfs := newFlags("backup restore")
 			force := rfs.Bool("force", false, "overwrite an already-initialized data directory")
-			rfs.Parse(args[1:])
+			rfs.Parse(rest)
 			file := rfs.Arg(0)
 			if file == "" {
 				die(fmt.Errorf("usage: ovcp backup restore [-force] FILE"))
@@ -698,12 +708,11 @@ func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 }
 
 func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
-	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 	return func(ctx *cliContext) {
-		op := fs.Arg(0)
-		if !slices.Contains(debugOps, op) {
-			die(fmt.Errorf("usage: ovcp debug on|off"))
-		}
+		op, rest := opArg(fs, "debug", debugOps)
+		ofs := newFlags("debug " + op)
+		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+		ofs.Parse(rest)
 		_, err := controller.Control(*ctrl, "debug "+op)
 		die(err)
 		fmt.Println("debug logging", op)
@@ -712,17 +721,13 @@ func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
 
 func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		args := fs.Args()
-		if len(args) < 1 || !slices.Contains(telegramOps, args[0]) {
-			die(fmt.Errorf("usage: ovcp telegram %s", strings.Join(telegramOps, "|")))
-		}
-		op := args[0]
+		op, rest := opArg(fs, "telegram", telegramOps)
 
 		if op == "token" {
 			tfs := newFlags("telegram token")
 			admin := tfs.String("admin", os.Getenv("OVCP_TELEGRAM_ADMIN"),
 				"admin Telegram numeric id or @username (required; env: OVCP_TELEGRAM_ADMIN)")
-			tfs.Parse(args[1:])
+			tfs.Parse(rest)
 			if *admin == "" {
 				die(fmt.Errorf("-admin required (the only Telegram identity the bot will ever respond to)"))
 			}
@@ -739,7 +744,7 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 		ofs := newFlags("telegram " + op)
 		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
 		jsonOut := ofs.Bool("json", false, "machine-readable JSON output (status only)")
-		ofs.Parse(args[1:])
+		ofs.Parse(rest)
 
 		var st controller.TelegramStatus
 		var err error
@@ -775,11 +780,7 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 
 func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		args := fs.Args()
-		if len(args) < 1 || !slices.Contains(userOps, args[0]) {
-			die(fmt.Errorf("usage: ovcp user %s", strings.Join(userOps, "|")))
-		}
-		op := args[0]
+		op, rest := opArg(fs, "user", userOps)
 		s := ctx.openStore()
 		defer s.Close()
 		switch op {
@@ -787,7 +788,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			afs := newFlags("user add")
 			name := afs.String("name", "", "username (required)")
 			role := afs.String("role", "operator", "admin|operator|readonly")
-			afs.Parse(args[1:])
+			afs.Parse(rest)
 			if *name == "" || !auth.ValidRole(*role) {
 				die(fmt.Errorf("-name required; role admin|operator|readonly"))
 			}
@@ -804,7 +805,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			sortBy := lfs.String("sort", "", "username|role|created (default: today's order)")
 			desc := lfs.Bool("desc", false, "reverse sort order")
 			jsonOut := lfs.Bool("json", false, "machine-readable JSON output")
-			lfs.Parse(args[1:])
+			lfs.Parse(rest)
 			users, err := s.ListUsers()
 			die(err)
 			die(sortByFlag(users, userSortGetters, *sortBy, *desc))
@@ -830,24 +831,33 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 
 		case "del":
 			dfs := newFlags("user del")
-			name := dfs.String("name", "", "username")
-			dfs.Parse(args[1:])
+			name := dfs.String("name", "", "username (required)")
+			dfs.Parse(rest)
+			if *name == "" {
+				die(fmt.Errorf("-name required"))
+			}
 			die(s.DeleteUser(*name))
 			s.Audit("cli", "user_del", "name="+*name)
 			fmt.Println("deleted:", *name)
 
 		case "disable", "enable":
 			efs := newFlags("user " + op)
-			name := efs.String("name", "", "username")
-			efs.Parse(args[1:])
+			name := efs.String("name", "", "username (required)")
+			efs.Parse(rest)
+			if *name == "" {
+				die(fmt.Errorf("-name required"))
+			}
 			die(s.SetUserDisabled(*name, op == "disable"))
 			s.Audit("cli", "user_"+op, "name="+*name)
 			fmt.Println(op+"d:", *name)
 
 		case "passwd":
 			pfs := newFlags("user passwd")
-			name := pfs.String("name", "", "username")
-			pfs.Parse(args[1:])
+			name := pfs.String("name", "", "username (required)")
+			pfs.Parse(rest)
+			if *name == "" {
+				die(fmt.Errorf("-name required"))
+			}
 			pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
 			h, err := auth.HashPassword(pw)
 			die(err)
@@ -857,9 +867,12 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 
 		case "totp":
 			tfs := newFlags("user totp")
-			name := tfs.String("name", "", "username")
+			name := tfs.String("name", "", "username (required)")
 			off := tfs.Bool("off", false, "disable 2FA")
-			tfs.Parse(args[1:])
+			tfs.Parse(rest)
+			if *name == "" {
+				die(fmt.Errorf("-name required"))
+			}
 			if *off {
 				die(s.SetUserTOTP(*name, ""))
 				s.Audit("cli", "user_totp_off", "name="+*name)

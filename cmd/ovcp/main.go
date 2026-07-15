@@ -151,6 +151,14 @@ func main() {
 	for _, c := range commands {
 		if c.name == args[0] {
 			fs := newFlags(c.name)
+			// c.usage is the same string helpText()/completion already use — sub-op
+			// flags (user/backup/telegram) live on FlagSets created inside the
+			// command's closure, so they don't exist yet for -h's default printer to
+			// find; this line is what -h actually has to show either way.
+			fs.Usage = func() {
+				fmt.Fprintf(os.Stderr, "usage: ovcp %s %s\n", c.name, c.usage)
+				fs.PrintDefaults()
+			}
 			body := c.run(fs) // registers flags on fs
 			fs.Parse(args[1:])
 			body(ctx)

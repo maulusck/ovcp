@@ -645,6 +645,31 @@ func TestTelegramTokenValidation(t *testing.T) {
 	}
 }
 
+// TestFlagAfterOp guards against a real bug this exact shape hit once:
+// vpn/debug/telegram used to register -ctrl on the FlagSet main()'s
+// dispatch loop parses before the op is even known, so "ovcp vpn start
+// -ctrl X" (flag after the op — the normal git/docker/kubectl order)
+// silently parsed nothing past "start" and fell back to the default
+// socket instead of erroring or using X. Asserting the error names the
+// bogus path proves -ctrl was actually parsed, not silently dropped.
+func TestFlagAfterOp(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	bogus := filepath.Join(t.TempDir(), "bogus-control.sock")
+	for _, args := range [][]string{
+		{"vpn", "start", "-ctrl", bogus},
+		{"debug", "on", "-ctrl", bogus},
+		{"telegram", "status", "-ctrl", bogus},
+	} {
+		r := run(t, env, args...)
+		if r.code == 0 || !strings.Contains(r.stderr, bogus) {
+			t.Fatalf("%v: -ctrl after the op must be honored, got: %+v", args, r)
+		}
+	}
+}
+
 func TestUnreachableServe(t *testing.T) {
 	env := withEnv(baseEnv(t), "OVCP_CTRL_SOCK="+filepath.Join(t.TempDir(), "control.sock"))
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
