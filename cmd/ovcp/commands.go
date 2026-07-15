@@ -720,7 +720,8 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 
 		if op == "token" {
 			tfs := newFlags("telegram token")
-			admin := tfs.String("admin", "", "admin Telegram numeric id or @username (required)")
+			admin := tfs.String("admin", os.Getenv("OVCP_TELEGRAM_ADMIN"),
+				"admin Telegram numeric id or @username (required; env: OVCP_TELEGRAM_ADMIN)")
 			tfs.Parse(args[1:])
 			if *admin == "" {
 				die(fmt.Errorf("-admin required (the only Telegram identity the bot will ever respond to)"))

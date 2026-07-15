@@ -75,6 +75,20 @@ beyond what already gates that surface: server config is
 export a profile at all already chooses its remote host, port, proto, and
 cipher. A bad directive just fails openvpn's next start (server) or that
 one client's next connection attempt (client) \(en never other clients.
+.PP
+The Telegram bot token (see \fBtelegram\fR) is the one secret stored in
+plaintext, not hashed or encrypted \(en unlike the CA passphrase, \fBovcp\fR
+needs the raw token on every restart to call Telegram's API, so it can't
+be argon2id\-hashed the way a password is. Same exposure tier as
+\fBOVCP_CA_PASSPHRASE\fR/\fBOVCP_USER_PASSWORD\fR: a leaked token lets
+someone send/read messages as that bot, nothing more \(en it grants no
+access to the CA, the database, or the admin UI. Every inbound message is
+checked against exactly one configured Telegram identity (numeric id or
+\fB@username\fR); every other sender gets a 403 reply and the message is
+otherwise ignored. The bot's own command surface is deliberately narrow
+(\fB/status\fR, and \fB/menu\fR's Start/Stop/Restart, the last two behind
+a confirm step) \(en revoke, user management, CA rotation, config, and
+backup are unreachable from Telegram at any privilege.
 .SH QUICK START
 .nf
 .RS
@@ -307,6 +321,24 @@ JSON array instead (see \fBMACHINE\-READABLE OUTPUT\fR).
 Toggle verbose logging on a running \fBserve\fR (over the control socket,
 see \fBOVCP_CTRL_SOCK\fR) \(en no restart, resets to normal on the next one.
 .TP
+.B telegram token \fB\-admin\fR \fIID\-or\-@user\fR
+.TQ
+.B telegram start|stop|restart|status [\fB\-json\fR]
+Notify\-only Telegram bot, with a narrow control surface. \fBtoken\fR
+saves a bot token (prompted, or \fBOVCP_TELEGRAM_TOKEN\fR; validated
+against Telegram's \fBgetMe\fR before saving) together with the one
+Telegram identity \(en a numeric user id or \fB@username\fR \(en the bot
+will ever respond to; anyone else gets a 403 reply and nothing else.
+\fBstart\fR/\fBstop\fR/\fBrestart\fR/\fBstatus\fR drive the poller inside a
+running \fBserve\fR over the control socket (see \fBOVCP_CTRL_SOCK\fR),
+same as \fBvpn\fR; the poller also auto\-starts with \fBserve\fR if a token
+is already set. Once linked, the bot pushes notifications for revoke,
+user add/del, CA rotate, and a cert entering its 30\-day expiry window
+(once per cert); \fB/status\fR and \fB/menu\fR (inline Start/Stop/Restart/
+Status buttons, Stop/Restart behind a confirm step) are the only commands
+it accepts \(en revoke, user management, CA rotation, config, and backup
+stay CLI/web\-login only.
+.TP
 .B version
 Print the version.
 .SH OPTIONS
@@ -396,6 +428,11 @@ shared systems: environment variables can leak.
 .B OVCP_CA_NEW_PASSPHRASE, OVCP_BACKUP_PASSPHRASE
 Non\-interactive equivalents for \fBrotate\-ca\fR's new passphrase and
 \fBbackup\fR's archive passphrase. Same leak caveat as above.
+.TP
+.B OVCP_TELEGRAM_TOKEN
+Non\-interactive equivalent for \fBtelegram token\fR's bot token. Same
+leak caveat as above; stored in the database afterward regardless (see
+\fBSECURITY\fR).
 .TP
 .B OVCP_OPENVPN_USER, OVCP_OPENVPN_GROUP
 Unprivileged account openvpn drops to after startup (default \fInobody\fR

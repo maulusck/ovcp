@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -77,11 +78,21 @@ func (b *bot) sendMessage(ctx context.Context, chatID int64, text string, kb *in
 	if kb != nil {
 		body["reply_markup"] = kb
 	}
-	b.call(ctx, "sendMessage", body, nil) // best-effort: nothing useful to do with a send failure here
+	if err := b.call(ctx, "sendMessage", body, nil); err != nil { // best-effort: nothing to retry on
+		slog.Debug("telegram: sendMessage failed", "chat", chatID, "err", err)
+	}
 }
 
 func (b *bot) answerCallback(ctx context.Context, id string) {
-	b.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id}, nil)
+	if err := b.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id}, nil); err != nil {
+		slog.Debug("telegram: answerCallbackQuery failed", "err", err)
+	}
+}
+
+func (b *bot) setMyCommands(ctx context.Context, cmds []botCommand) {
+	if err := b.call(ctx, "setMyCommands", map[string]any{"commands": cmds}, nil); err != nil {
+		slog.Debug("telegram: setMyCommands failed", "err", err)
+	}
 }
 
 type update struct {

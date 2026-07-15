@@ -22,3 +22,23 @@ func TestMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldReplyUnauthorized(t *testing.T) {
+	p := &Poller{}
+	const attacker, other int64 = 111, 222
+
+	for i := 1; i <= unauthorizedBlockThreshold; i++ {
+		if !p.shouldReplyUnauthorized(attacker, "eve") {
+			t.Fatalf("attempt %d: want reply=true (below/at threshold)", i)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if p.shouldReplyUnauthorized(attacker, "eve") {
+			t.Fatalf("post-block attempt %d: want reply=false", i)
+		}
+	}
+	// blocking is per-id: an unrelated sender is unaffected
+	if !p.shouldReplyUnauthorized(other, "mallory") {
+		t.Fatal("a different id must not be affected by attacker's block")
+	}
+}

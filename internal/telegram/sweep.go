@@ -3,6 +3,7 @@ package telegram
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/store"
@@ -27,6 +28,7 @@ func (p *Poller) RunExpirySweeper(stop <-chan struct{}) {
 func (p *Poller) sweepExpiring() {
 	certs, err := p.s.ListCerts()
 	if err != nil {
+		slog.Warn("telegram: expiry sweep failed to list certs", "err", err)
 		return
 	}
 	warned := p.warnedSet()
