@@ -313,6 +313,12 @@
   :global(h2 button.ghost), :global(.panel-actions button.ghost),
   :global(.logs-head button.ghost), :global(.stats-head button.ghost) { padding: 3px 10px; font-size: 12px; }
   :global(h2 button.ghost) { margin-left: 8px; vertical-align: middle; }
+  /* grid's column-width floor differs per file, left as a local override */
+  :global(.logs-head), :global(.stats-head) {
+    display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
+    gap: 6px 14px; margin-bottom: 10px; font-size: 12px;
+  }
+  :global(.logs-grid), :global(.stats-grid) { display: grid; gap: 22px; align-items: start; }
   :global(.search-input) { width: auto; display: inline-block; margin-left: 8px; padding: 3px 8px; font-size: 12px; }
   :global(.panel-actions select) { width: auto; padding: 3px 8px; font-size: 12px; }
   :global(.th-sort) {

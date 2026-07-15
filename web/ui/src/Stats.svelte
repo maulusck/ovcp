@@ -197,14 +197,7 @@
 </div>
 
 <style>
-  .stats-head {
-    display: flex; flex-wrap: wrap; justify-content: flex-end;
-    gap: 6px 14px; margin-bottom: 10px; font-size: 12px;
-  }
-  .stats-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
-    gap: 22px; align-items: start;
-  }
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
   .card.wide { grid-column: 1 / -1; }
   .spark { width: 100%; height: 60px; display: block; }
   .spark polyline { fill: none; stroke: var(--amber); stroke-width: 1.5; vector-effect: non-scaling-stroke; }

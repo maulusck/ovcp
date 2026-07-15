@@ -272,20 +272,9 @@
 </div>
 
 <style>
-  .logs-head {
-    display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
-    gap: 6px 14px; margin-bottom: 10px; font-size: 12px;
-  }
   .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
-  /* grid not columns: columns rebalance every card while one resizes (bouncing).
-     order is set inline from openState so open cards stay first without drag/drop.
-     600px min caps it at 2 columns even on the widened logs main (600*3
-     doesn't fit) — a 3rd card wraps below instead of squeezing 3 across;
-     still collapses to 1 column on narrow/mobile like before. */
-  .logs-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr));
-    gap: 22px; align-items: start;
-  }
+  /* 600px min caps it at 2 columns even on the widened logs main */
+  .logs-grid { grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); }
   .logs-grid :global(.card) { padding: 10px 14px; }
   summary { cursor: pointer; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
   details[open] summary { margin-bottom: 14px; }
