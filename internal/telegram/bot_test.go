@@ -29,9 +29,7 @@ func mockAPI(t *testing.T) {
 		w.Write([]byte(`{"ok":false,"description":"Unauthorized"}`))
 	}))
 	t.Cleanup(srv.Close)
-	old := apiBase
-	apiBase = srv.URL + "/bot"
-	t.Cleanup(func() { apiBase = old })
+	t.Cleanup(SetAPIBaseForTesting(srv.URL + "/bot"))
 }
 
 func TestSetCredentials(t *testing.T) {

@@ -16,6 +16,16 @@ import (
 // server instead of hitting the real Telegram API.
 var apiBase = "https://api.telegram.org/bot"
 
+// SetAPIBaseForTesting points the client at url instead of the real
+// Telegram API; call the returned func to restore it. For other packages'
+// tests (e.g. internal/api) that need SetCredentials to succeed without a
+// network call — not meant for anything but tests.
+func SetAPIBaseForTesting(url string) (restore func()) {
+	old := apiBase
+	apiBase = url
+	return func() { apiBase = old }
+}
+
 type bot struct {
 	token string
 	hc    *http.Client

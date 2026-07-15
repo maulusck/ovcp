@@ -14,6 +14,7 @@ import (
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
+	"github.com/ovcp/ovcp/internal/telegram"
 )
 
 // handleHealthz is unauthenticated: systemd/container probes have no
@@ -351,6 +352,48 @@ func (s *Server) handleVPN(w http.ResponseWriter, r *http.Request, u *store.User
 	}
 	s.Store.Audit(u.Username, "vpn_"+op, "")
 	jsonOK(w, map[string]any{"op": op, "pid": s.VPN.Pid()})
+}
+
+func (s *Server) handleTelegramGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	jsonOK(w, s.Telegram.Status())
+}
+
+// handleTelegramPut sets token+admin together (SetCredentials validates the
+// token against getMe first) — matches "ovcp telegram token -admin".
+func (s *Server) handleTelegramPut(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ Token, Admin string }
+	if !decode(r, &in) || in.Token == "" || in.Admin == "" {
+		jsonErr(w, 400, "token and admin are both required")
+		return
+	}
+	if err := telegram.SetCredentials(s.Store, in.Token, in.Admin); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "telegram_configure", "admin="+in.Admin)
+	jsonOK(w, s.Telegram.Status())
+}
+
+func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *store.User) {
+	op := r.PathValue("op")
+	var err error
+	switch op {
+	case "start":
+		err = s.Telegram.Start()
+	case "stop":
+		err = s.Telegram.Stop()
+	case "restart":
+		err = s.Telegram.Restart()
+	default:
+		jsonErr(w, 404, "unknown telegram operation")
+		return
+	}
+	if err != nil {
+		jsonErr(w, 502, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "telegram_"+op, "")
+	jsonOK(w, s.Telegram.Status())
 }
 
 // handleCertDownload returns the (public) certificate PEM for any issued cert.

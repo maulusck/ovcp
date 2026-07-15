@@ -17,6 +17,7 @@ import (
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
+	"github.com/ovcp/ovcp/internal/telegram"
 )
 
 const pass = "test-passphrase-123"
@@ -52,6 +53,7 @@ func setup(t *testing.T) *env {
 	srv := &Server{Store: s, Auth: a, PKI: p,
 		Mgmt:          controller.NewClient(filepath.Join(dir, "no.sock")),
 		VPN:           &fakeVPN{},
+		Telegram:      telegram.New(s, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"))),
 		DataDir:       dir,
 		ConfigPath:    filepath.Join(dir, "server.conf"),
 		TLSCrypt:      filepath.Join(dir, "pki", "tls-crypt.key"),
@@ -152,6 +154,8 @@ func TestRBAC(t *testing.T) {
 		{"POST", "/api/certs/export"},
 		{"PUT", "/api/config"},
 		{"POST", "/api/vpn/restart"},
+		{"PUT", "/api/telegram"},
+		{"POST", "/api/telegram/start"},
 		{"POST", "/api/debug"},
 		{"GET", "/api/users"},
 		{"POST", "/api/users"},
@@ -419,5 +423,57 @@ func TestDebugToggle(t *testing.T) {
 	json.NewDecoder(r.Body).Decode(&out)
 	if r.StatusCode != 200 || out.Debug {
 		t.Fatal("want debug=false after disabling")
+	}
+}
+
+func TestTelegramEndpoints(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "good-token/getMe") {
+			w.Write([]byte(`{"ok":true,"result":{"id":1,"is_bot":true}}`))
+			return
+		}
+		w.Write([]byte(`{"ok":false,"description":"Unauthorized"}`))
+	}))
+	defer mock.Close()
+	defer telegram.SetAPIBaseForTesting(mock.URL + "/bot")()
+
+	e := setup(t)
+	e.login("admin")
+
+	var st struct {
+		Running  bool
+		TokenSet bool
+		Admin    string
+	}
+	r := e.req("GET", "/api/telegram", "", false)
+	json.NewDecoder(r.Body).Decode(&st)
+	if r.StatusCode != 200 || st.TokenSet {
+		t.Fatalf("want unconfigured, got status=%d %+v", r.StatusCode, st)
+	}
+
+	if r := e.req("PUT", "/api/telegram", `{"Token":"good-token"}`, true); r.StatusCode != 400 {
+		t.Fatal("missing admin must 400, got", r.Status)
+	}
+	if r := e.req("PUT", "/api/telegram", `{"Token":"bad-token","Admin":"@alice"}`, true); r.StatusCode != 400 {
+		t.Fatal("rejected token must 400, got", r.Status)
+	}
+	r = e.req("PUT", "/api/telegram", `{"Token":"good-token","Admin":"@alice"}`, true)
+	json.NewDecoder(r.Body).Decode(&st)
+	if r.StatusCode != 200 || !st.TokenSet || st.Admin != "@alice" {
+		t.Fatalf("want configured, got status=%d %+v", r.StatusCode, st)
+	}
+
+	r = e.req("POST", "/api/telegram/start", "", true)
+	json.NewDecoder(r.Body).Decode(&st)
+	if r.StatusCode != 200 || !st.Running {
+		t.Fatalf("start: status=%d %+v", r.StatusCode, st)
+	}
+	r = e.req("POST", "/api/telegram/stop", "", true)
+	json.NewDecoder(r.Body).Decode(&st)
+	if r.StatusCode != 200 || st.Running {
+		t.Fatalf("stop: status=%d %+v", r.StatusCode, st)
+	}
+	if r := e.req("POST", "/api/telegram/bogus", "", true); r.StatusCode != 404 {
+		t.Fatal("unknown op must 404, got", r.Status)
 	}
 }

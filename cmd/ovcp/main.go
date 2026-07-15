@@ -183,6 +183,7 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 		Store: s, Auth: auth.NewService(s), PKI: p,
 		Mgmt:       mgmt,
 		VPN:        sup,
+		Telegram:   tg,
 		DataDir:    dataDir,
 		ConfigPath: pp.ServerConf,
 		TLSCrypt:   pp.TLSCrypt,

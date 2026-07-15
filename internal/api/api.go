@@ -16,6 +16,7 @@ import (
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
+	"github.com/ovcp/ovcp/internal/telegram"
 )
 
 type Server struct {
@@ -24,6 +25,7 @@ type Server struct {
 	PKI           *pki.PKI
 	Mgmt          *controller.Client
 	VPN           controller.Lifecycle
+	Telegram      *telegram.Poller
 	DataDir       string         // data directory root (backup source)
 	ConfigPath    string         // rendered server.conf
 	TLSCrypt      string         // tls-crypt key path
@@ -67,6 +69,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
 	mux.Handle("PUT /api/config", s.wrap(auth.RoleAdmin, s.handleConfigPut))
 	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleVPN))
+	mux.Handle("GET /api/telegram", s.wrap(auth.RoleReadonly, s.handleTelegramGet))
+	mux.Handle("PUT /api/telegram", s.wrap(auth.RoleAdmin, s.handleTelegramPut))
+	mux.Handle("POST /api/telegram/{op}", s.wrap(auth.RoleAdmin, s.handleTelegramOp))
 	mux.Handle("GET /api/certs/download", s.wrap(auth.RoleReadonly, s.handleCertDownload))
 	mux.Handle("GET /api/users", s.wrap(auth.RoleAdmin, s.handleUsersList))
 	mux.Handle("POST /api/users", s.wrap(auth.RoleAdmin, s.handleUserAdd))
