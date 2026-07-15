@@ -314,6 +314,7 @@
   :global(.logs-head button.ghost), :global(.stats-head button.ghost) { padding: 3px 10px; font-size: 12px; }
   :global(h2 button.ghost) { margin-left: 8px; vertical-align: middle; }
   :global(.search-input) { width: auto; display: inline-block; margin-left: 8px; padding: 3px 8px; font-size: 12px; }
+  :global(.panel-actions select) { width: auto; padding: 3px 8px; font-size: 12px; }
   :global(.th-sort) {
     background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer;
   }

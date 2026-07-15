@@ -100,7 +100,14 @@
   let search = $state({ audit: { open: false, query: '' }, openvpn: { open: false, query: '' }, ovcp: { open: false, query: '' } })
   const filteredEntries = $derived(
     entries.filter((e) => matchesQuery(e, search.audit.query, (x) => x.Actor, (x) => x.Action, (x) => x.Detail)))
-  const visibleLines = (id) => lines[id].filter((line) => matchesQuery(line, search[id].query, (x) => x))
+
+  // level-only filter, openvpn/ovcp panels only (audit has no level) —
+  // 'all' skips it entirely so the common case parses each line once, not twice.
+  const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 }
+  let levelFilter = $state({ openvpn: 'all', ovcp: 'all' })
+  const visibleLines = (id) => lines[id]
+    .filter((line) => matchesQuery(line, search[id].query, (x) => x))
+    .filter((line) => levelFilter[id] === 'all' || LEVEL_RANK[parseLine(line).level] >= LEVEL_RANK[levelFilter[id]])
 
   async function toggleDebug(e) {
     const want = e.target.checked
@@ -150,8 +157,15 @@
   $effect(() => { localStorage.setItem(OPEN_KEY, JSON.stringify(openState)) })
 </script>
 
-{#snippet actions(id, filename, text)}
+{#snippet actions(id, filename, text, hasLevel)}
   <div class="panel-actions">
+    {#if hasLevel}
+      <select bind:value={levelFilter[id]} title="Show only this level and above">
+        <option value="all">All levels</option>
+        <option value="warn">Warn+</option>
+        <option value="error">Errors only</option>
+      </select>
+    {/if}
     <button type="button" class="ghost" class:active={search[id].open} onclick={() => toggleSearch(search[id])}>Filter</button>
     {#if search[id].open}
       <input type="search" class="search-input" bind:value={search[id].query} placeholder="Filter…" use:autofocus />
@@ -231,7 +245,7 @@
       {#if lines[l.id].length === 0}
         <p class="muted">No log yet.</p>
       {:else}
-        {@render actions(l.id, l.file, () => visibleLines(l.id).join('\n'))}
+        {@render actions(l.id, l.file, () => visibleLines(l.id).join('\n'), true)}
         {#if visibleLines(l.id).length === 0}
           <p class="muted">No log lines match.</p>
         {:else}
