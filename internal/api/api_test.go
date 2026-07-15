@@ -67,11 +67,12 @@ func setup(t *testing.T) *env {
 
 type fakeVPN struct{ n int }
 
-func (f *fakeVPN) Start() error     { f.n++; return nil }
-func (f *fakeVPN) Stop() error      { f.n++; return nil }
-func (f *fakeVPN) Restart() error   { f.n++; return nil }
-func (f *fakeVPN) Reconnect() error { f.n++; return nil }
-func (f *fakeVPN) Pid() int         { return 4242 }
+func (f *fakeVPN) Start() error         { f.n++; return nil }
+func (f *fakeVPN) Stop() error          { f.n++; return nil }
+func (f *fakeVPN) Restart() error       { f.n++; return nil }
+func (f *fakeVPN) Reconnect() error     { f.n++; return nil }
+func (f *fakeVPN) Pid() int             { return 4242 }
+func (f *fakeVPN) StartedAt() time.Time { return time.Now() }
 
 func (e *env) login(user string) {
 	body, _ := json.Marshal(map[string]string{"Username": user, "Password": testUserPW})

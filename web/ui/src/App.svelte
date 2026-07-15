@@ -103,7 +103,8 @@
   const canOperate = $derived(user && user.role !== 'readonly')
   const isAdmin = $derived(user && user.role === 'admin')
   const phaseText = $derived(
-    vpn.phase === 'ok' ? `VPN running · ${vpn.clients} client${vpn.clients === 1 ? '' : 's'} connected` :
+    vpn.phase === 'ok' ? `VPN running · up ${vpn.uptime} · ${vpn.clients} client${vpn.clients === 1 ? '' : 's'} connected` +
+      (vpn.ovcpUptime ? ` · ovcp up ${vpn.ovcpUptime}` : '') :
     vpn.phase === 'reloading' ? 'VPN restarting…' : 'VPN unreachable')
 </script>
 

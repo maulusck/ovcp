@@ -31,12 +31,13 @@ type Supervisor struct {
 
 	opMu sync.Mutex // serializes whole lifecycle operations
 
-	stMu    sync.Mutex // guards the fields below
-	cmd     *exec.Cmd
-	done    chan struct{} // closed by the reaper once cmd has been Wait()ed
-	running bool
-	desired bool // true once Start/Restart has been asked for; false after Stop — gates auto-restart
-	stopped bool // set by stop() just before signaling, so the reaper can tell "we did this" from a crash
+	stMu      sync.Mutex // guards the fields below
+	cmd       *exec.Cmd
+	done      chan struct{} // closed by the reaper once cmd has been Wait()ed
+	running   bool
+	desired   bool      // true once Start/Restart has been asked for; false after Stop — gates auto-restart
+	stopped   bool      // set by stop() just before signaling, so the reaper can tell "we did this" from a crash
+	startedAt time.Time // when the current child was launched; zero when not running
 
 	crashAt     time.Time
 	crashStreak int
@@ -62,6 +63,18 @@ func (s *Supervisor) Pid() int {
 		return 0
 	}
 	return s.cmd.Process.Pid
+}
+
+// StartedAt returns when the current openvpn child was launched, or the
+// zero time when not running — cleared by the reaper on every exit path
+// (clean stop or crash) alongside running/cmd, so it never lags Pid().
+func (s *Supervisor) StartedAt() time.Time {
+	s.stMu.Lock()
+	defer s.stMu.Unlock()
+	if !s.running {
+		return time.Time{}
+	}
+	return s.startedAt
 }
 
 func (s *Supervisor) Start() error {
@@ -147,26 +160,28 @@ func (s *Supervisor) supervise(launched chan<- error) {
 
 	done := make(chan struct{})
 	s.stMu.Lock()
-	s.cmd, s.done, s.running = cmd, done, true
+	s.cmd, s.done, s.running, s.startedAt = cmd, done, true, time.Now()
 	s.stMu.Unlock()
 	slog.Info("openvpn started", "pid", cmd.Process.Pid)
 	launched <- nil
 
-	err = cmd.Wait() // reap — no zombie can accumulate
+	err = cmd.Wait() // reap — no zombie can accumulate; runs for both a clean stop() and an unexpected crash
 	lf.Close()
 	s.stMu.Lock()
 	stopped := s.stopped
 	s.stopped = false
-	s.running, s.cmd = false, nil
+	startedAt := s.startedAt
+	s.running, s.cmd, s.startedAt = false, nil, time.Time{}
 	desired := s.desired
 	s.stMu.Unlock()
 	close(done)
 
+	uptime := time.Since(startedAt).Round(time.Second)
 	if stopped {
-		slog.Info("openvpn exited", "pid", cmd.Process.Pid, "err", err)
+		slog.Info("openvpn exited", "pid", cmd.Process.Pid, "err", err, "uptime", uptime)
 		return
 	}
-	slog.Error("openvpn exited unexpectedly", "pid", cmd.Process.Pid, "err", err)
+	slog.Error("openvpn exited unexpectedly", "pid", cmd.Process.Pid, "err", err, "uptime", uptime)
 	if desired {
 		go s.autoRestart()
 	}
