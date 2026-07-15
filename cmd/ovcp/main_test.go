@@ -119,6 +119,24 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+// TestEveryCommandHelp is the whole-CLI-surface guard: every command in the
+// commands table (the one dispatch/helpText/completion all already share)
+// must have a working, non-empty -h that names itself — table-driven so a
+// newly added command is covered for free, not just whichever ones other
+// tests happen to exercise. This is exactly the class of bug that motivated
+// it: user/backup/telegram's -h used to print nothing at all.
+func TestEveryCommandHelp(t *testing.T) {
+	for _, c := range commands {
+		r := run(t, nil, c.name, "-h")
+		if r.code != 0 {
+			t.Errorf("%s -h: exit=%d, want 0: %+v", c.name, r.code, r)
+		}
+		if !strings.Contains(r.stderr, "usage: ovcp "+c.name) {
+			t.Errorf("%s -h: stderr doesn't name the command, got %q", c.name, r.stderr)
+		}
+	}
+}
+
 // TestDataFlagPosition covers the -data CLI flag itself (every other test
 // uses OVCP_DATA instead). -data is parsed before the subcommand name, so
 // it must come first: ovcp -data DIR <command>, like git -C / docker -H.
