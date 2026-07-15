@@ -1,0 +1,11 @@
+#!/bin/sh
+# OVCP — OpenVPN control plane. Same shape as the systemd unit/OpenRC
+# script: root, foreground, runit itself handles respawn.
+# shellcheck disable=SC1091  # optional, doesn't exist unless an operator adds it
+[ -r conf ] && . ./conf
+: "${OVCP_DATA:=/var/lib/ovcp}"
+export OVCP_DATA
+mkdir -p "$OVCP_DATA/logs"
+chown root:root "$OVCP_DATA" "$OVCP_DATA/logs"
+chmod 700 "$OVCP_DATA" "$OVCP_DATA/logs"
+exec /usr/bin/ovcp serve

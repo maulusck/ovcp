@@ -23,3 +23,24 @@ contents:
     dst: /usr/share/zsh/site-functions/_ovcp
   - src: dist/completion/ovcp.fish
     dst: /usr/share/fish/vendor_completions.d/ovcp.fish
+# overrides.<fmt>.contents replaces the base list above, it does not merge —
+# apk's list restates it, systemd unit swapped for the OpenRC one.
+overrides:
+  apk:
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/ovcp/LICENSE
+      - src: bin/ovcp
+        dst: /usr/bin/ovcp
+      - src: deploy/openrc/ovcp.initd
+        dst: /etc/init.d/ovcp
+        file_info:
+          mode: 0755
+      - src: docs/ovcp.8
+        dst: /usr/share/man/man8/ovcp.8
+      - src: dist/completion/ovcp.bash
+        dst: /usr/share/bash-completion/completions/ovcp
+      - src: dist/completion/ovcp.zsh
+        dst: /usr/share/zsh/site-functions/_ovcp
+      - src: dist/completion/ovcp.fish
+        dst: /usr/share/fish/vendor_completions.d/ovcp.fish

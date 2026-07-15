@@ -1,0 +1,21 @@
+# Template file for 'ovcp'
+# shellcheck disable=SC2034  # every var here is read by xbps-src itself
+pkgname=ovcp
+version=0.0.0
+revision=1
+build_style=gnu-makefile
+make_install_args="prefix=/usr"
+hostmakedepends="go nodejs mandoc"
+depends="openvpn"
+short_desc="OpenVPN Control Plane — web UI and native PKI for OpenVPN"
+maintainer="YOUR NAME <YOUR EMAIL>"
+license="MIT"
+homepage="https://goldrake.bot.nu/c/maulusck/ovcp"
+distfiles="${homepage}/archive/v${version}.tar.gz"
+# fill in after tagging: sha256sum the tarball at $distfiles
+checksum=REPLACE_ME
+
+post_install() {
+	vsv ovcp
+	vlicense LICENSE
+}

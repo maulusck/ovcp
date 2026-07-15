@@ -615,10 +615,28 @@ rootful.
 external traffic. Fix: set \fBservice.spec.externalTrafficPolicy: Local\fR.
 .RE
 .SS packages
-.B make deb
-(or \fBmake rpm\fR) builds a distro package via \fBnfpm\fR, installing the
-binary, systemd unit, man page, shell completions, and \fILICENSE\fR to
-their standard paths.
+.B make deb|rpm|apk|archlinux
+builds a distro package via \fBnfpm\fR: binary, man page, shell completions,
+and \fILICENSE\fR to their standard paths, plus a service file \(en the
+systemd unit for deb/rpm/archlinux, an OpenRC init script
+(\fIdeploy/openrc/ovcp.initd\fR) for apk, since Alpine has no systemd.
+\fBapk\fR additionally needs \fBpodman\fR or \fBdocker\fR: the binary must
+be built against musl, not this host's glibc, so that step runs inside
+\fBdocker.io/library/golang:alpine\fR.
+.PP
+Void Linux packages (xbps) are built from a template contributed to
+.UR https://github.com/void-linux/void-packages
+void\-packages
+.UE
+, not shipped by this repository \(en that's how Void itself distributes
+packages. \fIdeploy/void/template\fR and \fIdeploy/void/ovcp/run\fR (a
+runit service) are a ready starting point:
+.BR "make install DESTDIR=\(dq$DESTDIR\(dq prefix=/usr" ,
+called via \fBbuild_style=gnu-makefile\fR, is what the template's
+.B do_install
+hook uses \(en any packaging system that calls plain
+.B make install
+already works, \fBDESTDIR\fR/\fBprefix\fR are honored (GNU Coding Standards).
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

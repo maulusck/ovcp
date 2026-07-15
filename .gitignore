@@ -8,4 +8,6 @@ nohup.out
 *.tar.gz
 *.deb
 *.rpm
+*.apk
+*.pkg.tar.zst
 /TODO.md

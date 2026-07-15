@@ -1,8 +1,15 @@
 BINARY  := ovcp
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# strip a leading v (v1.2.3 tags): deb's Version field must start with a
+# digit, and this feeds nfpm.yaml's version: field for every package format.
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+VERSION := $(if $(VERSION),$(VERSION),dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
+# GNU Coding Standards: lowercase prefix, uppercase DESTDIR (staged
+# installs). Default /usr, not /usr/local, to match nfpm.yaml's own paths.
+prefix  ?= /usr
+DESTDIR ?=
 
-.PHONY: build test vet clean install help ui release man image deb rpm deps completions
+.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions
 
 release: ui build completions ## UI + binary + shell completions
 
@@ -19,9 +26,16 @@ image: ## build all-in-one container image (podman, else docker)
 	@test -n "$(CTR)" || { echo "error: neither podman nor docker found"; exit 1; }
 	$(CTR) build -t ovcp -f Containerfile .
 
-deb rpm: release ## build package (needs nfpm)
+deb rpm archlinux: release ## build package (needs nfpm)
 	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
 	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@
+
+apk: ui ## build .apk (needs nfpm + podman/docker: bin/ovcp must be musl, not this host's glibc)
+	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
+	@test -n "$(CTR)" || { echo "missing: podman or docker (musl build for apk)"; exit 1; }
+	$(CTR) run --rm -v $(CURDIR):/src:Z -w /src docker.io/library/golang:alpine \
+		sh -c 'apk add --no-cache make gcc musl-dev >/dev/null && make build completions VERSION=$(VERSION)'
+	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p apk
 
 help: ## show targets
 	@grep -E '^[a-z][a-z0-9_ -]*:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -52,12 +66,12 @@ vet: ## go vet
 clean: ## remove build output (bin/, web/dist/, dist/)
 	rm -rf bin web/dist dist
 
-install: build completions ## install binary + man page + shell completions
-	install -m 0755 bin/$(BINARY) /usr/bin/$(BINARY)
-	install -D -m 0644 docs/ovcp.8 /usr/share/man/man8/ovcp.8
-	install -D -m 0644 dist/completion/ovcp.bash /usr/share/bash-completion/completions/ovcp
-	install -D -m 0644 dist/completion/ovcp.zsh /usr/share/zsh/site-functions/_ovcp
-	install -D -m 0644 dist/completion/ovcp.fish /usr/share/fish/vendor_completions.d/ovcp.fish
+install: release ## install binary + man page + shell completions (DESTDIR/prefix honored)
+	install -D -m 0755 bin/$(BINARY) $(DESTDIR)$(prefix)/bin/$(BINARY)
+	install -D -m 0644 docs/ovcp.8 $(DESTDIR)$(prefix)/share/man/man8/ovcp.8
+	install -D -m 0644 dist/completion/ovcp.bash $(DESTDIR)$(prefix)/share/bash-completion/completions/ovcp
+	install -D -m 0644 dist/completion/ovcp.zsh $(DESTDIR)$(prefix)/share/zsh/site-functions/_ovcp
+	install -D -m 0644 dist/completion/ovcp.fish $(DESTDIR)$(prefix)/share/fish/vendor_completions.d/ovcp.fish
 
 man: ## preview man page
 	man ./docs/ovcp.8
