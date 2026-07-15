@@ -38,7 +38,7 @@ apk: ui completions ## build .apk (needs nfpm + podman/docker: cross-builds agai
 	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p apk
 
 help: ## show targets
-	@grep -E '^[a-z][a-z0-9_ -]*:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z][a-z0-9_ -]*:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-20s %s\n", $$1, $$2}'
 
 web/ui/node_modules: web/ui/package.json web/ui/package-lock.json
 	cd web/ui && npm ci
