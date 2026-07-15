@@ -151,9 +151,6 @@ go test ./...
 cd web/ui && npm run dev   # UI dev server (proxy API manually or run serve)
 ```
 
-`mandoc` isn't packaged everywhere by default — `apk add mandoc` / `apt
-install mandoc` (already in the container build stage).
-
 ## License
 
 [MIT](LICENSE)
