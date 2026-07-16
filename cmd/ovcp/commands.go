@@ -694,7 +694,7 @@ func printVPNText(op string, r controller.ControlResult) {
 	case op == "status" && r.Pid == 0:
 		fmt.Println("vpn stopped")
 	case op == "status":
-		fmt.Printf("vpn running (pid %d)\n", r.Pid)
+		fmt.Printf("vpn running (pid %d, up %s)\n", r.Pid, fmtUptime(r.StartedAt))
 	case op == "start" && !r.Changed:
 		fmt.Printf("vpn already started (pid %d)\n", r.Pid)
 	case op == "start":
@@ -707,6 +707,11 @@ func printVPNText(op string, r controller.ControlResult) {
 		fmt.Printf("vpn restarted (pid %d)\n", r.Pid)
 	case op == "reconnect":
 		fmt.Printf("vpn reconnect sent (pid %d)\n", r.Pid)
+	}
+	if op == "status" {
+		if u := fmtUptime(r.ServeStartedAt); u != "" {
+			fmt.Println("ovcp: up", u)
+		}
 	}
 }
 
