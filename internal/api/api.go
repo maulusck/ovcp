@@ -86,15 +86,19 @@ func (s *Server) Handler() http.Handler {
 	return requestLog(secureHeaders(mux))
 }
 
-// requestLog is debug-only noise: every request, its status and latency.
-// State-changing actions already land in the persistent audit log (see
-// Store.Audit calls in handlers.go); this is for live troubleshooting.
+// requestLog: Debug for 2xx/4xx noise, Warn for 5xx so server faults are
+// visible without debug logging on. State changes are already audited
+// separately (see Store.Audit calls in handlers.go).
 func requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
-		slog.Debug("http", "method", r.Method, "path", r.URL.Path,
+		level := slog.LevelDebug
+		if sw.status >= 500 {
+			level = slog.LevelWarn
+		}
+		slog.Log(r.Context(), level, "http", "method", r.Method, "path", r.URL.Path,
 			"status", sw.status, "remote", clientIP(r), "dur", time.Since(start))
 	})
 }

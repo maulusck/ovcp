@@ -227,7 +227,8 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 
 	crt, key, err := api.EnsureAdminTLS(filepath.Join(dataDir, "admin-tls"), adminCertCN(dataDir))
 	die(err)
-	hs := &http.Server{Handler: srv.Handler()}
+	// ErrorLog: routes net/http's own logging (panics, TLS errors) through slog too, not bare stderr.
+	hs := &http.Server{Handler: srv.Handler(), ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)}
 	// IP_FREEBIND lets us bind the VPN-side address (e.g. 10.8.0.1) before
 	// tun0 exists — the kernel already solves this, no retry loop needed.
 	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {

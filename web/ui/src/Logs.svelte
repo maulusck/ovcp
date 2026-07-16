@@ -168,7 +168,8 @@
     {/if}
     <button type="button" class="ghost" class:active={search[id].open} onclick={() => toggleSearch(search[id])}>Filter</button>
     {#if search[id].open}
-      <input type="search" class="search-input" bind:value={search[id].query} placeholder="Filter…" use:autofocus />
+      <input type="search" class="search-input" bind:value={search[id].query} placeholder="Filter…" use:autofocus
+        onkeydown={(e) => e.key === 'Enter' && refresh()} />
     {/if}
     <button type="button" class="ghost" onclick={() => copyText(id, text())}>
       {copied === id ? 'Copied' : 'Copy'}

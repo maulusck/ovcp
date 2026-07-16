@@ -478,3 +478,22 @@ func TestTelegramEndpoints(t *testing.T) {
 		t.Fatal("unknown op must 404, got", r.Status)
 	}
 }
+
+// TestRequestLogWarnsOn5xx: a 500 must be visible at the default log level,
+// not only under -debug.
+func TestRequestLogWarnsOn5xx(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil))) // default level: Info, Debug excluded
+
+	h := requestLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+
+	if !strings.Contains(buf.String(), "level=WARN") {
+		t.Fatalf("want a WARN line for a 500 response, got: %s", buf.String())
+	}
+}
