@@ -1,18 +1,29 @@
 package main
 
-import "fmt"
+import (
+	"flag"
+	"fmt"
+	"io"
+)
 
 // completeArgs answers "what comes next" given the words typed so far
 // (words[0] is always "ovcp"), by reading the same commands table that
 // drives real dispatch and -h — so completion can't drift from what the
 // CLI actually accepts.
 //
+// Global flags (-data, -no-color, ...) may precede the command name, same
+// as real parsing, so they're stripped with the same FlagSet globalFlags
+// registers in main — that's what keeps completion working regardless of
+// how many of them appear first, and offers their names too while no
+// command has been typed yet.
+//
 // Commands with a fixed subcommand list (vpn, user, backup, debug,
-// completion) complete that list at position 2; everything after is out
-// of scope (flags specific to e.g. `user add` vs `user passwd` aren't
-// completed — add a nested sub->flags table if that's wanted later).
-// Commands without one only take flags, so any position from 2 onward
-// offers their flag names, read straight off the command's own FlagSet.
+// completion) complete that list right after the command name; everything
+// after is out of scope (flags specific to e.g. `user add` vs `user passwd`
+// aren't completed — add a nested sub->flags table if that's wanted later).
+// Commands without one only take flags, so any position after the command
+// name offers their flag names, read straight off the command's own
+// FlagSet.
 func completeArgs(words []string) []string {
 	find := func(name string) *command {
 		for i := range commands {
@@ -22,15 +33,25 @@ func completeArgs(words []string) []string {
 		}
 		return nil
 	}
+
+	gfs := flag.NewFlagSet("ovcp", flag.ContinueOnError)
+	gfs.SetOutput(io.Discard)
+	globalFlags(gfs)
+	if gfs.Parse(words[1:]) != nil {
+		return nil
+	}
+	rest := gfs.Args() // words after "ovcp" with any global flags stripped
+
 	switch {
-	case len(words) <= 1:
+	case len(rest) == 0:
 		names := make([]string, len(commands))
 		for i, c := range commands {
 			names[i] = c.name
 		}
+		gfs.VisitAll(func(f *flag.Flag) { names = append(names, "-"+f.Name) })
 		return names
-	case len(words) == 2:
-		c := find(words[1])
+	case len(rest) == 1:
+		c := find(rest[0])
 		if c == nil {
 			return nil
 		}
@@ -39,7 +60,7 @@ func completeArgs(words []string) []string {
 		}
 		return c.flagNames()
 	default:
-		c := find(words[1])
+		c := find(rest[0])
 		if c == nil || c.sub != nil {
 			return nil
 		}

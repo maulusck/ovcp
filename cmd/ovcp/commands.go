@@ -98,7 +98,7 @@ var commands = []command{
 	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status [-json]   notify+control bot", sub: telegramOps, run: cmdTelegram},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
 	{name: "audit", usage: "last 50 audit entries", run: cmdAudit},
-	{name: "serve", usage: "[-listen ADDR] [-sock PATH]   run admin UI + API", run: cmdServe},
+	{name: "serve", usage: "[-listen ADDR] [-mgmt PATH] [-ctrl PATH]   run admin UI + API", run: cmdServe},
 	{name: "version", usage: "print version", run: cmdVersion},
 	{name: "completion", usage: "bash|zsh|fish   print a shell completion script", sub: []string{"bash", "zsh", "fish"}, run: cmdCompletion},
 }
@@ -115,6 +115,7 @@ func helpText() string {
 	b.WriteString("\n-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before\n")
 	b.WriteString("the command, e.g. ovcp -data /tmp/ovcp init ...\n")
 	b.WriteString("-no-color/-log-json disable colors / emit JSON logs; both go before the command, like -data.\n")
+	b.WriteString("-debug turns on debug-level logging for this invocation; also before the command.\n")
 	b.WriteString("-json on list/status/audit/stats/user list prints machine-readable JSON instead.\n")
 	b.WriteString("Full guide: ovcp(8).")
 	return b.String()
@@ -395,7 +396,7 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 	years := fs.Int("ca-years", 10, "CA validity")
 	days := fs.Int("server-days", 825, "server cert validity (days)")
 	admin := fs.String("admin", "admin", "initial admin username ('' to skip)")
-	sock := fs.String("sock", mgmtSock(), "mgmt socket")
+	mgmt := fs.String("mgmt", mgmtSock(), "mgmt socket")
 	return func(ctx *cliContext) {
 		if *serverCN == "" {
 			die(fmt.Errorf("-server-cn required (public hostname clients connect to)"))
@@ -439,7 +440,7 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 
 		// 4) server.conf from defaults
 		cfg := ovpnconf.Default()
-		fillPaths(&cfg, ctx.dataDir, *sock)
+		fillPaths(&cfg, ctx.dataDir, *mgmt)
 		raw, _ := json.Marshal(cfg)
 		die(s.SetSetting("server_config", string(raw)))
 		die(cfg.WriteAtomic(pp.ServerConf))
@@ -469,9 +470,10 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 
 func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
 	listen := fs.String("listen", cmp.Or(os.Getenv("OVCP_LISTEN"), "127.0.0.1:8443"), "admin UI listen addr(s), comma-separated")
-	sock := fs.String("sock", mgmtSock(), "mgmt socket")
+	mgmt := fs.String("mgmt", mgmtSock(), "mgmt socket")
+	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 	return func(ctx *cliContext) {
-		runServe(ctx.dataDir, *listen, *sock, ctx.p)
+		runServe(ctx.dataDir, *listen, *mgmt, *ctrl, ctx.p)
 	}
 }
 

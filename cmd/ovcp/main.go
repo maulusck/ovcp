@@ -121,14 +121,27 @@ type cliContext struct {
 	openStore func() *store.Store
 }
 
+// globalFlags registers ovcp's flags that precede the command name — used
+// both for main's real parsing and (on a throwaway FlagSet) by completeArgs,
+// so the two can't drift on what counts as a global flag vs. the command
+// name, same pattern as command.flagNames() below.
+func globalFlags(fs *flag.FlagSet) (dataDir *string, noColor, logJSON, debug *bool) {
+	dataDir = fs.String("data", cmp.Or(os.Getenv("OVCP_DATA"), "/var/lib/ovcp"), "data directory")
+	noColor = fs.Bool("no-color", false, "disable ANSI colors (also: $NO_COLOR)")
+	logJSON = fs.Bool("log-json", false, "emit logs as JSON lines instead of text (for log shippers)")
+	debug = fs.Bool("debug", false, "debug-level logging for this invocation")
+	return
+}
+
 func main() {
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, helpText()) }
-	dataDir := flag.String("data", cmp.Or(os.Getenv("OVCP_DATA"), "/var/lib/ovcp"), "data directory")
-	noColorFlag := flag.Bool("no-color", false, "disable ANSI colors (also: $NO_COLOR)")
-	logJSONFlag := flag.Bool("log-json", false, "emit logs as JSON lines instead of text (for log shippers)")
+	dataDir, noColorFlag, logJSONFlag, debugFlag := globalFlags(flag.CommandLine)
 	flag.Parse()
 	noColor = noColor || *noColorFlag
 	logJSON = *logJSONFlag
+	if *debugFlag {
+		logLevel.Set(slog.LevelDebug)
+	}
 	slog.SetDefault(slog.New(newLogHandler(logWriter())))
 	args := flag.Args()
 	if len(args) == 0 {
@@ -169,7 +182,7 @@ func main() {
 	usage()
 }
 
-func runServe(dataDir, listen, sock string, p *pki.PKI) {
+func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 	pp := dataPaths(dataDir)
 	// tee ovcp's own log to a file (alongside stderr/journal) so the UI can
 	// tail it; unbounded growth, same as openvpn.log — no rotation here either.
@@ -241,7 +254,7 @@ func runServe(dataDir, listen, sock string, p *pki.PKI) {
 	// -follow` can all drive/query us while we run — see ServeControl for
 	// why mgmt is threaded through here rather than each of those dialing
 	// openvpn's own management socket a second time.
-	ctl, err := controller.ServeControl(ctrlSock(), sup, mgmt, logLevel, tg)
+	ctl, err := controller.ServeControl(ctrl, sup, mgmt, logLevel, tg)
 	die(err)
 	defer ctl.Close()
 	if err := sup.Start(); err != nil {

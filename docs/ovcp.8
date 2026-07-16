@@ -6,6 +6,7 @@ ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for 
 [\fB\-data\fR \fIDIR\fR]
 [\fB\-no\-color\fR]
 [\fB\-log\-json\fR]
+[\fB\-debug\fR]
 \fICOMMAND\fR
 [\fIOPTIONS\fR]
 .SH DESCRIPTION
@@ -104,16 +105,21 @@ ovcp export \-cn alice \-remote vpn.example.com > alice.ovpn
 .fi
 .SH COMMANDS
 .TP
-.B init \fB\-server\-cn\fR \fIHOST\fR [\fB\-ca\-cn\fR \fINAME\fR] [\fB\-ca\-years\fR \fIN\fR] [\fB\-server\-days\fR \fIN\fR] [\fB\-admin\fR \fINAME\fR] [\fB\-sock\fR \fIPATH\fR]
+.B init \fB\-server\-cn\fR \fIHOST\fR [\fB\-ca\-cn\fR \fINAME\fR] [\fB\-ca\-years\fR \fIN\fR] [\fB\-server\-days\fR \fIN\fR] [\fB\-admin\fR \fINAME\fR] [\fB\-mgmt\fR \fIPATH\fR]
 One\-shot initialization. Creates the CA (prompting twice for a new
 passphrase), issues the server certificate for \fIHOST\fR, generates the
 tls\-crypt key, writes \fIserver.conf\fR, and creates the initial admin
 user. Idempotent: existing artifacts are kept. Pass \fB\-admin\fR "" to
 skip user creation.
 .TP
-.B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-sock\fR \fIPATH\fR]
+.B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-mgmt\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR]
 Run the HTTPS admin UI and REST API (default \fI127.0.0.1:8443\fR, self\-signed
-certificate generated on first run). Starts the
+certificate generated on first run). \fB\-mgmt\fR (default
+\fI/run/ovcp/mgmt.sock\fR, same as \fB$OVCP_MGMT_SOCK\fR) and \fB\-ctrl\fR
+(default \fI/run/ovcp/control.sock\fR, same as \fB$OVCP_CTRL_SOCK\fR) are two
+independent sockets \(en the flag overrides take effect for this
+\fBserve\fR only, no env vars required; see \fBOVCP_MGMT_SOCK\fR /
+\fBOVCP_CTRL_SOCK\fR below for what each is for. Starts the
 .B openvpn
 worker from \fIserver.conf\fR as a foreground child (reaped on exit \(en no
 zombies) with its log in \fIlogs/openvpn.log\fR, and stops it on clean shutdown.
@@ -368,6 +374,14 @@ shippers/parsers. The web UI's Logs tab parses either format. Orthogonal to
 which is about one command's own stdout, not ovcp's log stream. Must come
 before the command, like \fB\-data\fR.
 .TP
+.B \-debug
+Debug\-level logging for this invocation only \(en every \fBslog.Debug\fR
+call (HTTP request logging, telegram polling, ...) starts showing up
+immediately, no restart or second command needed. For a running
+\fBserve\fR, equivalent to sending \fBdebug on\fR over the control socket at
+startup instead of afterwards (see \fBdebug\fR in \fBCOMMANDS\fR). Must come
+before the command, like \fB\-data\fR.
+.TP
 .B \-h, \-\-help
 Print the command list (\fBCOMMANDS\fR above, condensed) and exit.
 .SH MACHINE\-READABLE OUTPUT
@@ -403,7 +417,8 @@ connected clients) may be bound before the tun interface exists
 (IP_FREEBIND).
 .TP
 .B OVCP_MGMT_SOCK
-OpenVPN management socket path (default \fI/run/ovcp/mgmt.sock\fR).
+OpenVPN management socket path (default \fI/run/ovcp/mgmt.sock\fR); same
+path \fBserve \-mgmt\fR sets for a single invocation, no env var needed.
 Read/written only by \fBserve\fR itself (and \fBinit\fR/\fBserve\fR, when
 writing it into server.conf) \(en OpenVPN's management interface serves
 exactly one connected client, ever, and \fBserve\fR holds that connection
@@ -411,10 +426,14 @@ for its whole life. Nothing else dials this socket directly.
 .TP
 .B OVCP_CTRL_SOCK
 ovcp control socket for \fBvpn\fR/\fBstatus\fR/\fBkill\fR/\fBdebug\fR/
-\fBstats \-follow\fR (default \fI/run/ovcp/control.sock\fR); the CLI talks
-to a running \fBserve\fR here for anything needing live openvpn state \(en
-\fBserve\fR itself proxies that from its own \fBOVCP_MGMT_SOCK\fR
-connection, per above.
+\fBstats \-follow\fR (default \fI/run/ovcp/control.sock\fR); same path
+\fBserve \-ctrl\fR sets for a single invocation, no env var needed. The CLI
+talks to a running \fBserve\fR here for anything needing live openvpn state
+\(en \fBserve\fR itself proxies that from its own \fBOVCP_MGMT_SOCK\fR
+connection, per above. This is a \fIseparate\fR socket from
+\fBOVCP_MGMT_SOCK\fR/\fB\-mgmt\fR above \(en overriding one does not move
+the other; pass both flags (or set both env vars) to run \fBserve\fR
+entirely out of a non\-root\-writable directory.
 .TP
 .B OVCP_SERVER_CN
 Default client \fBremote\fR for \fBexport\fR and CN for the admin UI
