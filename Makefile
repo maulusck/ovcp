@@ -11,7 +11,7 @@ DESTDIR ?=
 
 .PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions
 
-release: ui build completions ## UI + binary + shell completions
+release: build completions ## UI + binary + shell completions
 
 deps: ## check build tools are on PATH (go, cc, npm, mandoc)
 	@command -v go     >/dev/null || { echo "missing: go (1.22+)"; exit 1; }
@@ -24,18 +24,18 @@ CTR := $(shell command -v podman || command -v docker)
 
 image: ## build all-in-one container image (podman, else docker)
 	@test -n "$(CTR)" || { echo "error: neither podman nor docker found"; exit 1; }
-	$(CTR) build -t ovcp -f Containerfile .
+	$(CTR) build -t ovcp --build-arg VERSION=$(VERSION) -f Containerfile .
 
 deb rpm archlinux: release ## build package (needs nfpm)
 	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
-	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@
+	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
 
-apk: ui completions ## build .apk (needs nfpm + podman/docker: cross-builds against musl)
+apk: completions ## build .apk (needs nfpm + podman/docker: cross-builds against musl)
 	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
 	@test -n "$(CTR)" || { echo "missing: podman or docker (musl build for apk)"; exit 1; }
 	$(CTR) run --rm -v $(CURDIR):/src:Z -w /src docker.io/library/golang:alpine \
 		sh -c 'apk add --no-cache gcc musl-dev >/dev/null && CGO_ENABLED=1 go build -ldflags "$(LDFLAGS)" -o bin/ovcp-musl ./cmd/ovcp'
-	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p apk
+	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p apk -t dist/
 
 help: ## show targets
 	@grep -E '^[a-z][a-z0-9_ -]*:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-20s %s\n", $$1, $$2}'
@@ -48,7 +48,7 @@ ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the 
 	cd web/ui && npm run build
 	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 
-build: ## build bin/ovcp (CGO for sqlite)
+build: ui ## build bin/ovcp (CGO for sqlite)
 	CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
 
 completions: build ## generate shell completion scripts into dist/completion
@@ -57,10 +57,10 @@ completions: build ## generate shell completion scripts into dist/completion
 	bin/$(BINARY) completion zsh  > dist/completion/ovcp.zsh
 	bin/$(BINARY) completion fish > dist/completion/ovcp.fish
 
-test: ## run all tests
+test: ui ## run all tests
 	go test ./...
 
-vet: ## go vet
+vet: ui ## go vet
 	go vet ./...
 
 clean: ## remove build output (bin/, web/dist/, dist/)

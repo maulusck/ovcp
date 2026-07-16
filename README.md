@@ -48,7 +48,7 @@ Pick one:
 ```sh
 # Debian/Ubuntu or Fedora/RHEL — prebuilt package (needs nfpm to build it)
 make deb   # or: make rpm
-sudo apt install ./ovcp_*.deb   # or: sudo rpm -i ovcp-*.rpm
+sudo apt install ./dist/ovcp_*.deb   # or: sudo rpm -i dist/ovcp-*.rpm
 
 # Container (podman or docker) — OpenVPN included, nothing else to install
 podman build -t ovcp -f Containerfile .
