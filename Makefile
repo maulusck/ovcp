@@ -15,12 +15,16 @@ DESTDIR ?=
 # cross-compilation, glibc and musl alike, one mechanism for every arch
 # instead of a different cross-toolchain per libc. One row per target:
 # GOARCH, GOARM (- if native), zig's target triple, nfpm's arch spelling.
-t-arm64      = arm64 - aarch64-linux-gnu     arm64
-t-arm64-musl = arm64 - aarch64-linux-musl    arm64
-t-armv7      = arm   7 arm-linux-gnueabihf   arm7
-t-armv7-musl = arm   7 arm-linux-musleabihf  arm7
-t-armv6      = arm   6 arm-linux-gnueabihf   arm6
-t-amd64-musl = amd64 - x86_64-linux-musl     amd64
+t-arm64        = arm64   - aarch64-linux-gnu     arm64
+t-arm64-musl   = arm64   - aarch64-linux-musl    arm64
+t-armv7        = arm     7 arm-linux-gnueabihf   arm7
+t-armv7-musl   = arm     7 arm-linux-musleabihf  arm7
+t-armv6        = arm     6 arm-linux-gnueabihf   arm6
+t-amd64-musl   = amd64   - x86_64-linux-musl     amd64
+t-riscv64      = riscv64 - riscv64-linux-gnu     riscv64
+t-riscv64-musl = riscv64 - riscv64-linux-musl    riscv64
+# derived from the table above so `help` never drifts from it
+CROSS_TARGETS := $(patsubst t-%,%,$(filter t-%,$(.VARIABLES)))
 
 TARGET ?= host
 GOARCH := $(word 1,$(t-$(TARGET)))
@@ -28,7 +32,7 @@ GOARM  := $(filter-out -,$(word 2,$(t-$(TARGET))))
 CC     := $(if $(word 3,$(t-$(TARGET))),zig cc -target $(word 3,$(t-$(TARGET))))
 ARCH   := $(or $(word 4,$(t-$(TARGET))),amd64)
 
-.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions
+.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions check-cross
 
 release: build completions ## UI + binary + shell completions
 
@@ -53,7 +57,7 @@ help: ## show targets and variables
 	@echo "targets:"
 	@grep -E '^[a-z][a-z0-9_ -]*:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-20s %s\n", $$1, $$2}'
 	@echo "variables:"
-	@echo "  TARGET               host (default) | arm64 | arm64-musl | armv7 | armv7-musl | armv6 | amd64-musl"
+	@echo "  TARGET               host (default), or one of: $(CROSS_TARGETS)"
 	@echo "                       cross-builds via zig cc; see build"
 	@echo "  prefix, DESTDIR      install paths, GNU-standard (install target)"
 
@@ -65,18 +69,20 @@ ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the 
 	cd web/ui && npm run build
 	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 
-build: ui ## build bin/ovcp (CGO for sqlite; TARGET=arm64|arm64-musl|armv7|armv7-musl|armv6|amd64-musl to cross-build via zig)
+check-cross:
 	@test -z '$(CC)' || command -v zig >/dev/null || { echo "missing: zig (cross-compiler for TARGET=$(TARGET))"; exit 1; }
+
+build: check-cross ui ## build bin/ovcp (CGO for sqlite; see help for TARGET= to cross-build via zig)
 	GOOS=$(if $(GOARCH),linux) GOARCH=$(GOARCH) GOARM=$(GOARM) CC='$(CC)' \
 		CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
 
 completions: ui ## generate shell completion scripts into dist/completion
-	mkdir -p dist/completion
-	go build -ldflags '$(LDFLAGS)' -o /tmp/ovcp-completions ./cmd/ovcp
-	/tmp/ovcp-completions completion bash > dist/completion/ovcp.bash
-	/tmp/ovcp-completions completion zsh  > dist/completion/ovcp.zsh
-	/tmp/ovcp-completions completion fish > dist/completion/ovcp.fish
-	rm -f /tmp/ovcp-completions
+	@mkdir -p dist/completion; \
+	go build -ldflags '$(LDFLAGS)' -o bin/.completions-helper ./cmd/ovcp; \
+	bin/.completions-helper completion bash > dist/completion/ovcp.bash; \
+	bin/.completions-helper completion zsh  > dist/completion/ovcp.zsh; \
+	bin/.completions-helper completion fish > dist/completion/ovcp.fish; \
+	rm -f bin/.completions-helper
 
 test: ui ## run all tests
 	go test ./...
