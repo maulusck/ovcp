@@ -1,3 +1,7 @@
+# require(cmd,human-message): fail clearly if cmd isn't on PATH. The one
+# shape every tool-presence check in this file shares.
+require = command -v $(1) >/dev/null 2>&1 || { echo "missing: $(2)"; exit 1; }
+
 BINARY  := ovcp
 # strip a leading v (v1.2.3 tags): deb's Version field must start with a
 # digit, and this feeds nfpm.yaml's version: field for every package format.
@@ -32,15 +36,15 @@ GOARM  := $(filter-out -,$(word 2,$(t-$(TARGET))))
 CC     := $(if $(word 3,$(t-$(TARGET))),zig cc -target $(word 3,$(t-$(TARGET))))
 ARCH   := $(or $(word 4,$(t-$(TARGET))),amd64)
 
-.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions check-cross
+.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions check-cross check-nfpm
 
 release: build completions ## UI + binary + shell completions
 
 deps: ## check build tools are on PATH (go, cc, npm, mandoc)
-	@command -v go     >/dev/null || { echo "missing: go (1.22+)"; exit 1; }
+	@$(call require,go,go (1.22+))
 	@command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || { echo "missing: a C compiler (CGO, for the sqlite driver)"; exit 1; }
-	@command -v npm    >/dev/null || { echo "missing: npm (web/ui)"; exit 1; }
-	@command -v mandoc >/dev/null || { echo "missing: mandoc (renders docs/ovcp.8 for the UI's Docs tab)"; exit 1; }
+	@$(call require,npm,npm (web/ui))
+	@$(call require,mandoc,mandoc (renders docs/ovcp.8 for the UI's Docs tab))
 	@echo "build deps OK"
 
 CTR := $(shell command -v podman || command -v docker)
@@ -49,8 +53,10 @@ image: ## build all-in-one container image (podman, else docker)
 	@test -n "$(CTR)" || { echo "error: neither podman nor docker found"; exit 1; }
 	$(CTR) build -t ovcp --build-arg VERSION=$(VERSION) -f Containerfile .
 
-deb rpm archlinux apk: release ## build package (needs nfpm; TARGET= to cross-build first, see build)
-	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
+check-nfpm:
+	@$(call require,nfpm,nfpm (packaging))
+
+deb rpm archlinux apk: check-nfpm release ## build package (needs nfpm; TARGET= to cross-build first, see build)
 	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
 
 help: ## show targets and variables
@@ -70,7 +76,8 @@ ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the 
 	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 
 check-cross:
-	@test -z '$(CC)' || command -v zig >/dev/null || { echo "missing: zig (cross-compiler for TARGET=$(TARGET))"; exit 1; }
+	@test "$(TARGET)" = host -o -n "$(t-$(TARGET))" || { echo "unknown TARGET=$(TARGET) (see: make help)"; exit 1; }
+	@test -z '$(CC)' || { $(call require,zig,zig (cross-compiler for TARGET=$(TARGET))); }
 
 build: check-cross ui ## build bin/ovcp (CGO for sqlite; see help for TARGET= to cross-build via zig)
 	GOOS=$(if $(GOARCH),linux) GOARCH=$(GOARCH) GOARM=$(GOARM) CC='$(CC)' \
