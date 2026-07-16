@@ -154,6 +154,33 @@ func TestDataFlagPosition(t *testing.T) {
 	}
 }
 
+// TestGlobalFlagsBeforeCommand guards the bug this session fixed: several
+// global flags stacked before the command (including -debug, newly added,
+// and -log-json/-no-color) must still dispatch correctly and be stripped
+// the same way completion strips them (see TestCompleteAfterGlobalFlags).
+// -mgmt (renamed from -sock, alongside serve's new -ctrl) must still reach
+// server.conf.
+func TestGlobalFlagsBeforeCommand(t *testing.T) {
+	dir := t.TempDir()
+	env := []string{
+		"OVCP_CA_PASSPHRASE=correct horse battery staple",
+		"OVCP_USER_PASSWORD=admin-password-1",
+	}
+	mgmt := filepath.Join(dir, "custom-mgmt.sock")
+	r := run(t, env, "-data", dir, "-debug", "-log-json", "-no-color",
+		"init", "-server-cn", "vpn.example.com", "-admin", "", "-mgmt", mgmt)
+	if r.code != 0 {
+		t.Fatalf("init with stacked global flags + -mgmt: %+v", r)
+	}
+	conf, err := os.ReadFile(filepath.Join(dir, "server.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(conf), "management "+mgmt+" unix") {
+		t.Fatalf("server.conf missing custom -mgmt socket %q:\n%s", mgmt, conf)
+	}
+}
+
 // TestLifecycle exercises the everyday flow: init, issue, list, export,
 // revoke, audit — the same sequence a real operator runs.
 func TestLifecycle(t *testing.T) {
