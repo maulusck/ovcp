@@ -1,0 +1,83 @@
+name: release
+
+# Tag-triggered release: binaries + shell completions ("download and run")
+# and distro packages for every TARGET the Makefile knows about, a
+# checksums file, and a multi-arch container image on ghcr.io. See
+# `make help` for the TARGET list and `Containerfile` for the image build.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [host, arm64, armv7, armv6, riscv64, amd64-musl, arm64-musl, armv7-musl, riscv64-musl]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # git describe needs tag history for VERSION
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: install mandoc + nfpm
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq mandoc
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: install zig
+        if: matrix.target != 'host' # only the cross-compile targets need it
+        run: |
+          ZIGVER=$(curl -fsSL https://ziglang.org/download/index.json | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(sorted([k for k in d if k!='master'], key=lambda v:[int(x) for x in v.split('.')])[-1])")
+          curl -fsSL "https://ziglang.org/download/$ZIGVER/zig-x86_64-linux-$ZIGVER.tar.xz" | tar -xJ -C /usr/local
+          sudo ln -s "/usr/local/zig-x86_64-linux-$ZIGVER/zig" /usr/local/bin/zig
+      - name: build + package
+        run: |
+          make release TARGET=${{ matrix.target }}
+          mkdir -p out
+          tar czf "out/ovcp-${{ matrix.target }}.tar.gz" -C bin ovcp -C ../dist/completion ovcp.bash ovcp.zsh ovcp.fish
+          case "${{ matrix.target }}" in
+            *-musl) make apk TARGET=${{ matrix.target }} ;;
+            *)      make deb rpm archlinux TARGET=${{ matrix.target }} ;;
+          esac
+          cp dist/*.deb dist/*.rpm dist/*.zst dist/*.apk out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: out/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - run: cd out && sha256sum -- * > SHA256SUMS
+      - run: gh release create "${{ github.ref_name }}" out/* --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  image:
+    runs-on: ubuntu-latest
+    permissions: { packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64 \
+            --build-arg VERSION="${{ github.ref_name }}" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            -t "ghcr.io/${{ github.repository }}:${{ github.ref_name }}" \
+            -t "ghcr.io/${{ github.repository }}:latest" \
+            --push \
+            -f Containerfile .
