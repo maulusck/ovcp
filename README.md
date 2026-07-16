@@ -31,8 +31,9 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
   one linked admin chat. Off by default; nothing else depends on it.
 - **Encrypted backup/restore** — one command exports CA, CRL, tls-crypt key,
   config, and database into a single encrypted archive.
-- **Prod-ready deployment** — systemd unit, `.deb`/`.rpm` packages, an
-  all-in-one container image, and a SELinux policy, all included.
+- **Prod-ready deployment** — systemd unit, `.deb`/`.rpm`/`.apk`/Arch
+  packages (amd64 and ARM — Raspberry Pi and similar SBCs, glibc or musl),
+  an all-in-one container image, and a SELinux policy, all included.
 
 ## Requirements
 
@@ -42,6 +43,9 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
 - **Build:** Go 1.22+, a C compiler (CGO, for the SQLite driver), Node/npm
   (Svelte UI), and `mandoc` (renders the man page into the UI's Docs tab).
   Run `make deps` to check, or see `man ovcp`'s **REQUIREMENTS** section.
+  Cross-compiling for another arch/libc (`make build TARGET=arm64`, see
+  `make help`) additionally needs [`zig`](https://ziglang.org/) — one tool
+  covers every supported target, no per-arch toolchain to install.
 
 ## Install
 

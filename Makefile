@@ -9,6 +9,25 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 prefix  ?= /usr
 DESTDIR ?=
 
+# TARGET picks what build/release/packaging produce: "host" (default) is
+# a plain native build, no cross toolchain involved at all. Every other
+# TARGET cross-compiles via zig cc — one tool, real (non-emulated) native
+# cross-compilation, glibc and musl alike, one mechanism for every arch
+# instead of a different cross-toolchain per libc. One row per target:
+# GOARCH, GOARM (- if native), zig's target triple, nfpm's arch spelling.
+t-arm64      = arm64 - aarch64-linux-gnu     arm64
+t-arm64-musl = arm64 - aarch64-linux-musl    arm64
+t-armv7      = arm   7 arm-linux-gnueabihf   arm7
+t-armv7-musl = arm   7 arm-linux-musleabihf  arm7
+t-armv6      = arm   6 arm-linux-gnueabihf   arm6
+t-amd64-musl = amd64 - x86_64-linux-musl     amd64
+
+TARGET ?= host
+GOARCH := $(word 1,$(t-$(TARGET)))
+GOARM  := $(filter-out -,$(word 2,$(t-$(TARGET))))
+CC     := $(if $(word 3,$(t-$(TARGET))),zig cc -target $(word 3,$(t-$(TARGET))))
+ARCH   := $(or $(word 4,$(t-$(TARGET))),amd64)
+
 .PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions
 
 release: build completions ## UI + binary + shell completions
@@ -26,19 +45,17 @@ image: ## build all-in-one container image (podman, else docker)
 	@test -n "$(CTR)" || { echo "error: neither podman nor docker found"; exit 1; }
 	$(CTR) build -t ovcp --build-arg VERSION=$(VERSION) -f Containerfile .
 
-deb rpm archlinux: release ## build package (needs nfpm)
+deb rpm archlinux apk: release ## build package (needs nfpm; TARGET= to cross-build first, see build)
 	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
-	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
+	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
 
-apk: completions ## build .apk (needs nfpm + podman/docker: cross-builds against musl)
-	@command -v nfpm >/dev/null || { echo "missing: nfpm (packaging)"; exit 1; }
-	@test -n "$(CTR)" || { echo "missing: podman or docker (musl build for apk)"; exit 1; }
-	$(CTR) run --rm -v $(CURDIR):/src:Z -w /src docker.io/library/golang:alpine \
-		sh -c 'apk add --no-cache gcc musl-dev >/dev/null && CGO_ENABLED=1 go build -ldflags "$(LDFLAGS)" -o bin/ovcp-musl ./cmd/ovcp'
-	VERSION=$(VERSION) nfpm package -f deploy/nfpm.yaml -p apk -t dist/
-
-help: ## show targets
+help: ## show targets and variables
+	@echo "targets:"
 	@grep -E '^[a-z][a-z0-9_ -]*:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-20s %s\n", $$1, $$2}'
+	@echo "variables:"
+	@echo "  TARGET               host (default) | arm64 | arm64-musl | armv7 | armv7-musl | armv6 | amd64-musl"
+	@echo "                       cross-builds via zig cc; see build"
+	@echo "  prefix, DESTDIR      install paths, GNU-standard (install target)"
 
 web/ui/node_modules: web/ui/package.json web/ui/package-lock.json
 	cd web/ui && npm ci
@@ -48,14 +65,18 @@ ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the 
 	cd web/ui && npm run build
 	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 
-build: ui ## build bin/ovcp (CGO for sqlite)
-	CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
+build: ui ## build bin/ovcp (CGO for sqlite; TARGET=arm64|arm64-musl|armv7|armv7-musl|armv6|amd64-musl to cross-build via zig)
+	@test -z '$(CC)' || command -v zig >/dev/null || { echo "missing: zig (cross-compiler for TARGET=$(TARGET))"; exit 1; }
+	GOOS=$(if $(GOARCH),linux) GOARCH=$(GOARCH) GOARM=$(GOARM) CC='$(CC)' \
+		CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
 
-completions: build ## generate shell completion scripts into dist/completion
+completions: ui ## generate shell completion scripts into dist/completion
 	mkdir -p dist/completion
-	bin/$(BINARY) completion bash > dist/completion/ovcp.bash
-	bin/$(BINARY) completion zsh  > dist/completion/ovcp.zsh
-	bin/$(BINARY) completion fish > dist/completion/ovcp.fish
+	go build -ldflags '$(LDFLAGS)' -o /tmp/ovcp-completions ./cmd/ovcp
+	/tmp/ovcp-completions completion bash > dist/completion/ovcp.bash
+	/tmp/ovcp-completions completion zsh  > dist/completion/ovcp.zsh
+	/tmp/ovcp-completions completion fish > dist/completion/ovcp.fish
+	rm -f /tmp/ovcp-completions
 
 test: ui ## run all tests
 	go test ./...

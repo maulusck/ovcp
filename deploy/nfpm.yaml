@@ -1,5 +1,5 @@
 name: ovcp
-arch: amd64
+arch: ${ARCH}
 platform: linux
 version: ${VERSION}
 maintainer: OVCP
@@ -30,7 +30,7 @@ overrides:
     contents:
       - src: LICENSE
         dst: /usr/share/doc/ovcp/LICENSE
-      - src: bin/ovcp-musl
+      - src: bin/ovcp
         dst: /usr/bin/ovcp
       - src: deploy/openrc/ovcp.initd
         dst: /etc/init.d/ovcp

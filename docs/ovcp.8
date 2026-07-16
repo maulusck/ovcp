@@ -40,7 +40,10 @@ to bring the tunnel up (see \fBPRIVILEGES\fR).
 Build: Go 1.22+, a C compiler (\fBCGO_ENABLED=1\fR, needed by the sqlite
 driver), Node/npm (Svelte UI sources), and \fBmandoc\fR (renders this page
 into the UI's Docs tab, see \fImake ui\fR). Optional: \fBnfpm\fR (\fImake
-deb\fR/\fImake rpm\fR), \fBpodman\fR or \fBdocker\fR (\fImake image\fR).
+deb\fR/\fImake rpm\fR), \fBpodman\fR or \fBdocker\fR (\fImake image\fR),
+.BR zig (1)
+(cross\-arch/libc builds, \fBmake build TARGET=...\fR, see \fBpackages\fR
+below).
 .SH SECURITY
 Tier\-2 CA model: the CA private key is encrypted at rest (argon2id +
 AES\-256\-GCM); every signing operation (\fBissue\fR, \fBrevoke\fR) requires
@@ -726,9 +729,15 @@ builds a distro package via \fBnfpm\fR: binary, man page, shell completions,
 and \fILICENSE\fR to their standard paths, plus a service file \(en the
 systemd unit for deb/rpm/archlinux, an OpenRC init script
 (\fIdeploy/openrc/ovcp.initd\fR) for apk, since Alpine has no systemd.
-\fBapk\fR additionally needs \fBpodman\fR or \fBdocker\fR: the binary must
-be built against musl, not this host's glibc, so that step runs inside
-\fBdocker.io/library/golang:alpine\fR.
+Cross\-arch/libc packages: pass \fBTARGET=\fR (\fImake help\fR lists the
+values \(en e.g. \fBmake deb TARGET=arm64\fR, \fBmake apk
+TARGET=arm64\-musl\fR for a Raspberry Pi). Cross builds use
+.BR zig (1)
+as the C compiler (\fBzig cc\fR, real native cross\-compilation, not
+emulated) instead of this host's own \fBcc\fR \(en one tool covers every
+supported glibc/musl/arm combination, no per\-target toolchain to install.
+Native (\fBTARGET=host\fR, the default) needs nothing beyond the usual
+build requirements above.
 .PP
 Void Linux packages (xbps) are built from a template contributed to
 .UR https://github.com/void-linux/void-packages

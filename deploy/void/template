@@ -5,7 +5,7 @@ version=0.0.0
 revision=1
 build_style=gnu-makefile
 make_install_args="prefix=/usr"
-hostmakedepends="go nodejs mandoc"
+hostmakedepends="go gcc nodejs mandoc"
 depends="openvpn"
 short_desc="OpenVPN Control Plane — web UI and native PKI for OpenVPN"
 maintainer="YOUR NAME <YOUR EMAIL>"
