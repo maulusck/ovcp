@@ -88,13 +88,14 @@ func (colorStderr) Write(p []byte) (int, error) {
 	return len(p), err
 }
 
-// logJSON switches slog's default handler to JSON lines, for log
-// shippers/parsers. Set from -log-json in main; also makes logWriter skip
-// colorStderr, whose "level=X" byte-matching doesn't exist in JSON output.
-var logJSON bool
+// jsonOut is ovcp's one output-format switch: JSON instead of human text,
+// for whatever the current command emits (slog's wire format for `serve`,
+// output()'s JSON branch for everything else). $OVCP_JSON seeds it, same
+// pattern as $NO_COLOR/noColor; -json in main() can still turn it on.
+var jsonOut = os.Getenv("OVCP_JSON") != ""
 
 func logWriter() io.Writer {
-	if logJSON || !colorOK(os.Stderr) {
+	if jsonOut || !colorOK(os.Stderr) {
 		return os.Stderr
 	}
 	return colorStderr{}
@@ -104,7 +105,7 @@ func logWriter() io.Writer {
 // main's initial logger and runServe's tee-to-file reconfigure.
 func newLogHandler(w io.Writer) slog.Handler {
 	opts := &slog.HandlerOptions{Level: logLevel}
-	if logJSON {
+	if jsonOut {
 		return slog.NewJSONHandler(w, opts)
 	}
 	return slog.NewTextHandler(w, opts)
@@ -125,20 +126,20 @@ type cliContext struct {
 // both for main's real parsing and (on a throwaway FlagSet) by completeArgs,
 // so the two can't drift on what counts as a global flag vs. the command
 // name, same pattern as command.flagNames() below.
-func globalFlags(fs *flag.FlagSet) (dataDir *string, noColor, logJSON, debug *bool) {
+func globalFlags(fs *flag.FlagSet) (dataDir *string, noColor, jsonOut, debug *bool) {
 	dataDir = fs.String("data", cmp.Or(os.Getenv("OVCP_DATA"), "/var/lib/ovcp"), "data directory")
 	noColor = fs.Bool("no-color", false, "disable ANSI colors (also: $NO_COLOR)")
-	logJSON = fs.Bool("log-json", false, "emit logs as JSON lines instead of text (for log shippers)")
+	jsonOut = fs.Bool("json", false, "JSON output: command results, or log lines for serve (also: $OVCP_JSON)")
 	debug = fs.Bool("debug", false, "debug-level logging for this invocation")
 	return
 }
 
 func main() {
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, helpText()) }
-	dataDir, noColorFlag, logJSONFlag, debugFlag := globalFlags(flag.CommandLine)
+	dataDir, noColorFlag, jsonOutFlag, debugFlag := globalFlags(flag.CommandLine)
 	flag.Parse()
 	noColor = noColor || *noColorFlag
-	logJSON = *logJSONFlag
+	jsonOut = jsonOut || *jsonOutFlag
 	if *debugFlag {
 		logLevel.Set(slog.LevelDebug)
 	}
@@ -201,19 +202,22 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 	mgmt := controller.NewClient(sock)
 	tg := telegram.New(s, sup, mgmt)
 	s.OnAudit(tg.OnAudit)
+	ovVersion, ovPath, _ := controller.OpenVPNVersion() // both "" if not found — advisory only
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
-		Mgmt:       mgmt,
-		VPN:        sup,
-		Telegram:   tg,
-		DataDir:    dataDir,
-		ConfigPath: pp.ServerConf,
-		TLSCrypt:   pp.TLSCrypt,
-		ServerCert: pp.ServerCert,
-		ServerKey:  pp.ServerKey,
-		UI:         web.Dist(),
-		DebugLevel: logLevel,
-		Version:    version,
+		Mgmt:           mgmt,
+		VPN:            sup,
+		Telegram:       tg,
+		DataDir:        dataDir,
+		ConfigPath:     pp.ServerConf,
+		TLSCrypt:       pp.TLSCrypt,
+		ServerCert:     pp.ServerCert,
+		ServerKey:      pp.ServerKey,
+		UI:             web.Dist(),
+		DebugLevel:     logLevel,
+		Version:        version,
+		OpenVPNVersion: ovVersion,
+		OpenVPNPath:    ovPath,
 	}
 	srv.DefaultRemote = adminCertCN(dataDir)
 
@@ -425,11 +429,20 @@ func requirePositive(n int, flag string) {
 	}
 }
 
+// die is the one exit path every command's fatal error routes through — so
+// -json needs handling in exactly one place, matching jsonErr's {"error":..}
+// shape on the web API. Flag-parsing errors (unknown/malformed flags) bypass
+// this, straight from the stdlib flag package: always plain text on stderr.
 func die(err error) {
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+	if err == nil {
+		return
 	}
+	if jsonOut {
+		json.NewEncoder(os.Stdout).Encode(map[string]string{"error": err.Error()})
+	} else {
+		fmt.Fprintln(os.Stderr, "error:", err)
+	}
+	os.Exit(1)
 }
 
 // usage: no args or unknown command — same text as -h, but exit 2.

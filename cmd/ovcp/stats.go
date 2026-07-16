@@ -28,10 +28,9 @@ func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 	follow := fs.Bool("follow", false, "live top-like view, via a running serve's control socket (ignores -json)")
 	interval := fs.Int("interval", 2, "poll interval in seconds, -follow only")
 	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket, -follow only")
-	jsonOut := fs.Bool("json", false, "machine-readable JSON output (snapshot mode only)")
 	return func(ctx *cliContext) {
 		if *follow {
-			if *jsonOut {
+			if jsonOut {
 				die(fmt.Errorf("-json is not supported with -follow"))
 			}
 			followStats(*ctrl, *cn, *interval)
@@ -59,7 +58,7 @@ func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 		if sessions == nil {
 			sessions = []store.ClientSession{}
 		}
-		output(*jsonOut, statsSnapshot{samples, sessions}, func(o statsSnapshot) { printStatsText(o, *cn) })
+		output(statsSnapshot{samples, sessions}, func(o statsSnapshot) { printStatsText(o, *cn) })
 	}
 }
 

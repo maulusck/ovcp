@@ -58,16 +58,16 @@ func TestCompleteFlags(t *testing.T) {
 }
 
 // TestCompleteAfterGlobalFlags guards the exact bug reported: a global flag
-// (-data/-no-color/-log-json/-debug) ahead of the command used to land in
+// (-data/-no-color/-json/-debug) ahead of the command used to land in
 // completeArgs' command-name slot and break completion for everything
 // after it; the global flags themselves also never appeared as candidates.
 func TestCompleteAfterGlobalFlags(t *testing.T) {
 	if r := run(t, nil, "__complete", "ovcp"); r.code != 0 ||
 		!strings.Contains(r.stdout, "-data") || !strings.Contains(r.stdout, "-debug") ||
-		!strings.Contains(r.stdout, "-no-color") || !strings.Contains(r.stdout, "-log-json") {
+		!strings.Contains(r.stdout, "-no-color") || !strings.Contains(r.stdout, "-json") {
 		t.Fatalf("__complete top-level: global flags missing, got %+v", r)
 	}
-	if r := run(t, nil, "__complete", "ovcp", "-log-json", "vpn"); r.code != 0 ||
+	if r := run(t, nil, "__complete", "ovcp", "-json", "vpn"); r.code != 0 ||
 		!strings.Contains(r.stdout, "restart") || strings.Contains(r.stdout, "issue") {
 		t.Fatalf("__complete after one global flag: %+v", r)
 	}

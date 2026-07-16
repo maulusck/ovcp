@@ -110,6 +110,126 @@ func TestVersionAndUsage(t *testing.T) {
 	}
 }
 
+// TestJSONEnvVar: $OVCP_JSON must switch output on exactly like -json, no
+// flag needed — same pattern as $NO_COLOR.
+func TestJSONEnvVar(t *testing.T) {
+	r := run(t, []string{"OVCP_JSON=1"}, "version")
+	if r.code != 0 {
+		t.Fatalf("OVCP_JSON=1 version: %+v", r)
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &versionOut{}); err != nil {
+		t.Fatalf("OVCP_JSON=1 should produce JSON, got: %+v", r)
+	}
+}
+
+// TestVersionJSON: -json version must parse, and always carries a version
+// (openvpn fields are omitempty — absent, not null/empty-string, when
+// openvpn isn't on PATH, which this test env generally doesn't have).
+func TestVersionJSON(t *testing.T) {
+	r := run(t, nil, "-json", "version")
+	if r.code != 0 {
+		t.Fatalf("-json version: %+v", r)
+	}
+	var out versionOut
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.Version == "" {
+		t.Fatalf("-json version unmarshal: %v: %+v", err, r)
+	}
+}
+
+// TestJSONErrors guards die()'s -json branch: a fatal error must land as
+// {"error":"..."} on stdout (not stderr's plain "error: ..." text), so a
+// script parsing stdout gets a consistent shape on failure too.
+func TestJSONErrors(t *testing.T) {
+	r := run(t, nil, "-json", "revoke")
+	if r.code == 0 {
+		t.Fatalf("revoke without -serial should fail: %+v", r)
+	}
+	var out struct{ Error string }
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.Error == "" {
+		t.Fatalf("-json error shape: %v: %+v", err, r)
+	}
+	if r.stderr != "" {
+		t.Fatalf("-json error must not also print to stderr: %+v", r)
+	}
+}
+
+// TestJSONFullAutomation is the "Ansible module" scenario: every secret a
+// command needs supplied only via env var (readSecret's automation path,
+// see readSecret's doc comment), -json throughout, zero terminal involved
+// (run()'s child gets no tty, same as a real automation environment).
+// Guards that no command leaks prompt text onto stdout ahead of its JSON,
+// or writes anything to stderr on success — a script parsing stdout by
+// position, not just validity, must never see stray bytes.
+func TestJSONFullAutomation(t *testing.T) {
+	env := withEnv(baseEnv(t), "OVCP_JSON=1")
+	assertCleanJSON := func(t *testing.T, r result, v any) {
+		t.Helper()
+		if r.code != 0 {
+			t.Fatalf("want success: %+v", r)
+		}
+		if r.stderr != "" {
+			t.Fatalf("secret from env must never prompt/print to stderr: %+v", r)
+		}
+		if err := json.Unmarshal([]byte(r.stdout), v); err != nil {
+			t.Fatalf("stdout must be exactly one clean JSON value: %v: %+v", err, r)
+		}
+	}
+
+	assertCleanJSON(t, run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", "admin"), &initOut{})
+	assertCleanJSON(t, run(t, env, "issue", "-cn", "alice"), &issueOut{})
+
+	var rows []certOut
+	assertCleanJSON(t, run(t, env, "list"), &rows)
+	var serial string
+	for _, c := range rows {
+		if c.CN == "alice" {
+			serial = c.Serial
+		}
+	}
+	if serial == "" {
+		t.Fatalf("alice not found in list output: %+v", rows)
+	}
+	assertCleanJSON(t, run(t, env, "revoke", "-serial", serial), &revokeOut{})
+	assertCleanJSON(t, run(t, env, "renew-server"), &renewOut{})
+
+	rotate := withEnv(env, "OVCP_CA_NEW_PASSPHRASE=a totally different passphrase")
+	assertCleanJSON(t, run(t, rotate, "rotate-ca"), &outcome{})
+
+	backupFile := filepath.Join(t.TempDir(), "backup.ovcpbak")
+	create := withEnv(env, "OVCP_BACKUP_PASSPHRASE=backup-pass-123")
+	assertCleanJSON(t, run(t, create, "backup", "create", "-out", backupFile), &backupCreateOut{})
+
+	addBob := withEnv(env, "OVCP_USER_PASSWORD=bobs-password-1")
+	assertCleanJSON(t, run(t, addBob, "user", "add", "-name", "bob", "-role", "operator"), &userAddOut{})
+}
+
+// TestJSONMissingSecretNoTTY backs the man page's "no env var, no terminal:
+// fails fast, on any command" claim — every readSecret call site is this
+// same function, so proving it for both the confirm=false (single prompt:
+// issue) and confirm=true (prompt+confirm: rotate-ca) shapes covers every
+// call site without re-testing all of them individually.
+func TestJSONMissingSecretNoTTY(t *testing.T) {
+	env := withEnv(baseEnv(t), "OVCP_JSON=1")
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	noSecrets := []string{"OVCP_DATA=" + dataDir(env), "OVCP_JSON=1"}
+
+	for _, args := range [][]string{
+		{"issue", "-cn", "alice"}, // confirm=false: one prompt
+		{"rotate-ca"},             // confirm=true: prompt + confirm
+	} {
+		r := run(t, noSecrets, args...)
+		if r.code == 0 {
+			t.Fatalf("%v with no secret available should fail, not hang: %+v", args, r)
+		}
+		var out struct{ Error string }
+		if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.Error == "" {
+			t.Fatalf("%v: want a clean JSON error, got: %v: %+v", args, err, r)
+		}
+	}
+}
+
 // TestHelp: -h and --help print the command list and exit 0.
 func TestHelp(t *testing.T) {
 	for _, f := range []string{"-h", "--help"} {
@@ -155,8 +275,8 @@ func TestDataFlagPosition(t *testing.T) {
 }
 
 // TestGlobalFlagsBeforeCommand guards the bug this session fixed: several
-// global flags stacked before the command (including -debug, newly added,
-// and -log-json/-no-color) must still dispatch correctly and be stripped
+// global flags stacked before the command (including -debug and -json,
+// which replaced -log-json) must still dispatch correctly and be stripped
 // the same way completion strips them (see TestCompleteAfterGlobalFlags).
 // -mgmt (renamed from -sock, alongside serve's new -ctrl) must still reach
 // server.conf.
@@ -167,7 +287,7 @@ func TestGlobalFlagsBeforeCommand(t *testing.T) {
 		"OVCP_USER_PASSWORD=admin-password-1",
 	}
 	mgmt := filepath.Join(dir, "custom-mgmt.sock")
-	r := run(t, env, "-data", dir, "-debug", "-log-json", "-no-color",
+	r := run(t, env, "-data", dir, "-debug", "-json", "-no-color",
 		"init", "-server-cn", "vpn.example.com", "-admin", "", "-mgmt", mgmt)
 	if r.code != 0 {
 		t.Fatalf("init with stacked global flags + -mgmt: %+v", r)
@@ -234,16 +354,17 @@ func TestStats(t *testing.T) {
 	if r := run(t, env, "stats", "-cn", "alice"); r.code != 0 || !strings.Contains(r.stdout, "no samples yet") {
 		t.Fatalf("stats -cn (empty): %+v", r)
 	}
-	r := run(t, env, "stats", "-json")
+	r := run(t, env, "-json", "stats")
 	if r.code != 0 {
-		t.Fatalf("stats -json: %+v", r)
+		t.Fatalf("-json stats: %+v", r)
 	}
 	var out statsSnapshot
 	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.Samples == nil || out.Sessions == nil {
-		t.Fatalf("stats -json shape: want empty arrays, not null: %+v err=%v", r, err)
+		t.Fatalf("-json stats shape: want empty arrays, not null: %+v err=%v", r, err)
 	}
-	if r := run(t, env, "stats", "-follow", "-json"); r.code == 0 || !strings.Contains(r.stderr, "-follow") {
-		t.Fatalf("stats -follow -json should be rejected: %+v", r)
+	// -json errors go to stdout as {"error":...} (die()'s json branch), not stderr.
+	if r := run(t, env, "-json", "stats", "-follow"); r.code == 0 || !strings.Contains(r.stdout, "-follow") {
+		t.Fatalf("-json stats -follow should be rejected: %+v", r)
 	}
 }
 
@@ -332,13 +453,13 @@ func TestListExpiring(t *testing.T) {
 		t.Fatalf("expected fine valid: %+v", r)
 	}
 
-	r = run(t, env, "list", "-json")
+	r = run(t, env, "-json", "list")
 	if r.code != 0 {
-		t.Fatalf("list -json: %+v", r)
+		t.Fatalf("-json list: %+v", r)
 	}
 	var rows []certOut
 	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
-		t.Fatalf("list -json unmarshal: %v: %+v", err, r)
+		t.Fatalf("-json list unmarshal: %v: %+v", err, r)
 	}
 	status := map[string]string{}
 	for _, c := range rows {

@@ -68,7 +68,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u *store.U
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, map[string]string{"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote})
+	jsonOK(w, map[string]string{
+		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote,
+		"version": s.Version, "openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
+	})
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {

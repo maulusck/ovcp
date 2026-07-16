@@ -17,9 +17,11 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
   never on disk.
 - **One binary** — the Svelte web UI is embedded in the Go binary. No
   Node.js, reverse proxy, or separate frontend deploy in production.
-- **Full CLI** — every UI action has a CLI equivalent, with `-json` output
-  on `list`/`status`/`audit`/`stats`/`user list` for scripting, and shell
-  completion for bash/zsh/fish.
+- **Full CLI** — every UI action has a CLI equivalent. `-json` (or
+  `$OVCP_JSON`) switches *every* command to machine-readable output —
+  same fields either way, just JSON instead of text — for Ansible,
+  scripts, or anything else that isn't a human. Shell completion for
+  bash/zsh/fish.
 - **Client export** — generate ready-to-import `.ovpn` profiles (optionally
   key-encrypted) or a scannable QR code, from the CLI or the UI.
 - **Live stats & audit log** — per-client traffic/connection history, a
@@ -109,8 +111,16 @@ bug — see `man ovcp`'s **DEPLOYMENT** → **container** section for the fix
 `ovcp <command>` covers certs, users, backups, live status, and stats —
 run `ovcp -h` for the full command table, or `man ovcp` for every flag,
 the security/privilege model, environment variables, and deployment
-recipes. Machine-readable output: pass `-json` to `list`/`status`/`audit`/
-`stats`/`user list`.
+recipes. Every command is scriptable: `ovcp -json <command>` (flag comes
+*before* the command, like `-data`/`-debug`) swaps its human text for JSON
+on stdout — same fields, both directions, including errors
+(`{"error": "..."}`, same shape the REST API uses). `stats -follow` and
+`completion` are the only two exceptions, both because there's no single
+result to encode.
+
+```sh
+ovcp -json list | jq -r '.[] | select(.status == "expired") | .cn'
+```
 
 ## Full reference
 

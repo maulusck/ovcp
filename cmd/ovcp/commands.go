@@ -91,11 +91,11 @@ var commands = []command{
 	{name: "list", usage: "[-status all|active|revoked] [-kind all|client|server] [-sort cn|kind|expiry|serial] [-desc]   list certificates", run: cmdList},
 	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW] [-split-tunnel] [-custom-opts OPTS|-]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
-	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N] [-json]   traffic history, or a live top-like follow view", run: cmdStats},
+	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N]   traffic history, or a live top-like follow view (-follow ignores -json)", run: cmdStats},
 	{name: "kill", usage: "-cn NAME   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
-	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status [-json]   notify+control bot", sub: telegramOps, run: cmdTelegram},
+	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
 	{name: "audit", usage: "last 50 audit entries", run: cmdAudit},
 	{name: "serve", usage: "[-listen ADDR] [-mgmt PATH] [-ctrl PATH]   run admin UI + API", run: cmdServe},
@@ -114,16 +114,33 @@ func helpText() string {
 	tw.Flush()
 	b.WriteString("\n-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before\n")
 	b.WriteString("the command, e.g. ovcp -data /tmp/ovcp init ...\n")
-	b.WriteString("-no-color/-log-json disable colors / emit JSON logs; both go before the command, like -data.\n")
-	b.WriteString("-debug turns on debug-level logging for this invocation; also before the command.\n")
-	b.WriteString("-json on list/status/audit/stats/user list prints machine-readable JSON instead.\n")
+	b.WriteString("-no-color disables ANSI colors; -debug turns on debug-level logging.\n")
+	b.WriteString("-json switches every command to JSON output (JSON log lines for serve);\n")
+	b.WriteString("all three go before the command, e.g. ovcp -json list.\n")
 	b.WriteString("Full guide: ovcp(8).")
 	return b.String()
 }
 
+type versionOut struct {
+	Version        string `json:"version"`
+	OpenVPNVersion string `json:"openvpnVersion,omitempty"`
+	OpenVPNPath    string `json:"openvpnPath,omitempty"`
+}
+
 func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		fmt.Println("ovcp", version)
+		out := versionOut{Version: version}
+		if v, p, ok := controller.OpenVPNVersion(); ok {
+			out.OpenVPNVersion, out.OpenVPNPath = v, p
+		}
+		output(out, func(o versionOut) {
+			fmt.Println("ovcp", o.Version)
+			if o.OpenVPNVersion == "" {
+				fmt.Println("openvpn: not found on PATH")
+			} else {
+				fmt.Printf("openvpn %s (%s)\n", o.OpenVPNVersion, o.OpenVPNPath)
+			}
+		})
 	}
 }
 
@@ -152,16 +169,33 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		die(s.AddCert(store.CertFrom(ic, *kindS)))
 		s.Audit("cli", "issue", fmt.Sprintf("cn=%s kind=%s serial=%s", *cn, *kindS, ic.SerialHex))
+		o := issueOut{Serial: ic.SerialHex}
 		if *out != "" {
 			die(os.WriteFile(*out+".crt", ic.CertPEM, 0o644))
 			die(os.WriteFile(*out+".key", ic.KeyPEM, 0o600))
-			fmt.Println("wrote", *out+".crt", *out+".key")
+			o.CertFile, o.KeyFile = *out+".crt", *out+".key"
 		} else {
-			os.Stdout.Write(ic.CertPEM)
-			os.Stdout.Write(ic.KeyPEM)
+			o.CertPEM, o.KeyPEM = string(ic.CertPEM), string(ic.KeyPEM)
 		}
-		fmt.Fprintln(os.Stderr, "serial:", ic.SerialHex)
+		output(o, func(o issueOut) {
+			if o.CertFile != "" {
+				fmt.Println("wrote", o.CertFile, o.KeyFile)
+			} else {
+				fmt.Print(o.CertPEM, o.KeyPEM)
+			}
+			fmt.Fprintln(os.Stderr, "serial:", o.Serial)
+		})
 	}
+}
+
+// issueOut is `issue -json`'s shape: the PEM bytes inline (no -out), or the
+// paths they were written to instead.
+type issueOut struct {
+	Serial   string `json:"serial"`
+	CertPEM  string `json:"cert,omitempty"`
+	KeyPEM   string `json:"key,omitempty"`
+	CertFile string `json:"certFile,omitempty"`
+	KeyFile  string `json:"keyFile,omitempty"`
 }
 
 func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -182,8 +216,15 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		die(ctx.p.RegenCRL(entries, pass))
 		s.Audit("cli", "revoke", "serial="+*serial)
-		fmt.Println("revoked; CRL regenerated:", ctx.p.CRLPath())
+		output(revokeOut{*serial, ctx.p.CRLPath()}, func(o revokeOut) {
+			fmt.Println("revoked; CRL regenerated:", o.CRLPath)
+		})
 	}
+}
+
+type revokeOut struct {
+	Serial  string `json:"serial"`
+	CRLPath string `json:"crlPath"`
 }
 
 // paint wraps s in ANSI color code (e.g. ansiGreen) unless colors are off;
@@ -199,10 +240,10 @@ func red(s string) string    { return paint(ansiRed, s) }
 func green(s string) string  { return paint(ansiGreen, s) }
 func yellow(s string) string { return paint(ansiYellow, s) }
 
-// output is the one place every command's `-json` branch lives: JSON-encode
-// rows, or hand them to the command's own text renderer. One call per
-// command instead of an if/else at every print site.
-func output[T any](jsonOut bool, rows T, text func(T)) {
+// output is the one place every command's JSON branch lives: JSON-encode
+// rows, or hand them to the command's own text renderer. Reads the global
+// -json flag directly — no command declares its own copy.
+func output[T any](rows T, text func(T)) {
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -210,6 +251,28 @@ func output[T any](jsonOut bool, rows T, text func(T)) {
 		return
 	}
 	text(rows)
+}
+
+// outcome is the generic {"message":"..."} JSON shape for commands whose
+// only output is a confirmation line. Commands with real structured data
+// (certOut, statusOut, ControlResult, ...) keep their own richer type.
+type outcome struct {
+	Message string `json:"message"`
+}
+
+func msg(format string, a ...any) outcome { return outcome{fmt.Sprintf(format, a...)} }
+
+// printMsg is outcome's default text renderer — msg(...) + output() with no
+// custom formatting, the common case.
+func printMsg(o outcome) { fmt.Println(o.Message) }
+
+// progress prints a human-progress line, suppressed under -json so
+// multi-step commands (init, backup) don't interleave prose with the
+// single JSON object output() prints at the end.
+func progress(format string, a ...any) {
+	if !jsonOut {
+		fmt.Printf(format, a...)
+	}
 }
 
 // sortByFlag sorts rows in place by the named field (string-keyed getters,
@@ -282,7 +345,6 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 	kind := fs.String("kind", "all", "all|client|server")
 	sortBy := fs.String("sort", "", "cn|kind|expiry|serial (default: issued order)")
 	desc := fs.Bool("desc", false, "reverse sort order")
-	jsonOut := fs.Bool("json", false, "machine-readable JSON output")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
@@ -306,7 +368,7 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 		for _, c := range out {
 			rows = append(rows, certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter})
 		}
-		output(*jsonOut, rows, func(rows []certOut) {
+		output(rows, func(rows []certOut) {
 			for _, c := range rows {
 				st := fmt.Sprintf("%-8s", c.Status) // pad first: color codes must not count toward width
 				switch c.Status {
@@ -380,14 +442,30 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 			TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: *splitTunnel, Extra: extra,
 		})
 		die(err)
+		o := exportOut{Serial: ic.SerialHex}
 		if *out != "" {
 			die(os.WriteFile(*out+".ovpn", bundle, 0o644))
-			fmt.Println("wrote", *out+".ovpn")
+			o.File = *out + ".ovpn"
 		} else {
-			os.Stdout.Write(bundle)
+			o.Bundle = string(bundle)
 		}
-		fmt.Fprintln(os.Stderr, "serial:", ic.SerialHex)
+		output(o, func(o exportOut) {
+			if o.File != "" {
+				fmt.Println("wrote", o.File)
+			} else {
+				fmt.Print(o.Bundle)
+			}
+			fmt.Fprintln(os.Stderr, "serial:", o.Serial)
+		})
 	}
+}
+
+// exportOut is `export -json`'s shape: the .ovpn bundle inline (no -out),
+// or the path it was written to instead.
+type exportOut struct {
+	Serial string `json:"serial"`
+	Bundle string `json:"bundle,omitempty"`
+	File   string `json:"file,omitempty"`
 }
 
 func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -407,36 +485,39 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 
+		out := initOut{CACert: pp.CACert, ServerCert: pp.ServerCert, TLSCrypt: pp.TLSCrypt, ServerConf: pp.ServerConf,
+			AdminUIURL: "https://" + cmp.Or(os.Getenv("OVCP_LISTEN"), "127.0.0.1:8443")}
+
 		// 1) CA
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", true)
 		switch err := ctx.p.InitCA(*caCN, *years, pass); err {
 		case nil:
 			s.Audit("system", "ca_init", "cn="+*caCN)
-			fmt.Println("[1/5] CA initialized:", pp.CACert)
+			progress("[1/5] CA initialized: %s\n", pp.CACert)
 		case pki.ErrCAExists:
 			if err := ctx.p.CheckPassphrase(pass); err != nil {
 				die(fmt.Errorf("existing CA: %w", err))
 			}
-			fmt.Println("[1/5] CA exists, passphrase ok")
+			progress("[1/5] CA exists, passphrase ok\n")
 		default:
 			die(err)
 		}
 
 		// 2) server certificate
 		if _, err := os.Stat(pp.ServerCert); err == nil {
-			fmt.Println("[2/5] server cert exists:", pp.ServerCert)
+			progress("[2/5] server cert exists: %s\n", pp.ServerCert)
 		} else {
 			ic, err := ctx.p.Issue(pki.KindServer, *serverCN, *days, pass)
 			die(err)
 			die(writeServerCert(pp, s, ic))
 			s.Audit("system", "issue", "cn="+*serverCN+" kind=server (init)")
-			fmt.Println("[2/5] server cert issued:", pp.ServerCert)
+			progress("[2/5] server cert issued: %s\n", pp.ServerCert)
 		}
 
 		// 3) tls-crypt
 		_, err := loadOrCreateTLSCrypt(pp.TLSCrypt)
 		die(err)
-		fmt.Println("[3/5] tls-crypt key:", pp.TLSCrypt)
+		progress("[3/5] tls-crypt key: %s\n", pp.TLSCrypt)
 
 		// 4) server.conf from defaults
 		cfg := ovpnconf.Default()
@@ -444,28 +525,47 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 		raw, _ := json.Marshal(cfg)
 		die(s.SetSetting("server_config", string(raw)))
 		die(cfg.WriteAtomic(pp.ServerConf))
-		fmt.Println("[4/5] server config:", pp.ServerConf)
+		progress("[4/5] server config: %s\n", pp.ServerConf)
 
 		// 5) admin user
 		if *admin != "" {
+			out.Admin = *admin
 			if _, err := s.GetUser(*admin); err == nil {
-				fmt.Println("[5/5] admin user exists:", *admin)
+				progress("[5/5] admin user exists: %s\n", *admin)
 			} else {
-				fmt.Fprintf(os.Stderr, "create admin user %q\n", *admin)
+				// context for readSecret's otherwise-ambiguous "Password:" prompt —
+				// only when a prompt is actually about to happen (no env override).
+				if os.Getenv("OVCP_USER_PASSWORD") == "" {
+					fmt.Fprintf(os.Stderr, "create admin user %q\n", *admin)
+				}
 				pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
 				h, err := auth.HashPassword(pw)
 				die(err)
 				_, err = s.AddUser(*admin, h, "admin")
 				die(err)
 				s.Audit("system", "user_add", "name="+*admin+" role=admin (init)")
-				fmt.Println("[5/5] admin user created:", *admin)
+				progress("[5/5] admin user created: %s\n", *admin)
 			}
 		} else {
-			fmt.Println("[5/5] admin user skipped")
+			progress("[5/5] admin user skipped\n")
 		}
-		fmt.Println("\ndone. start the server:  ovcp serve")
-		fmt.Printf("admin UI:                https://%s\n", cmp.Or(os.Getenv("OVCP_LISTEN"), "127.0.0.1:8443"))
+		output(out, func(o initOut) {
+			fmt.Println("\ndone. start the server:  ovcp serve")
+			fmt.Println("admin UI:               ", o.AdminUIURL)
+		})
 	}
+}
+
+// initOut is `init -json`'s shape: the artifact paths init produced, and
+// where to reach the admin UI. The per-step [N/5] lines are progress prose,
+// suppressed under -json (see progress()) — this is the one result.
+type initOut struct {
+	CACert     string `json:"caCert"`
+	ServerCert string `json:"serverCert"`
+	TLSCrypt   string `json:"tlsCrypt"`
+	ServerConf string `json:"serverConf"`
+	Admin      string `json:"admin,omitempty"`
+	AdminUIURL string `json:"adminUIURL"`
 }
 
 func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -525,7 +625,6 @@ func printStatusText(st statusOut) {
 
 func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
-	jsonOut := fs.Bool("json", false, "machine-readable JSON output")
 	return func(ctx *cliContext) {
 		st := statusOut{Clients: []controller.VPNClient{}}
 		// process line first (from serve); if serve/openvpn is down, there
@@ -552,7 +651,7 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 				st.Clients = cl
 			}
 		}
-		output(*jsonOut, st, printStatusText)
+		output(st, printStatusText)
 	}
 }
 
@@ -567,7 +666,7 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		s.Audit("cli", "kill", "cn="+*cn)
-		fmt.Println("killed", *cn)
+		output(msg("killed %s", *cn), printMsg)
 	}
 }
 
@@ -584,24 +683,30 @@ func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 			s.Audit("cli", "vpn_"+op, fmt.Sprintf("pid=%d", r.Pid))
 			s.Close()
 		}
-		switch {
-		case op == "status" && r.Pid == 0:
-			fmt.Println("vpn stopped")
-		case op == "status":
-			fmt.Printf("vpn running (pid %d)\n", r.Pid)
-		case op == "start" && !r.Changed:
-			fmt.Printf("vpn already started (pid %d)\n", r.Pid)
-		case op == "start":
-			fmt.Printf("vpn started (pid %d)\n", r.Pid)
-		case op == "stop" && !r.Changed:
-			fmt.Println("vpn already stopped")
-		case op == "stop":
-			fmt.Println("vpn stopped")
-		case op == "restart":
-			fmt.Printf("vpn restarted (pid %d)\n", r.Pid)
-		case op == "reconnect":
-			fmt.Printf("vpn reconnect sent (pid %d)\n", r.Pid)
-		}
+		output(r, func(r controller.ControlResult) { printVPNText(op, r) })
+	}
+}
+
+// printVPNText renders vpn's ControlResult per op — the human phrasing each
+// op already had, now driven off the same struct -json emits.
+func printVPNText(op string, r controller.ControlResult) {
+	switch {
+	case op == "status" && r.Pid == 0:
+		fmt.Println("vpn stopped")
+	case op == "status":
+		fmt.Printf("vpn running (pid %d)\n", r.Pid)
+	case op == "start" && !r.Changed:
+		fmt.Printf("vpn already started (pid %d)\n", r.Pid)
+	case op == "start":
+		fmt.Printf("vpn started (pid %d)\n", r.Pid)
+	case op == "stop" && !r.Changed:
+		fmt.Println("vpn already stopped")
+	case op == "stop":
+		fmt.Println("vpn stopped")
+	case op == "restart":
+		fmt.Printf("vpn restarted (pid %d)\n", r.Pid)
+	case op == "reconnect":
+		fmt.Printf("vpn reconnect sent (pid %d)\n", r.Pid)
 	}
 }
 
@@ -624,9 +729,16 @@ func cmdRenewServer(fs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		die(writeServerCert(dataPaths(ctx.dataDir), s, ic))
 		s.Audit("cli", "renew_server", "cn="+serverCN+" serial="+ic.SerialHex)
-		fmt.Println("server cert renewed:", ic.SerialHex)
-		fmt.Println("run `ovcp vpn restart` to apply")
+		output(renewOut{serverCN, ic.SerialHex}, func(o renewOut) {
+			fmt.Println("server cert renewed:", o.Serial)
+			fmt.Println("run `ovcp vpn restart` to apply")
+		})
 	}
+}
+
+type renewOut struct {
+	ServerCN string `json:"serverCN"`
+	Serial   string `json:"serial"`
 }
 
 // commaOrLines: comma list → one directive per line; no-op without a comma,
@@ -668,7 +780,7 @@ func cmdCustomOpts(_ *flag.FlagSet) func(ctx *cliContext) {
 		die(s.SetSetting("server_config", string(enc)))
 		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
 		s.Audit("cli", "config_change", "custom options")
-		fmt.Println("saved; run `ovcp vpn restart` to apply")
+		output(msg("saved; run `ovcp vpn restart` to apply"), printMsg)
 	}
 }
 
@@ -680,7 +792,7 @@ func cmdRotateCA(_ *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		s.Audit("cli", "ca_rotate", "")
-		fmt.Println("CA passphrase rotated")
+		output(msg("CA passphrase rotated"), printMsg)
 	}
 }
 
@@ -705,8 +817,10 @@ func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 			defer f.Close()
 			die(backup.Create(ctx.dataDir, s, f, pass))
 			s.Audit("cli", "backup_create", "file="+*out)
-			fmt.Println("backup written:", *out)
-			fmt.Println("keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
+			output(backupCreateOut{*out}, func(o backupCreateOut) {
+				fmt.Println("backup written:", o.File)
+				fmt.Println("keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
+			})
 
 		case "restore":
 			rfs := newFlags("backup restore")
@@ -721,11 +835,19 @@ func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 			die(err)
 			defer f.Close()
 			die(backup.Restore(ctx.dataDir, f, pass, *force))
-			fmt.Println("[1/2] restored CA, CRL, tls-crypt key, config, and database into", ctx.dataDir)
-			fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp renew-server   (issues the openvpn server cert)")
-			fmt.Println("      then: ovcp vpn start")
+			output(msg("restored CA, CRL, tls-crypt key, config, and database into %s; "+
+				"next: OVCP_SERVER_CN=<host> ovcp renew-server, then ovcp vpn start", ctx.dataDir),
+				func(o outcome) {
+					fmt.Println("[1/2] restored CA, CRL, tls-crypt key, config, and database into", ctx.dataDir)
+					fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp renew-server   (issues the openvpn server cert)")
+					fmt.Println("      then: ovcp vpn start")
+				})
 		}
 	}
+}
+
+type backupCreateOut struct {
+	File string `json:"file"`
 }
 
 func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -736,7 +858,9 @@ func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
 		ofs.Parse(rest)
 		_, err := controller.Control(*ctrl, "debug "+op)
 		die(err)
-		fmt.Println("debug logging", op)
+		output(map[string]bool{"debug": op == "on"}, func(o map[string]bool) {
+			fmt.Println("debug logging", op)
+		})
 	}
 }
 
@@ -757,14 +881,15 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 			defer s.Close()
 			die(telegram.SetCredentials(s, string(token), *admin))
 			s.Audit("cli", "telegram_configure", "admin="+*admin)
-			fmt.Println("telegram: token saved, admin set to", *admin)
-			fmt.Println("run 'ovcp telegram start' (or restart serve) to bring the bot up")
+			output(msg("telegram: token saved, admin set to %s", *admin), func(o outcome) {
+				fmt.Println(o.Message)
+				fmt.Println("run 'ovcp telegram start' (or restart serve) to bring the bot up")
+			})
 			return
 		}
 
 		ofs := newFlags("telegram " + op)
 		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
-		jsonOut := ofs.Bool("json", false, "machine-readable JSON output (status only)")
 		ofs.Parse(rest)
 
 		var st controller.TelegramStatus
@@ -785,7 +910,7 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 			s.Audit("cli", "telegram_"+op, fmt.Sprintf("running=%t", st.Running))
 			s.Close()
 		}
-		output(*jsonOut, st, func(st controller.TelegramStatus) {
+		output(st, func(st controller.TelegramStatus) {
 			if !st.TokenSet {
 				fmt.Println("telegram: not configured (run 'ovcp telegram token -admin ...')")
 				return
@@ -819,13 +944,14 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			_, err = s.AddUser(*name, h, *role)
 			die(err)
 			s.Audit("cli", "user_add", "name="+*name+" role="+*role)
-			fmt.Println("user added:", *name, "("+*role+")")
+			output(userAddOut{*name, *role}, func(o userAddOut) {
+				fmt.Println("user added:", o.Username, "("+o.Role+")")
+			})
 
 		case "list":
 			lfs := newFlags("user list")
 			sortBy := lfs.String("sort", "", "username|role|created (default: today's order)")
 			desc := lfs.Bool("desc", false, "reverse sort order")
-			jsonOut := lfs.Bool("json", false, "machine-readable JSON output")
 			lfs.Parse(rest)
 			users, err := s.ListUsers()
 			die(err)
@@ -834,7 +960,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			for _, u := range users {
 				rows = append(rows, api.NewUserSummary(u))
 			}
-			output(*jsonOut, rows, func(rows []api.UserSummary) {
+			output(rows, func(rows []api.UserSummary) {
 				for _, u := range rows {
 					st := fmt.Sprintf("%-8s", "enabled")
 					if u.Disabled {
@@ -859,7 +985,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			}
 			die(s.DeleteUser(*name))
 			s.Audit("cli", "user_del", "name="+*name)
-			fmt.Println("deleted:", *name)
+			output(msg("deleted: %s", *name), printMsg)
 
 		case "disable", "enable":
 			efs := newFlags("user " + op)
@@ -870,7 +996,9 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			}
 			die(s.SetUserDisabled(*name, op == "disable"))
 			s.Audit("cli", "user_"+op, "name="+*name)
-			fmt.Println(op+"d:", *name)
+			output(userDisabledOut{*name, op == "disable"}, func(o userDisabledOut) {
+				fmt.Println(op+"d:", o.Username)
+			})
 
 		case "passwd":
 			pfs := newFlags("user passwd")
@@ -884,7 +1012,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			die(err)
 			die(s.SetUserPassword(*name, h))
 			s.Audit("cli", "user_passwd", "name="+*name)
-			fmt.Println("password updated:", *name)
+			output(msg("password updated: %s", *name), printMsg)
 
 		case "totp":
 			tfs := newFlags("user totp")
@@ -897,7 +1025,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			if *off {
 				die(s.SetUserTOTP(*name, ""))
 				s.Audit("cli", "user_totp_off", "name="+*name)
-				fmt.Println("2FA disabled:", *name)
+				output(msg("2FA disabled: %s", *name), printMsg)
 				break
 			}
 			sec, err := auth.TOTPGenerateSecret()
@@ -905,23 +1033,39 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 			die(s.SetUserTOTP(*name, sec))
 			s.Audit("cli", "user_totp_enroll", "name="+*name)
 			url := auth.TOTPProvisioningURL(sec, *name, adminCertCN(ctx.dataDir))
-			printQR(url)
-			fmt.Println("scan with your authenticator, or enter manually:")
-			fmt.Println("  secret:", sec)
-			fmt.Println("  url:   ", url)
+			output(totpOut{sec, url}, func(o totpOut) {
+				printQR(o.URL)
+				fmt.Println("scan with your authenticator, or enter manually:")
+				fmt.Println("  secret:", o.Secret)
+				fmt.Println("  url:   ", o.URL)
+			})
 		}
 	}
 }
 
+type userAddOut struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
+type userDisabledOut struct {
+	Username string `json:"username"`
+	Disabled bool   `json:"disabled"`
+}
+
+type totpOut struct {
+	Secret string `json:"secret"`
+	URL    string `json:"url"`
+}
+
 func cmdAudit(fs *flag.FlagSet) func(ctx *cliContext) {
-	jsonOut := fs.Bool("json", false, "machine-readable JSON output")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		tail, err := s.AuditTail(50)
 		die(err)
 		slices.Reverse(tail) // newest first, in both output modes
-		output(*jsonOut, tail, func(tail []store.AuditEntry) {
+		output(tail, func(tail []store.AuditEntry) {
 			for _, e := range tail {
 				fmt.Printf("%s %-12s %-16s %s\n", e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail)
 			}
@@ -931,6 +1075,9 @@ func cmdAudit(fs *flag.FlagSet) func(ctx *cliContext) {
 
 func cmdCompletion(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
+		if jsonOut {
+			die(fmt.Errorf("-json is not supported for completion (already a script, not data)"))
+		}
 		script, err := completionScript(fs.Arg(0))
 		die(err)
 		fmt.Print(script)

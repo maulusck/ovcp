@@ -20,21 +20,23 @@ import (
 )
 
 type Server struct {
-	Store         *store.Store
-	Auth          *auth.Service
-	PKI           *pki.PKI
-	Mgmt          *controller.Client
-	VPN           controller.Lifecycle
-	Telegram      *telegram.Poller
-	DataDir       string         // data directory root (backup source)
-	ConfigPath    string         // rendered server.conf
-	TLSCrypt      string         // tls-crypt key path
-	ServerCert    string         // openvpn server cert path (renew-server target)
-	ServerKey     string         // openvpn server key path (renew-server target)
-	DefaultRemote string         // OVCP_SERVER_CN / server cert CN; default client remote
-	Version       string         // build version, for the status export
-	UI            fs.FS          // built frontend; nil = API only
-	DebugLevel    *slog.LevelVar // shared with `ovcp debug on|off`'s control-socket handler
+	Store          *store.Store
+	Auth           *auth.Service
+	PKI            *pki.PKI
+	Mgmt           *controller.Client
+	VPN            controller.Lifecycle
+	Telegram       *telegram.Poller
+	DataDir        string         // data directory root (backup source)
+	ConfigPath     string         // rendered server.conf
+	TLSCrypt       string         // tls-crypt key path
+	ServerCert     string         // openvpn server cert path (renew-server target)
+	ServerKey      string         // openvpn server key path (renew-server target)
+	DefaultRemote  string         // OVCP_SERVER_CN / server cert CN; default client remote
+	Version        string         // build version, for the status export
+	OpenVPNVersion string         // "" if openvpn isn't on PATH
+	OpenVPNPath    string         // "" if openvpn isn't on PATH
+	UI             fs.FS          // built frontend; nil = API only
+	DebugLevel     *slog.LevelVar // shared with `ovcp debug on|off`'s control-socket handler
 }
 
 const (

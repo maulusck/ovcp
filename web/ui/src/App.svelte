@@ -24,7 +24,13 @@
   const TAB_KEY = 'ovcp_tab'
   const savedTab = localStorage.getItem(TAB_KEY)
 
+  // source repo — the OVCP logo links here (same host this build's own
+  // remote points at; hardcoded, not a runtime git lookup, since a
+  // packaged/container install ships the binary, not a .git directory).
+  const REPO_URL = 'https://goldrake.bot.nu/c/maulusck/ovcp.git'
+
   let user = $state(null)
+  let verLong = $state(false) // footer: short "ovcp X" vs long "ovcp X · openvpn Y (path)"
   let tab = $state(tabs.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
   let navOpen = $state(false)
   // set by Dashboard's CN click, consumed (and cleared) by Certs to scroll/flash the matching row
@@ -137,8 +143,10 @@
 {:else}
   <header>
     <div class="brand">
-      <Logo />
-      <strong>OVCP</strong>
+      <a class="brand-link" href={REPO_URL} target="_blank" rel="noopener">
+        <Logo />
+        <strong>OVCP</strong>
+      </a>
       <span class="pill {vpn.phase}" title={phaseText} role="status">
         <i></i><span class="pill-text">{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? 'restarting' : 'vpn down'}</span>
       </span>
@@ -190,6 +198,16 @@
       <Docs />
     {/if}
   </main>
+  <footer>
+    <button type="button" class="ver-toggle" onclick={() => (verLong = !verLong)}
+      title={verLong ? 'Show less' : 'Show openvpn version'}>
+      {#if verLong}
+        ovcp {user.version || 'dev'} · openvpn {user.openvpnVersion || 'not found'}{user.openvpnPath ? ` (${user.openvpnPath})` : ''}
+      {:else}
+        ovcp {user.version || 'dev'}
+      {/if}
+    </button>
+  </footer>
 {/if}
 
 <style>
@@ -334,6 +352,11 @@
   /* stacked sibling cards (Certs/Settings/Users) always get a gap, not just
      the ones a page happens to mark .form-card */
   :global(.card + .card) { margin-top: 18px; }
+  /* .logs-grid/.stats-grid cards are adjacent .card siblings too, so the
+     rule above leaks in there — stacking on top of the grid's own `gap`
+     and, since it never applies to the first card, throwing every other
+     column out of alignment with it once 2+ columns fit in a row. */
+  :global(.logs-grid > .card), :global(.stats-grid > .card) { margin-top: 0; }
   /* shared by Certs/Settings/Users' forms: a checkbox that shouldn't
      stretch to the grid's field width, a full-width textarea field, a
      button row, and small print. */
@@ -360,6 +383,7 @@
     padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
   }
   .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-link { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
   .brand strong { letter-spacing: .12em; }
 
   .pill {
@@ -396,6 +420,13 @@
   .role-pill.role-operator { color: var(--ok); border-color: var(--ok); }
   main { padding: 18px; max-width: 1100px; margin: 0 auto; }
   main.wide { max-width: 1600px; } /* Logs: rows are the widest content on any tab */
+
+  footer { text-align: center; padding: 6px 18px 14px; }
+  .ver-toggle {
+    background: transparent; border: none; color: var(--dim); opacity: .55;
+    font-family: var(--mono); font-size: 11px; padding: 2px 6px; cursor: pointer;
+  }
+  .ver-toggle:hover { opacity: 1; }
   @media (prefers-reduced-motion: reduce) { :global(*) { transition: none !important; animation: none !important; } }
 
   @media (max-width: 700px) {

@@ -149,3 +149,29 @@ func TestStopDoesNotAutoRestart(t *testing.T) {
 		t.Fatal("an explicit Stop must not trigger auto-restart")
 	}
 }
+
+// TestOpenVPNVersion stubs a script named exactly "openvpn" on PATH (the
+// LookPath match), so it never depends on real openvpn being installed.
+func TestOpenVPNVersion(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "openvpn")
+	script := "#!/bin/sh\necho 'OpenVPN 2.6.14 x86_64-pc-linux-gnu [SSL (OpenSSL)]'\n"
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	version, path, ok := OpenVPNVersion()
+	if !ok || version != "OpenVPN 2.6.14" || path != p {
+		t.Fatalf("got version=%q path=%q ok=%v, want %q %q true", version, path, ok, "OpenVPN 2.6.14", p)
+	}
+}
+
+// TestOpenVPNVersionNotFound: no openvpn on PATH must report ok=false, not
+// an error — this is advisory, not a precondition.
+func TestOpenVPNVersionNotFound(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, _, ok := OpenVPNVersion(); ok {
+		t.Fatal("expected ok=false with no openvpn on PATH")
+	}
+}

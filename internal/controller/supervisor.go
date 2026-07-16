@@ -7,10 +7,31 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
+
+// OpenVPNVersion resolves the openvpn binary from PATH (same lookup Start
+// uses) and runs "openvpn --version" for its first line's version token.
+// ok is false if openvpn isn't found or produced no parseable output — this
+// is advisory (`ovcp version`, the admin UI), never a precondition, so no
+// error to propagate. Exit code is deliberately ignored: it isn't consistent
+// across openvpn versions/distros, but stdout is populated either way.
+func OpenVPNVersion() (version, path string, ok bool) {
+	p, err := exec.LookPath("openvpn")
+	if err != nil {
+		return "", "", false
+	}
+	out, _ := exec.Command(p, "--version").Output()
+	first, _, _ := strings.Cut(string(out), "\n")
+	fields := strings.Fields(first)
+	if len(fields) < 2 {
+		return "", "", false
+	}
+	return fields[0] + " " + fields[1], p, true
+}
 
 // Supervisor runs openvpn as a foreground child (Pdeathsig ties its life to ours, surviving openvpn's own setuid drop to nobody); no SIGHUP — Restart always re-reads fresh instead.
 type Supervisor struct {
@@ -162,7 +183,7 @@ func (s *Supervisor) supervise(launched chan<- error) {
 	s.stMu.Lock()
 	s.cmd, s.done, s.running, s.startedAt = cmd, done, true, time.Now()
 	s.stMu.Unlock()
-	slog.Info("openvpn started", "pid", cmd.Process.Pid)
+	slog.Info("openvpn started", "pid", cmd.Process.Pid, "bin", bin)
 	launched <- nil
 
 	err = cmd.Wait() // reap — no zombie can accumulate; runs for both a clean stop() and an unexpected crash
