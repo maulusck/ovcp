@@ -61,14 +61,18 @@ deps: ## check build tools are on PATH (go, cc, npm, mandoc)
 	@echo "build deps OK"
 
 CTR := $(shell command -v podman || command -v docker)
+# id=ovcp-build-cache in the Containerfile's zig/go RUN mount; reused by
+# image (says it's using this) and clean (reminds it isn't touched by rm -rf).
+CACHE_HINT := podman/docker builder prune reclaims the persistent build cache (id=ovcp-build-cache)
 
 check-image: check-target
 	@$(call require,podman docker,podman or docker (container image build))
-	@test "$(TARGET)" = host || $(CTR) run --rm --platform $(PLATFORM) alpine:latest true >/dev/null 2>&1 || \
+	@test "$(TARGET)" = host || $(CTR) run --rm --platform $(PLATFORM) docker.io/library/alpine:latest true >/dev/null 2>&1 || \
 	  { echo "error: this host can't run $(PLATFORM) containers (no binfmt/QEMU registered for it) - see: docker run --privileged --rm tonistiigi/binfmt --install all"; exit 1; }
 
 image: check-image ## build all-in-one container image for TARGET's arch (default: this host's own); podman, else docker
-	$(CTR) build --platform $(PLATFORM) -t ovcp --build-arg VERSION=$(VERSION) -f Containerfile .
+	@echo "using persistent zig/go build cache - $(CACHE_HINT)"
+	$(CTR) build --platform $(PLATFORM) -t ovcp -t ovcp:$(VERSION) --build-arg VERSION=$(VERSION) -f Containerfile .
 
 check-nfpm:
 	@$(call require,nfpm,nfpm (packaging))
@@ -118,6 +122,7 @@ vet: ui ## go vet
 
 clean: ## remove build output (bin/, web/dist/, dist/)
 	rm -rf bin web/dist dist
+	@echo "note: container build cache untouched - $(CACHE_HINT)"
 
 install: release ## install binary + man page + shell completions (DESTDIR/prefix honored)
 	install -D -m 0755 bin/$(BINARY) $(DESTDIR)$(prefix)/bin/$(BINARY)

@@ -13,7 +13,11 @@
 # LAN interface, VPN on the WAN interface:
 #   -p 203.0.113.7:1194:1194/udp -p 192.168.1.10:8443:8443
 #
-# Multi-arch (amd64/arm64/armv7/armv6/riscv64):
+# One local image (native or TARGET= to cross-build; adds --platform, a
+# persistent build cache, and preflight checks a raw podman/docker build
+# below won't have) - see `make image` and docs/BUILDING.md.
+#
+# A real multi-arch manifest, all 5 platforms in one push (what CI does):
 #   docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64 -f Containerfile .
 FROM --platform=$BUILDPLATFORM docker.io/library/node:22-alpine AS ui
 WORKDIR /src/web/ui
@@ -36,7 +40,14 @@ RUN go mod download
 COPY . .
 COPY --from=ui /src/web/dist ./web/dist
 RUN mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
-RUN case "$TARGETARCH$TARGETVARIANT" in \
+# cache mount, not a layer: zig's per-target libc/compiler-rt objects and
+# go's build cache would otherwise be rebuilt from scratch on every build,
+# since COPY . . above invalidates this RUN on any source change and an
+# ephemeral container never keeps ~/.cache between runs. Lives in the engine's
+# own build-cache store, not this checkout; reclaim it with
+# `podman builder prune` / `docker builder prune`.
+RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
+    case "$TARGETARCH$TARGETVARIANT" in \
       amd64)   ZIG=x86_64-linux-musl ;; \
       arm64)   ZIG=aarch64-linux-musl ;; \
       armv7)   ZIG=arm-linux-musleabihf; GOARM=7 ;; \

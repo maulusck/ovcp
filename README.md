@@ -32,8 +32,10 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
 - **Encrypted backup/restore** — one command exports CA, CRL, tls-crypt key,
   config, and database into a single encrypted archive.
 - **Prod-ready deployment** — systemd unit, `.deb`/`.rpm`/`.apk`/Arch
-  packages (amd64 and ARM — Raspberry Pi and similar SBCs, glibc or musl),
-  an all-in-one container image, and a SELinux policy, all included.
+  packages (amd64, ARM — Raspberry Pi and similar SBCs, and RISC-V; glibc or
+  musl), an all-in-one multi-arch container image, and a SELinux policy, all
+  included. Every arch builds natively on its own host or cross-compiles from
+  any other — see [`docs/BUILDING.md`](docs/BUILDING.md).
 
 ## Requirements
 
@@ -57,7 +59,7 @@ make deb   # or: make rpm
 sudo apt install ./dist/ovcp_*.deb   # or: sudo rpm -i dist/ovcp-*.rpm
 
 # Container (podman or docker) — OpenVPN included, nothing else to install
-podman build -t ovcp -f Containerfile .
+make image   # this host's own arch; TARGET= to cross-build, see docs/BUILDING.md
 
 # From source
 make deps && make release   # → bin/ovcp, dist/completion/*
@@ -164,6 +166,10 @@ make help
 go test ./...
 cd web/ui && npm run dev   # UI dev server (proxy API manually or run serve)
 ```
+
+`make image` keeps a zig/go build cache in the container engine's own storage
+(not this checkout, nothing to `.gitignore`) so repeated builds stay fast —
+it grows the more you rebuild; `podman/docker builder prune` reclaims it.
 
 ## License
 
