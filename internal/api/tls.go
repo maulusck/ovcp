@@ -15,9 +15,8 @@ import (
 	"time"
 )
 
-// EnsureAdminTLS creates a self-signed cert for the admin UI on first run,
-// with cn as CommonName and SAN. Regenerates if the existing cert's CN
-// differs or it has expired. Returns (certPath, keyPath).
+// EnsureAdminTLS creates a self-signed cert for the admin UI on first run (cn
+// as CommonName and SAN), regenerating if the CN changed or it expired.
 func EnsureAdminTLS(dir, cn string) (string, string, error) {
 	if cn == "" {
 		cn = "ovcp-admin"

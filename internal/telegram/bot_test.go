@@ -16,9 +16,7 @@ const (
 	testAdmin = "@alice"
 )
 
-// mockAPI stands in for api.telegram.org: getMe succeeds only for
-// goodToken — enough to exercise SetCredentials without a real network
-// call or a real bot.
+// mockAPI stands in for api.telegram.org: getMe succeeds only for goodToken.
 func mockAPI(t *testing.T) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

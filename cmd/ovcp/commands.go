@@ -28,18 +28,8 @@ import (
 	"github.com/ovcp/ovcp/internal/telegram"
 )
 
-// command is one ovcp subcommand: its help text, its fixed set of
-// subcommands/ops (if any, for `usage: ovcp X a|b|c` errors and shell
-// completion), and run — which registers the command's flags on fs (no
-// side effects) and returns the closure that actually executes once fs is
-// parsed. Splitting registration from execution lets completion ask "what
-// flags does this command have" by calling run(fs) and reading fs back via
-// VisitAll, without duplicating the flag list or running anything.
-//
-// commands is the single source of truth for the CLI surface — dispatch in
-// main(), the -h text (helpText), and `ovcp __complete` (completeArgs) all
-// read this same table, so adding/renaming a command or a flag means
-// editing it in exactly one place.
+// command is one subcommand: run registers flags on fs, returning the closure executed once parsed.
+// commands is the single source of truth dispatch, helpText, and completeArgs all read.
 type command struct {
 	name  string
 	usage string
@@ -57,14 +47,9 @@ func (c command) flagNames() []string {
 	return names
 }
 
-// opArg validates fs's first positional argument against ops (the
-// "usage: ovcp NAME op1|op2|..." error every op-dispatched command shares)
-// and returns it along with everything after it, for the caller to parse
-// with its own FlagSet. Op-dispatched commands must never register flags
-// on fs itself: main()'s dispatch loop calls fs.Parse before the op is even
-// known, and flag.Parse stops scanning at the first non-flag token — a flag
-// placed after the op (ovcp NAME op -flag value, the usual shell-command
-// order) would silently never be parsed otherwise.
+// opArg validates fs's first positional arg against ops, returning it plus
+// the rest. Op-dispatched commands must never register flags on fs itself:
+// main() calls fs.Parse before the op is known, so a flag placed after the op would never be parsed.
 func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []string) {
 	args := fs.Args()
 	if len(args) < 1 || !slices.Contains(ops, args[0]) {
@@ -244,8 +229,7 @@ func green(s string) string  { return paint(ansiGreen, s) }
 func yellow(s string) string { return paint(ansiYellow, s) }
 
 // output is the one place every command's JSON branch lives: JSON-encode
-// rows, or hand them to the command's own text renderer. Reads the global
-// -json flag directly — no command declares its own copy.
+// rows, or hand off to the command's text renderer. Reads the global -json flag.
 func output[T any](rows T, text func(T)) {
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
@@ -256,9 +240,8 @@ func output[T any](rows T, text func(T)) {
 	text(rows)
 }
 
-// outcome is the generic {"message":"..."} JSON shape for commands whose
-// only output is a confirmation line. Commands with real structured data
-// (certOut, statusOut, ControlResult, ...) keep their own richer type.
+// outcome is the generic {"message":"..."} JSON shape for commands with only
+// a confirmation line; commands with real data keep their own richer type.
 type outcome struct {
 	Message string `json:"message"`
 }
@@ -269,20 +252,16 @@ func msg(format string, a ...any) outcome { return outcome{fmt.Sprintf(format, a
 // custom formatting, the common case.
 func printMsg(o outcome) { fmt.Println(o.Message) }
 
-// progress prints a human-progress line, suppressed under -json so
-// multi-step commands (init, backup) don't interleave prose with the
-// single JSON object output() prints at the end.
+// progress prints a human-progress line, suppressed under -json so it never
+// interleaves with output()'s single JSON object.
 func progress(format string, a ...any) {
 	if !jsonOut {
 		fmt.Printf(format, a...)
 	}
 }
 
-// sortByFlag sorts rows in place by the named field (string-keyed getters,
-// so time fields sort correctly too via RFC3339's lexicographic order).
-// An empty key is a no-op ("no -sort = today's order"); an unrecognized one
-// is an error, not a silent no-op — a typo'd flag must never look like
-// "sort worked, this just happens to be the natural order."
+// sortByFlag sorts rows by the named field (string getters, so RFC3339 time
+// fields sort too). Empty key is a no-op; unrecognized key errors rather than silently keeping natural order.
 func sortByFlag[T any](rows []T, getters map[string]func(T) string, key string, desc bool) error {
 	if key == "" {
 		return nil
@@ -559,9 +538,8 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// initOut is `init -json`'s shape: the artifact paths init produced, and
-// where to reach the admin UI. The per-step [N/5] lines are progress prose,
-// suppressed under -json (see progress()) — this is the one result.
+// initOut is `init -json`'s shape: artifact paths plus the admin UI URL.
+// The [N/5] progress lines are suppressed under -json; this is the one result.
 type initOut struct {
 	CACert     string `json:"caCert"`
 	ServerCert string `json:"serverCert"`
@@ -592,8 +570,7 @@ type statusOut struct {
 }
 
 // fmtUptime renders a Go duration string ("3h2m1s"), or "" for the zero
-// time (not running / not known) — stdlib formatting is plenty for a
-// status line, no need for a custom "3h 2m" pretty-printer.
+// time (not running / not known).
 func fmtUptime(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -644,10 +621,8 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 			st.Running, st.Pid = true, r.Pid
 			st.Uptime = fmtUptime(r.StartedAt)
 			st.OvcpUptime = fmtUptime(r.ServeStartedAt)
-			// via serve's control socket, not a second dial to openvpn's own
-			// mgmt socket — openvpn only ever serves one connected mgmt
-			// client, and serve (still running, just proven above) already
-			// holds that slot for its whole life.
+			// via serve's control socket, not a second dial to openvpn's mgmt
+			// socket — openvpn allows only one connected mgmt client, and serve already holds that slot.
 			if cl, err := controller.Clients(*ctrl); err != nil {
 				st.Error = err.Error()
 			} else {
@@ -749,10 +724,8 @@ type renewOut struct {
 	Serial   string `json:"serial"`
 }
 
-// commaOrLines: comma list → one directive per line; no-op without a comma,
-// so $(cat FILE) passes through unchanged.
-// ponytail: assumes no directive needs a literal comma — openvpn's own
-// syntax never does. Use -custom-opts - (editor) if one ever does.
+// commaOrLines: comma list → one directive per line; no-op without a comma, so $(cat FILE) passes through unchanged.
+// ponytail: assumes no directive needs a literal comma; use -custom-opts - if one ever does.
 func commaOrLines(s string) string {
 	parts := strings.Split(s, ",")
 	for i, p := range parts {
@@ -1093,9 +1066,7 @@ func cmdCompletion(fs *flag.FlagSet) func(ctx *cliContext) {
 }
 
 // readSecret prompts for a secret (env override for automation); both paths
-// enforce the same complexity rule, or init could accept what issue rejects
-// later — unless $OVCP_YOLO_PASSWORD is set (see auth.SecretYOLO), in which
-// case: your funeral.
+// enforce the same complexity rule, unless $OVCP_YOLO_PASSWORD is set (auth.SecretYOLO) — your funeral.
 func readSecret(label, env string, confirm bool) []byte {
 	v := []byte(os.Getenv(env))
 	if len(v) == 0 {
@@ -1122,15 +1093,14 @@ func readSecret(label, env string, confirm bool) []byte {
 	return v
 }
 
-// printQR renders a QR code as terminal background-color blocks (the one
-// thing qrterminal added over rsc.io/qr itself — not worth a dependency).
-// Ignores -no-color/$NO_COLOR: these blocks are the QR code, not decoration.
+// printQR renders a QR code as Unicode block characters (avoids a qrterminal
+// dependency); no ANSI color involved, so -no-color/$NO_COLOR don't apply.
 func printQR(text string) {
 	code, err := qr.Encode(text, qr.L)
 	if err != nil {
 		return
 	}
-	black, white := ansi("40", "  "), ansi("47", "  ")
+	black, white := "██", "  "
 	fmt.Println(strings.Repeat(white, code.Size+2))
 	for y := 0; y <= code.Size; y++ {
 		fmt.Print(white)

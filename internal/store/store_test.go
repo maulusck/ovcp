@@ -91,10 +91,8 @@ func TestReplaceCert(t *testing.T) {
 	}
 }
 
-// TestClientSamples covers the whole point of client_samples over the old
-// global-only vpn_samples: bob disconnects between t0 and t1, and that must
-// not read as a dip in the global rate — only alice's real delta should
-// count, exactly as if bob had never been sampled at t0 at all.
+// TestClientSamples: bob disconnects between t0 and t1; the global rate must
+// reflect only alice's delta, not dip because bob dropped out.
 func TestClientSamples(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "ovcp.db"))
 	if err != nil {

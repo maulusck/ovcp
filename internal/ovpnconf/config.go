@@ -43,9 +43,8 @@ func Default() Config {
 	}
 }
 
-// Load parses a persisted config JSON blob (the store's "server_config"
-// setting), falling back to defaults for anything empty or missing. raw =
-// "" (never configured yet) returns plain Default().
+// Load parses a persisted config JSON blob, falling back to defaults for
+// anything empty or missing; raw == "" returns plain Default().
 func Load(raw string) Config {
 	cfg := Default()
 	if raw != "" {
@@ -109,9 +108,8 @@ func (c *Config) Render() []byte {
 	w("data-ciphers-fallback %s", c.Cipher)
 	w("auth SHA256")
 	w("keepalive 10 60")
-	// openvpn drops to nobody after startup; persist-key/-tun let it keep
-	// the tun device and key across a SIGUSR1 reconnect without re-reading
-	// the root-owned files it can no longer access.
+	// persist-key/-tun: openvpn drops to nobody at startup and can't re-read
+	// root-owned files, so these keep the tun device and key across SIGUSR1.
 	w("persist-key")
 	w("persist-tun")
 	if c.RunAsUser != "" {
@@ -142,15 +140,9 @@ func (c *Config) Render() []byte {
 	return []byte(b.String())
 }
 
-// Diff compares two rendered configs and returns the changed lines: present
-// only in old prefixed "-", present only in new prefixed "+" (old first).
-// A set diff, not an aligned unified diff: every directive here is either
-// static or a single-value line, so which line moved doesn't matter, only
-// which values came or went.
-// ponytail: treats lines as a set, not a multiset, so a value repeated
-// verbatim (e.g. the same DNS IP entered twice) is invisible to the diff.
-// Harmless today (Validate doesn't dedupe, but a duplicate push line changes
-// nothing openvpn does with it) — swap in an LCS diff if that ever matters.
+// Diff compares two rendered configs, returning changed lines ("-" old-only,
+// "+" new-only). A set diff: every directive is static or single-value, so line order doesn't matter.
+// ponytail: set not multiset, so a value repeated verbatim is invisible; harmless today, swap in LCS if that changes.
 func Diff(old, new []byte) []string {
 	oldLines := strings.Split(strings.TrimRight(string(old), "\n"), "\n")
 	newLines := strings.Split(strings.TrimRight(string(new), "\n"), "\n")

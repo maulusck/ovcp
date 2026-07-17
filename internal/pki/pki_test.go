@@ -86,10 +86,7 @@ func TestIssueAndVerify(t *testing.T) {
 	}
 }
 
-// TestIssueCNLength guards the write side of the same bound internal/api's
-// stats endpoint enforces on the read side (?cn=) — a CN this rejects can
-// never exist, so that endpoint can never see a legitimately-issued CN it
-// treats as invalid.
+// TestIssueCNLength guards the write side of the CN bound internal/api enforces on reads.
 func TestIssueCNLength(t *testing.T) {
 	p := newCA(t)
 	if _, err := p.Issue(KindClient, "", 365, pass); err == nil {

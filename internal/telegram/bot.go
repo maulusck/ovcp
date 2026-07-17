@@ -1,6 +1,5 @@
-// Package telegram: notify-only Telegram bot, plus a small VPN
-// start/stop/restart/status command surface gated to one admin identity.
-// Plain HTTP against the Bot API — no SDK dependency.
+// Package telegram: notify-only bot plus a small VPN start/stop/restart/status
+// surface gated to one admin identity. Plain HTTP against the Bot API, no SDK.
 package telegram
 
 import (
@@ -17,10 +16,8 @@ import (
 // server instead of hitting the real Telegram API.
 var apiBase = "https://api.telegram.org/bot"
 
-// SetAPIBaseForTesting points the client at url instead of the real
-// Telegram API; call the returned func to restore it. For other packages'
-// tests (e.g. internal/api) that need SetCredentials to succeed without a
-// network call — not meant for anything but tests.
+// SetAPIBaseForTesting points the client at url instead of the real Telegram
+// API; call the returned func to restore it. Tests only.
 func SetAPIBaseForTesting(url string) (restore func()) {
 	old := apiBase
 	apiBase = url
@@ -73,9 +70,8 @@ func (b *bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
 	return out, err
 }
 
-// markup is either *inlineKeyboard (buttons on this one message, e.g. a
-// confirm/cancel) or *replyKeyboard (persistent, replaces the device
-// keyboard until reissued) — nil for neither.
+// markup is *inlineKeyboard (buttons on this one message), *replyKeyboard
+// (persistent, replaces the device keyboard), or nil.
 func (b *bot) sendMessage(ctx context.Context, chatID int64, text string, markup any) {
 	body := map[string]any{"chat_id": chatID, "text": text}
 	if markup != nil {
@@ -138,9 +134,8 @@ type inlineButton struct {
 func kb(rows ...[]inlineButton) *inlineKeyboard { return &inlineKeyboard{InlineKeyboard: rows} }
 func btn(text, data string) inlineButton        { return inlineButton{Text: text, CallbackData: data} }
 
-// replyKeyboard replaces the device keyboard with real buttons — unlike
-// inlineKeyboard (attached to one message, dismissed with it), this persists
-// across the whole chat until reissued or removed.
+// replyKeyboard replaces the device keyboard with real buttons; unlike
+// inlineKeyboard, it persists across the chat until reissued or removed.
 type replyKeyboard struct {
 	Keyboard       [][]string `json:"keyboard"`
 	ResizeKeyboard bool       `json:"resize_keyboard"` // shrink to fit the labels, not full device height

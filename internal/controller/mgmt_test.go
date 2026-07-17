@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// fakeMgmt emulates the openvpn management interface on a unix socket and
-// returns the socket path plus a count of accepted connections, so tests
-// can assert on connection reuse vs reconnects.
+// fakeMgmt emulates openvpn's mgmt interface on a unix socket, returning the
+// socket path and an accept counter so tests can assert reuse vs. reconnects.
 func fakeMgmt(t *testing.T) (string, *int32) {
 	t.Helper()
 	var accepts int32
@@ -94,9 +93,8 @@ func TestKillRejectsInjection(t *testing.T) {
 	}
 }
 
-// TestConnectionReused is the point of holding a persistent mgmt
-// connection: repeated Status() calls must not open a new connection each
-// time (that's what spammed openvpn.log with connect/disconnect lines).
+// TestConnectionReused: repeated Status() calls must not open a new
+// connection each time (that's what spammed openvpn.log before).
 func TestConnectionReused(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
 	c := NewClient(sock)
@@ -111,8 +109,7 @@ func TestConnectionReused(t *testing.T) {
 }
 
 // TestAppErrorKeepsConnection ensures a well-formed "ERROR: ..." reply
-// (a successful round trip, just a rejected command) doesn't trigger a
-// reconnect — only actual connection failures should.
+// doesn't trigger a reconnect — only actual connection failures should.
 func TestAppErrorKeepsConnection(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
 	c := NewClient(sock)
@@ -127,8 +124,8 @@ func TestAppErrorKeepsConnection(t *testing.T) {
 	}
 }
 
-// TestReconnectsAfterDrop ensures a dead held connection (e.g. openvpn
-// restarted) self-heals: the next call transparently redials and succeeds.
+// TestReconnectsAfterDrop ensures a dead held connection self-heals: the
+// next call transparently redials and succeeds.
 func TestReconnectsAfterDrop(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
 	c := NewClient(sock)

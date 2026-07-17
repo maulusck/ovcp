@@ -296,9 +296,8 @@ func containsLine(lines []string, want string) bool {
 	return false
 }
 
-// TestUserEndpoints covers the user-management routes, above all the two
-// self-lockout guards ("cannot delete/disable your own account") that exist
-// only in this layer — the CLI has no such guard and auth never sees them.
+// TestUserEndpoints covers user-management routes, above all the self-lockout
+// guards ("cannot delete/disable your own account") that exist only in this layer.
 func TestUserEndpoints(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
@@ -339,9 +338,8 @@ func TestUserEndpoints(t *testing.T) {
 	}
 }
 
-// TestPasswordYOLO: OVCP_YOLO_PASSWORD waives complexity through the API
-// (not just the CLI) since `serve` inherits its process env — and every
-// acceptance through that door is audited.
+// TestPasswordYOLO: OVCP_YOLO_PASSWORD waives complexity through the API too,
+// since `serve` inherits its env — every acceptance through that door is audited.
 func TestPasswordYOLO(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
@@ -423,9 +421,8 @@ func TestExportSplitTunnelRejected(t *testing.T) {
 	}
 }
 
-// TestStatsEndpoint covers the ?cn= branch handleStats gained when
-// vpn_samples (global-only) became client_samples (per-CN): global must
-// aggregate across clients, ?cn= must return only that one's own series.
+// TestStatsEndpoint: global must aggregate across clients, ?cn= must return
+// only that one's own series (the client_samples per-CN branch).
 func TestStatsEndpoint(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
@@ -470,9 +467,8 @@ func TestStatsEndpoint(t *testing.T) {
 		t.Fatalf("unknown cn should be an empty series, not an error: status=%d %+v", r.StatusCode, out.Samples)
 	}
 
-	// same bound pki.Issue enforces at creation (TestIssueCNLength) — a cn
-	// that long could never have been issued, so rejecting it here can
-	// never reject one that's actually in use.
+	// same bound pki.Issue enforces at creation — a cn this long could never
+	// have been issued, so this can't reject one actually in use.
 	r = e.req("GET", "/api/stats?cn="+strings.Repeat("a", pki.MaxCNLen+1), "", false)
 	if r.StatusCode != 400 {
 		t.Fatalf("cn over MaxCNLen should 400, got %d", r.StatusCode)

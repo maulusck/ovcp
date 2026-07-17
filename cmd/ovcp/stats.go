@@ -134,16 +134,8 @@ func printStatsText(o statsSnapshot, cn string) {
 	}
 }
 
-// followStats polls a running serve's control socket (bypassing the DB/
-// sampler entirely, for sub-minute liveliness) at intervalSec and redraws a
-// small in-place block, top-style.
-//
-// This goes through serve, not a direct dial to openvpn's own mgmt socket:
-// OpenVPN's management interface serves exactly one connected client, ever,
-// and serve already holds that slot for its whole life — a second direct
-// dial doesn't get refused, it just hangs until openvpn's accept queue
-// backs up and every mgmt-dependent command (this, `status`, `kill`) starts
-// failing with "resource temporarily unavailable". See ServeControl.
+// followStats polls serve's control socket (bypassing the DB) for sub-minute liveliness, redrawing top-style.
+// Goes through serve, not openvpn's mgmt socket directly — openvpn allows only one mgmt client ever.
 func followStats(ctrl, cn string, intervalSec int) {
 	if intervalSec <= 0 {
 		intervalSec = 2
@@ -162,9 +154,7 @@ func followStats(ctrl, cn string, intervalSec int) {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; restore(); os.Exit(0) }()
 
-	// ponytail: prevC never evicts CNs that leave for good — fine for an
-	// interactive session (bounded by distinct clients seen this run); add
-	// a sweep if -follow is ever left running unattended for days.
+	// ponytail: prevC never evicts departed CNs; add a sweep if -follow ever runs unattended for days.
 	prevC := map[string]store.Sample{}
 	printed := 0
 	for {
@@ -176,9 +166,7 @@ func followStats(ctrl, cn string, intervalSec int) {
 	}
 }
 
-// redraw overwrites the previous frame in place on a real terminal (cursor
-// up, reprint, clear any now-shorter trailing lines); on a pipe/file it just
-// prints each frame as a new block.
+// redraw overwrites the previous frame in place on a real terminal; on a pipe/file it prints each frame as a new block.
 func redraw(lines []string, printed *int, tty bool) {
 	if tty && *printed > 0 {
 		fmt.Printf("\x1b[%dA", *printed)
@@ -201,12 +189,8 @@ func redraw(lines []string, printed *int, tty bool) {
 	*printed = len(lines)
 }
 
-// followLines renders one frame: a header, then either a single client's
-// detail (-cn set) or a per-client table sorted busiest-first (global), like
-// top. prevC (one entry per CN, updated in place every frame) is the only
-// state carried across calls — the global rate is derived from it exactly
-// like store.Samples derives it from the DB: sum each still-connected
-// client's own clamped delta, divide once, never diff the aggregate itself.
+// followLines renders one frame: a single client's detail (-cn set) or a
+// busiest-first table (global). Global rate sums each client's clamped delta and divides once, never diffs the aggregate directly.
 func followLines(clients []controller.VPNClient, err error, cn string, now time.Time, prevC map[string]store.Sample) []string {
 	if err != nil {
 		return []string{red("VPN unreachable — " + err.Error())}

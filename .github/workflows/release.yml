@@ -1,9 +1,7 @@
 name: release
 
-# Tag-triggered release: binaries + shell completions ("download and run")
-# and distro packages for every TARGET the Makefile knows about, a
-# checksums file, and a multi-arch container image on ghcr.io. See
-# `make help` for the TARGET list and `Containerfile` for the image build.
+# Tag-triggered release: binaries+completions, distro packages per Makefile TARGET,
+# checksums, and a multi-arch ghcr.io image. See `make help` / Containerfile for details.
 on:
   push:
     tags: ['v*']

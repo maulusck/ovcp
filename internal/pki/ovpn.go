@@ -44,9 +44,7 @@ type BundleParams struct {
 	Extra       string // raw client directives, appended verbatim; unvalidated by design
 }
 
-// RenderOVPN emits a single-file .ovpn with all material inline.
-// Remote/ServerCN land in the file as raw config lines with no escaping, so a
-// newline in either would let the caller inject extra openvpn directives.
+// RenderOVPN emits a single-file .ovpn; Remote/ServerCN are unescaped, so newlines there would inject config lines.
 func RenderOVPN(p BundleParams) ([]byte, error) {
 	if strings.ContainsAny(p.Remote, "\r\n") || strings.ContainsAny(p.ServerCN, "\r\n") {
 		return nil, errors.New("pki: invalid character in remote/server-cn")

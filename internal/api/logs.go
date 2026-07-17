@@ -25,9 +25,8 @@ const (
 	auditDownloadLimit = 1_000_000
 )
 
-// tailLines returns up to n trailing lines of path, reading at most the last
-// tailMaxBytes (a missing file isn't an error, just unwritten yet). Lines
-// matching skip (nil = none) are dropped before the n-line cap applies.
+// tailLines returns up to n trailing lines of path (missing file isn't an
+// error), reading at most tailMaxBytes; skip (nil = none) filters before the n-line cap.
 func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -59,9 +58,8 @@ func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
 	return lines, nil
 }
 
-// isStatusPollLine matches the periodic "status 3" command openvpn echoes
-// on its management socket (App.svelte's status timer) — a real, expected
-// line, just frequent enough to drown out everything else in a 200-line tail.
+// isStatusPollLine matches openvpn's periodic "status 3" poll (App.svelte's
+// status timer) — expected noise that would otherwise drown a 200-line tail.
 func isStatusPollLine(line string) bool {
 	return strings.Contains(line, `MANAGEMENT: CMD 'status 3'`)
 }
@@ -79,11 +77,9 @@ func (s *Server) logHandler(filename string) handler {
 	}
 }
 
-// handleLogsDownload bundles an unencrypted audit package: every regular
-// file in logs/ (not a fixed filename list, so logrotate's rotated/
-// compressed siblings and status.log come along too), audit trail, and a
-// status.json snapshot of data already served individually (no new
-// exposure; no keys/DB — that's `ovcp backup`).
+// handleLogsDownload bundles an unencrypted audit package: every regular file
+// in logs/ (so rotated/compressed siblings come along too), the audit trail,
+// and a status.json snapshot — no new exposure, no keys/DB (that's `ovcp backup`).
 func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
 	w.Header().Set("Content-Type", "application/zip")
 	name := "ovcp-audit-" + time.Now().Format("20060102-150405") + ".zip"
@@ -126,9 +122,8 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 	}
 }
 
-// statusExport reuses the same reads /status, /certs, /users, /config
-// already do. Certs carry no secrets (keys are never stored); Users goes
-// through UserSummary since store.User does (PassHash, TOTPSecret).
+// statusExport reuses the same reads /status, /certs, /users, /config do.
+// Certs carry no secrets; Users goes through UserSummary to strip PassHash/TOTPSecret.
 type statusExport struct {
 	GeneratedAt time.Time
 	ServerCN    string
@@ -166,9 +161,8 @@ func (s *Server) statusExport() statusExport {
 	return exp
 }
 
-// sanitizeFilename keeps a Content-Disposition filename segment (the server
-// CN, which is admin-supplied and ends up in an HTTP response header) to a
-// safe, boring character set.
+// sanitizeFilename restricts a Content-Disposition filename segment
+// (admin-supplied CN, echoed into a response header) to a safe character set.
 func sanitizeFilename(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch {

@@ -23,9 +23,7 @@ func TOTPGenerateSecret() (string, error) {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
 }
 
-// TOTPProvisioningURL → otpauth:// URI for authenticator apps. Issuer (shown
-// as the entry title) stays a plain "OVCP"; the FQDN goes into the account
-// name (shown as the subtitle) instead, e.g. "OVCP" / "alice@vpn.example.com".
+// TOTPProvisioningURL builds an otpauth:// URI; issuer stays "OVCP", FQDN goes in the account name (subtitle).
 func TOTPProvisioningURL(secret, account, fqdn string) string {
 	const issuer = "OVCP"
 	if fqdn != "" {
@@ -96,9 +94,7 @@ func (l *Limiter) Allow(key string) bool {
 	return e.count < l.max
 }
 
-// Fail also sweeps expired entries: it's the only method that grows the
-// map, so this is what keeps a key that fails once and is never rechecked
-// from lingering forever (unbounded growth otherwise).
+// Fail also sweeps expired entries, the only place the map grows, keeping it bounded.
 func (l *Limiter) Fail(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

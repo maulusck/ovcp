@@ -22,9 +22,8 @@ export async function api(method, path, body) {
   return data
 }
 
-// apiBlob is api()'s counterpart for endpoints that return a file instead
-// of JSON (export/backup/logs downloads) — same CSRF'd POST, but hands back
-// the raw blob and any server-suggested filename instead of parsing JSON.
+// apiBlob: api()'s counterpart for file-download endpoints — same CSRF'd POST, but
+// returns the raw blob and server-suggested filename instead of parsed JSON.
 export async function apiBlob(method, path, body) {
   const res = await req(method, path, body)
   if (!res.ok) throw await res.json()
@@ -55,10 +54,8 @@ export function fmtBytes(n) {
   return n.toFixed(1) + ' ' + u[i]
 }
 
-// BytesRecvRate/BytesSentRate on a Sample are already bytes/sec, computed
-// server-side (internal/store's Rate) — this only adds the "/s", it never
-// re-derives a rate from raw counters (that's the CLI's -follow view's job
-// live, and the DB's job historically; the UI just displays what it's given).
+// Sample rates are already bytes/sec (internal/store's Rate); this just appends
+// "/s" — never re-derives a rate from raw counters.
 export function fmtRate(n) { return fmtBytes(n) + '/s' }
 
 // shared by every sortable table (Certs/Users/Dashboard/Stats): click-a-<th>
@@ -78,9 +75,8 @@ export function matchesQuery(row, query, ...getters) {
   return getters.some((get) => String(get(row) ?? '').toLowerCase().includes(q))
 }
 
-// shared sort state: one {key, desc} object per table, mutated in place so
-// every sortable table (Certs/Users/Dashboard/Stats) shares the click/flip
-// logic and the indicator glyph instead of redefining both per component.
+// Shared sort state ({key, desc}, mutated in place) so every sortable table
+// (Certs/Users/Dashboard/Stats) shares click/flip logic and the indicator glyph.
 export function toggleSort(sort, key) {
   if (sort.key === key) sort.desc = !sort.desc
   else { sort.key = key; sort.desc = false }
@@ -89,19 +85,15 @@ export function sortMark(sort, key) {
   return sort.key === key ? (sort.desc ? ' ↓' : ' ↑') : ''
 }
 
-// shared search state: one {open, query} object per panel, mutated in place
-// — autofocus on open, autoclear on close — reused by every filterable
-// table/log panel (Certs/Users/Dashboard/Stats/Logs) instead of each
-// reimplementing the toggle.
+// Shared search state ({open, query}, mutated in place): autofocus on open, autoclear
+// on close — reused by every filterable table/log panel instead of reimplementing it.
 export function toggleSearch(search) {
   search.open = !search.open
   if (!search.open) search.query = ''
 }
 
-// use:autofocus — reliably focuses a conditionally-rendered element on
-// mount. The native `autofocus` attribute doesn't fire here: Svelte sets it
-// via a property assignment after the element is already inserted, which
-// misses the browser's "autofocus at insertion" window.
+// use:autofocus focuses a conditionally-rendered element on mount — the native
+// `autofocus` attr doesn't fire here since Svelte sets it after insertion.
 export function autofocus(node) {
   node.focus()
 }

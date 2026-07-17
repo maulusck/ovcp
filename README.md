@@ -35,7 +35,7 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
   packages (amd64, ARM — Raspberry Pi and similar SBCs, and RISC-V; glibc or
   musl), an all-in-one multi-arch container image, and a SELinux policy, all
   included. Every arch builds natively on its own host or cross-compiles from
-  any other — see [`docs/BUILDING.md`](docs/BUILDING.md).
+  any other — see [`docs/BUILD.md`](docs/BUILD.md).
 
 ## Requirements
 
@@ -59,7 +59,7 @@ make deb   # or: make rpm
 sudo apt install ./dist/ovcp_*.deb   # or: sudo rpm -i dist/ovcp-*.rpm
 
 # Container (podman or docker) — OpenVPN included, nothing else to install
-make image   # this host's own arch; TARGET= to cross-build, see docs/BUILDING.md
+make image   # this host's own arch; TARGET= to cross-build, see docs/BUILD.md
 
 # From source
 make deps && make release   # → bin/ovcp, dist/completion/*

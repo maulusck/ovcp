@@ -35,9 +35,8 @@ func TestCompleteArgs(t *testing.T) {
 	}
 }
 
-// TestCompleteFlags: commands with no fixed subcommand list complete their
-// flag names (read off the same FlagSet real parsing uses); commands with
-// one complete the subcommand list instead, at every position.
+// TestCompleteFlags: commands with no fixed sub list complete their flag
+// names; commands with one complete the sub list instead, at every position.
 func TestCompleteFlags(t *testing.T) {
 	if r := run(t, nil, "__complete", "ovcp", "issue"); r.code != 0 ||
 		!strings.Contains(r.stdout, "-cn") || !strings.Contains(r.stdout, "-key-pass") {
@@ -57,10 +56,8 @@ func TestCompleteFlags(t *testing.T) {
 	}
 }
 
-// TestCompleteAfterGlobalFlags guards the exact bug reported: a global flag
-// (-data/-no-color/-json/-debug) ahead of the command used to land in
-// completeArgs' command-name slot and break completion for everything
-// after it; the global flags themselves also never appeared as candidates.
+// TestCompleteAfterGlobalFlags guards a real bug: a global flag ahead of the
+// command used to land in completeArgs' command-name slot, breaking completion after it and hiding the flags themselves.
 func TestCompleteAfterGlobalFlags(t *testing.T) {
 	if r := run(t, nil, "__complete", "ovcp"); r.code != 0 ||
 		!strings.Contains(r.stdout, "-data") || !strings.Contains(r.stdout, "-debug") ||

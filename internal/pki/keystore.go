@@ -12,9 +12,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// envelope is the on-disk format for encrypted private keys.
-// Key material is sealed with AES-256-GCM; the key is derived from the
-// operator passphrase via argon2id. The passphrase is never persisted.
+// envelope is the on-disk format for encrypted private keys: AES-256-GCM, key derived via argon2id.
 type envelope struct {
 	V       int    `json:"v"`
 	KDF     string `json:"kdf"` // "argon2id"

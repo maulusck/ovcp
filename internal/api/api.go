@@ -61,7 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))
 	mux.Handle("GET /api/logs/openvpn", s.wrap(auth.RoleReadonly, s.logHandler("openvpn.log")))
 	mux.Handle("GET /api/logs/ovcp", s.wrap(auth.RoleReadonly, s.logHandler("ovcp.log")))
-	mux.Handle("GET /api/logs/download", s.wrap(auth.RoleReadonly, s.handleLogsDownload))
+	mux.Handle("GET /api/logs/download", s.wrap(auth.RoleOperator, s.handleLogsDownload))
 	mux.Handle("GET /api/debug", s.wrap(auth.RoleReadonly, s.handleDebugGet))
 	mux.Handle("POST /api/debug", s.wrap(auth.RoleAdmin, s.handleDebugSet))
 	mux.Handle("POST /api/clients/kill", s.wrap(auth.RoleOperator, s.handleKill))
@@ -91,8 +91,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 // requestLog: Debug for 2xx/4xx noise, Warn for 5xx so server faults are
-// visible without debug logging on. State changes are already audited
-// separately (see Store.Audit calls in handlers.go).
+// visible without debug logging on (state changes are audited separately).
 func requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

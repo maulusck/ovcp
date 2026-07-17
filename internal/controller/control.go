@@ -12,12 +12,9 @@ import (
 	"time"
 )
 
-// ProcessStartedAt is when this ovcp process came up — set once at package
-// init, so it's accurate from whichever process reads it. Only meaningful
-// read from inside the actual `ovcp serve` process (api/telegram, both
-// in-process with it, read it directly); a CLI invocation gets its own
-// near-zero copy, so it goes over the wire in serveControlConn's reply
-// instead — see ControlResult.ServeStartedAt.
+// ProcessStartedAt is set once at package init, so it's only meaningful read
+// from inside the `ovcp serve` process itself; a CLI invocation gets its own
+// near-zero copy and must read it over the wire instead (ControlResult.ServeStartedAt).
 var ProcessStartedAt = time.Now()
 
 // Lifecycle is the openvpn control surface (implemented by *Supervisor).
@@ -30,9 +27,8 @@ type Lifecycle interface {
 	StartedAt() time.Time // zero when not running
 }
 
-// TelegramStatus is telegram.Poller.Status()'s shape — defined here (not in
-// package telegram, which already imports controller) so ServeControl can
-// serialize it without an import cycle.
+// TelegramStatus mirrors telegram.Poller.Status()'s shape, defined here (not
+// in package telegram, which imports controller) to avoid an import cycle.
 type TelegramStatus struct {
 	Running  bool   `json:"running"`
 	TokenSet bool   `json:"tokenSet"`
@@ -48,11 +44,9 @@ type TelegramController interface {
 	Status() TelegramStatus
 }
 
-// ControlResult is what a control op reports back: the openvpn pid afterwards
-// (0 if stopped), whether this op actually changed the process (a fresh
-// spawn, a replacement, or a stop) versus a no-op, when the (possibly
-// still-running) openvpn child started (zero if stopped), and when the
-// serve process answering the request itself started.
+// ControlResult reports the openvpn pid afterwards (0 if stopped), whether
+// the op actually changed the process vs. a no-op, when the (possibly
+// still-running) child started, and when the answering serve process started.
 type ControlResult struct {
 	Pid            int
 	Changed        bool
@@ -60,18 +54,8 @@ type ControlResult struct {
 	ServeStartedAt time.Time
 }
 
-// ServeControl exposes lc, "debug on|off", and mgmt's live client list/kill
-// over a root-only (0600) unix socket, so `ovcp vpn`/`ovcp debug`/`ovcp
-// status`/`ovcp kill`/`ovcp stats -follow` can all drive a running serve.
-//
-// mgmt matters here for a reason that isn't obvious: OpenVPN's own
-// management socket serves exactly one connected client, ever — a second
-// direct dial doesn't get refused, it just hangs (openvpn's accept loop
-// only reads from the first connection). serve already holds mgmt open for
-// its own life (RunStatsSampler, /api/status); every other consumer of the
-// live client list must go through *this* socket instead of dialing
-// mgmt.sock a second time — this net.Listener, unlike openvpn's mgmt
-// protocol, is a normal multi-client accept loop.
+// ServeControl exposes lc, "debug on|off", and mgmt's live client list/kill over a root-only (0600) unix
+// socket for `ovcp vpn`/`debug`/`status`/`kill`/`stats -follow` — mgmt allows only one client, so serve holds it and fans out here.
 func ServeControl(sockPath string, lc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o750); err != nil {
 		return nil, err
@@ -103,9 +87,8 @@ func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelV
 	}
 	op := strings.TrimSpace(line)
 
-	// clients/kill proxy mgmt's already-held connection — their response
-	// shape (a client list, nothing) doesn't fit the pid/changed trailer
-	// every Lifecycle op below shares, so they return directly.
+	// clients/kill proxy mgmt's connection; their response shape doesn't fit
+	// the pid/changed trailer every Lifecycle op below shares, so they return directly.
 	if cn, ok := strings.CutPrefix(op, "kill "); ok {
 		if err := mgmt.Kill(cn); err != nil {
 			fmt.Fprintf(c, "ERR %s\n", err)
@@ -186,10 +169,9 @@ func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelV
 	fmt.Fprintf(c, "OK %d %s %d %d\n", after, changed, startedAtUnix, ProcessStartedAt.Unix())
 }
 
-// controlRequest sends one op to a running serve process and returns the
-// raw payload after "OK " (or an error for an "ERR " response). The shared
-// client-half primitive — Control, Clients, and Kill below just parse this
-// payload differently depending on the op they sent.
+// controlRequest sends one op to a running serve process and returns the raw
+// payload after "OK " (error for "ERR "). Control, Clients, and Kill below
+// just parse this payload differently depending on the op.
 func controlRequest(sockPath, op string) (string, error) {
 	c, err := net.DialTimeout("unix", sockPath, 3*time.Second)
 	if err != nil {
@@ -213,8 +195,7 @@ func controlRequest(sockPath, op string) (string, error) {
 }
 
 // Control sends one vpn-lifecycle op ("status"/"start"/"stop"/"restart"/
-// "reconnect"/"debug on"/"debug off") to a running serve process and
-// returns the resulting pid/changed state.
+// "reconnect"/"debug on"/"debug off") to a running serve and returns the resulting pid/changed state.
 func Control(sockPath, op string) (ControlResult, error) {
 	var r ControlResult
 	payload, err := controlRequest(sockPath, op)
@@ -235,8 +216,7 @@ func Control(sockPath, op string) (ControlResult, error) {
 }
 
 // Clients asks a running serve for openvpn's live client list, via serve's
-// own already-held mgmt connection — see ServeControl for why a second
-// direct dial to mgmt.sock isn't an option.
+// own held mgmt connection (see ServeControl).
 func Clients(sockPath string) ([]VPNClient, error) {
 	payload, err := controlRequest(sockPath, "clients")
 	if err != nil {
@@ -257,9 +237,8 @@ func Kill(sockPath, cn string) error {
 }
 
 // TelegramStart/Stop/Restart drive the telegram poller in a running serve;
-// TelegramGetStatus reports its current state. Same "serve must be
-// running" requirement as Control — the poller's live state, like
-// openvpn's, only exists in that process.
+// TelegramGetStatus reports its state. Requires serve running, like Control —
+// the poller's live state only exists in that process.
 func TelegramStart(sockPath string) (TelegramStatus, error) {
 	return telegramOp(sockPath, "telegram-start")
 }

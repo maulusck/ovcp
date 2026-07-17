@@ -12,21 +12,13 @@ import (
 
 const (
 	statsSampleInterval = time.Minute
-	// bounds both DB rows (~1440 samples) and the /api/stats payload; sessions
-	// are keyed by CN, not cert serial, so history survives cert revocation/
-	// reissue same as the audit log does (cn/serial recorded as plain text,
-	// no FK) — nothing to clean up when a client cert is revoked.
+	// bounds DB rows (~1440 samples) and the /api/stats payload; sessions key
+	// by CN not serial, so history survives cert revocation like the audit log does.
 	StatsRetention = 24 * time.Hour
 )
 
-// RunStatsSampler polls live VPN status on a fixed interval, persisting an
-// aggregate sample and any newly-ended client sessions, until stop is closed.
-// Runs in its own goroutine for the life of the process, so one bad tick must
-// never take the whole daemon down with it — every tick is recovered.
-//
-// ponytail: CN keys a client across polls, so a reconnect inside one
-// statsSampleInterval is invisible; the mgmt socket's async CLIENT_DISCONNECT
-// event would give exact timing if that precision is ever needed.
+// RunStatsSampler polls VPN status on a fixed interval, persisting an aggregate sample and sessions until stop closes; each tick is recovered so one bad tick can't kill the daemon.
+// ponytail: CN keys a client across polls, so a same-interval reconnect is invisible; CLIENT_DISCONNECT gives exact timing if ever needed.
 func (s *Server) RunStatsSampler(stop <-chan struct{}) {
 	prev := map[string]controller.VPNClient{}
 	t := time.NewTicker(statsSampleInterval)
@@ -80,9 +72,8 @@ func (s *Server) statsTick(prev map[string]controller.VPNClient) (next map[strin
 	return curByCN
 }
 
-// handleStats serves the global aggregate, or one client's own series when
-// ?cn= is given — same shape either way, so the frontend's chart code
-// doesn't care which it got.
+// handleStats serves the global aggregate, or one client's series when ?cn=
+// is given — same shape either way, so the frontend chart code doesn't care.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cn := r.URL.Query().Get("cn")
 	if len(cn) > pki.MaxCNLen {

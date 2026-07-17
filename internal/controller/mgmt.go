@@ -1,6 +1,6 @@
 // Package controller talks to openvpn's management socket over one held
-// connection instead of dialing per op — dialing per status poll spammed
-// openvpn.log with a connect/CMD/disconnect triple every few seconds.
+// connection instead of dialing per op, which spammed openvpn.log with
+// connect/CMD/disconnect triples every poll.
 package controller
 
 import (
@@ -62,13 +62,13 @@ func (c *Client) drop() {
 }
 
 // appErr marks a parse failure as an OpenVPN application-level response
-// (e.g. an "ERROR: ..." reply) rather than a connection/protocol failure —
-// the round trip succeeded, so exec must not drop and reconnect for these.
+// (e.g. "ERROR: ...") rather than a connection failure, so exec won't drop
+// and reconnect for it.
 type appErr struct{ error }
 
-// exec runs cmd on the held connection, retrying once against a freshly
-// dialed one on any I/O failure (self-healing a stale connection after e.g.
-// an openvpn restart) — but not on an appErr, since that round trip already succeeded.
+// exec runs cmd on the held connection, retrying once on a fresh dial after
+// any I/O failure (self-heals a stale connection, e.g. after openvpn
+// restarts) — but not on an appErr, whose round trip already succeeded.
 func (c *Client) exec(cmd string, parse func(*bufio.Reader) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -140,9 +140,8 @@ func (c *Client) Status() ([]VPNClient, error) {
 	return out, err
 }
 
-// Kill disconnects all sessions for a CN (mgmt `kill`).
-// cn is rejected if it could smuggle extra lines into the management
-// protocol (which is newline-delimited and has no other escaping).
+// Kill disconnects all sessions for a CN (mgmt `kill`). cn is rejected if it
+// could smuggle extra lines into the newline-delimited mgmt protocol.
 func (c *Client) Kill(cn string) error {
 	if strings.ContainsAny(cn, "\r\n") {
 		return fmt.Errorf("controller: invalid cn %q", cn)

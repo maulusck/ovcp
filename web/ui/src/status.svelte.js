@@ -6,8 +6,7 @@ export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: []
 let deadline = 0
 
 // fmtUptime: seconds → compact string, longest unit that keeps it readable.
-// Shared with Stats.svelte's session-duration column too — a duration never
-// reaches the day tier in practice, but the format agrees either way.
+// Shared with Stats.svelte's session-duration column.
 export function fmtUptime(sec) {
   if (!sec) return ''
   if (sec < 60) return Math.round(sec) + 's'

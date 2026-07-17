@@ -12,9 +12,8 @@ import (
 
 const pass = "correct horse battery staple"
 
-// newInstall builds a minimal but realistic ovcp data directory: a real CA,
-// a fake tls-crypt key/server.conf (backup only cares about their bytes),
-// and a store with one row so the VACUUM INTO snapshot has something in it.
+// newInstall builds a minimal ovcp data directory: a real CA, fake
+// tls-crypt key/server.conf, and a store with one row to snapshot.
 func newInstall(t *testing.T) (dir string, s *store.Store) {
 	t.Helper()
 	dir = t.TempDir()

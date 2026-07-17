@@ -19,8 +19,7 @@ var fakePid int
 func (f *fakeLife) Pid() int             { return fakePid }
 func (f *fakeLife) StartedAt() time.Time { return fakeStartedAt }
 
-// fakeStartedAt: zero by default (matches "not running"); tests that care
-// about the wire format's timestamp field set it directly.
+// fakeStartedAt is zero by default ("not running"); tests set it directly when they care.
 var fakeStartedAt time.Time
 
 const fakeTelegramAdmin = "@alice"
@@ -34,8 +33,7 @@ func (f *fakeTelegram) Status() TelegramStatus {
 	return TelegramStatus{Running: f.started > f.stopped, TokenSet: true, Admin: fakeTelegramAdmin}
 }
 
-// noMgmt is a *Client that's never actually dialed — every test below that
-// doesn't exercise "clients"/"kill" just needs a valid argument to pass.
+// noMgmt is a never-dialed *Client, for tests that just need a valid argument.
 func noMgmt(t *testing.T) *Client {
 	t.Helper()
 	return NewClient(filepath.Join(t.TempDir(), "unused-mgmt.sock"))
@@ -104,11 +102,8 @@ func TestControlDebugToggle(t *testing.T) {
 	}
 }
 
-// TestControlClientsAndKill covers the two ops added so status/kill/stats
-// -follow can get live mgmt data through serve's control socket instead of
-// dialing openvpn's own management socket a second time (see ServeControl:
-// openvpn only ever serves one connected mgmt client, and serve already
-// holds that slot).
+// TestControlClientsAndKill covers the two ops that proxy live mgmt data
+// through serve's control socket instead of a second direct mgmt dial (see ServeControl).
 func TestControlClientsAndKill(t *testing.T) {
 	mgmtSock, _ := fakeMgmt(t)
 	sock := filepath.Join(t.TempDir(), "control.sock")
@@ -161,8 +156,8 @@ func TestControlNoServer(t *testing.T) {
 	}
 }
 
-// flipLife reports a different pid before vs after the op (to exercise the
-// changed/nochange detection independent of any real process).
+// flipLife reports a different pid before vs after the op, to exercise
+// changed/nochange detection without a real process.
 type flipLife struct {
 	before, after int
 	calls         int

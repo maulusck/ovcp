@@ -2,11 +2,9 @@ package store
 
 import "time"
 
-// Sample is one tick of history: cumulative volume (BytesRecv/BytesSent, as
-// OpenVPN itself reports them) and a rate (BytesRecvRate/BytesSentRate,
-// bytes/sec since the previous sample — 0 for the first one, no baseline
-// yet). Computed once here, so the HTTP API and the CLI's own snapshot mode
-// display the exact same numbers; nothing downstream re-derives a rate.
+// Sample is one tick of history: cumulative volume plus a rate (bytes/sec
+// since the previous sample, 0 for the first). Computed once here so the
+// HTTP API and CLI snapshot mode agree; nothing downstream re-derives a rate.
 type Sample struct {
 	TS            time.Time
 	Clients       int
@@ -16,11 +14,9 @@ type Sample struct {
 	BytesSentRate uint64
 }
 
-// Rate returns bytes/sec for a counter that moved from prev to cur over dt.
-// A counter that decreased (OpenVPN resets a client's own counter on
-// reconnect) contributes 0 rather than a negative rate. The one rate
-// formula in this codebase — used below for both the global and per-client
-// history, and by the CLI's own live -follow view (cmd/ovcp/stats.go).
+// Rate returns bytes/sec for prev→cur over dt. A decreased counter (OpenVPN
+// resets on reconnect) yields 0, not negative. The one rate formula in this
+// codebase, shared by global/per-client history and the CLI's -follow view.
 func Rate(prev, cur uint64, dt time.Duration) uint64 {
 	if dt <= 0 {
 		return 0
@@ -28,11 +24,9 @@ func Rate(prev, cur uint64, dt time.Duration) uint64 {
 	return uint64(float64(ClampedDelta(prev, cur)) / dt.Seconds())
 }
 
-// ClampedDelta is cur-prev floored at 0 — the same guard Rate applies to a
-// single counter, exported so a caller summing many counters (Samples'
-// global aggregate, the CLI's global -follow line) can clamp each one
-// before summing. Summing first and clamping once would let one
-// reconnecting client's dip cancel out another client's real growth.
+// ClampedDelta is cur-prev floored at 0, exported so callers summing many
+// counters can clamp each one first — clamping after summing would let one
+// client's reconnect dip cancel out another's real growth.
 func ClampedDelta(prev, cur uint64) uint64 {
 	if cur <= prev {
 		return 0
@@ -59,11 +53,8 @@ func (s *Store) AddClientSample(ts time.Time, cn string, bytesRecv, bytesSent ui
 	return err
 }
 
-// Samples returns the whole-VPN aggregate since the given time, oldest first
-// (chart order): connected-client count, summed volume, and a rate summed
-// from each still-connected client's own clamped delta — not from
-// differencing the aggregate itself, which would dip or spike whenever a
-// client joins or leaves mid-window instead of just reflecting real traffic.
+// Samples returns the whole-VPN aggregate since the given time, oldest first: client count, volume,
+// and a rate summed from each client's clamped delta (not a diff of the aggregate, which would dip/spike on join/leave).
 func (s *Store) Samples(since time.Time) ([]Sample, error) {
 	rows, err := s.db.Query(
 		`SELECT ts, cn, bytes_recv, bytes_sent FROM client_samples

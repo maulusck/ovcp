@@ -31,9 +31,8 @@ func (s *Store) AddUser(username, passHash, role string) (int64, error) {
 	return res.LastInsertId()
 }
 
-// scanUser reads one users row (id, username, pass_hash, role, totp_secret,
-// disabled, created_at, in that order) and decrypts totp_secret. Every query
-// that touches the column routes through here, so a future one can't forget to.
+// scanUser reads a users row and decrypts totp_secret — every query touching
+// that column routes through here so none can forget to.
 func (s *Store) scanUser(r scanner) (*User, error) {
 	var u User
 	var dis int
@@ -97,8 +96,8 @@ func (s *Store) SetUserTOTP(username, secret string) error {
 }
 
 // encryptTOTP/decryptTOTP keep totp_secret encrypted at rest (AES-256-GCM,
-// store.totpKey). "" is the enrolled/not-enrolled sentinel and passes through
-// unencrypted so callers can keep comparing against it directly.
+// store.totpKey). "" is the not-enrolled sentinel, passed through unencrypted
+// so callers can compare against it directly.
 func (s *Store) encryptTOTP(secret string) (string, error) {
 	if secret == "" {
 		return "", nil

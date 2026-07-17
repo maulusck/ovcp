@@ -21,9 +21,8 @@ var schemaSQL string
 
 type Store struct {
 	db *sql.DB
-	// totpKey encrypts totp_secret at rest (AES-256-GCM). Unlike the CA key,
-	// there's no operator passphrase available at automatic login time, so
-	// this lives in a plain machine-local file next to the database.
+	// totpKey encrypts totp_secret at rest (AES-256-GCM), stored in a plain
+	// machine-local file — no operator passphrase exists at automatic login.
 	totpKey []byte
 	// fires after Audit() — the one choke point every audited action routes
 	// through, instead of hooking each call site.
@@ -65,11 +64,9 @@ type AuditEntry struct {
 }
 
 func Open(path string) (*Store, error) {
-	// 0751, not 0750: openvpn re-stats pki/crl.pem (a sibling under this
-	// same data dir) as an unprivileged user after startup, so every
-	// ancestor directory needs traversal for "other" — see pki.InitCA.
-	// The db file itself stays 0600 below so opening this dir doesn't
-	// newly expose it (sqlite's own default create mode is 0644).
+	// 0751 not 0750: openvpn re-stats pki/crl.pem as an unprivileged user,
+	// so every ancestor dir needs traversal (see pki.InitCA). DB file below
+	// stays 0600, so this doesn't newly expose it.
 	if dir := filepath.Dir(path); dir != "." {
 		if err := os.MkdirAll(dir, 0o751); err != nil {
 			return nil, err
@@ -116,9 +113,8 @@ func (s *Store) Close() error { return s.db.Close() }
 // Ping verifies the database connection is alive (health checks).
 func (s *Store) Ping() error { return s.db.Ping() }
 
-// BackupTo writes a consistent point-in-time copy of the database to path,
-// which must not already exist. Uses SQLite's own VACUUM INTO rather than a
-// raw file copy, so a backup taken while writes are in flight is never torn.
+// BackupTo copies the database to path (must not already exist) via SQLite's
+// VACUUM INTO, so a backup taken mid-write is never torn.
 func (s *Store) BackupTo(path string) error {
 	_, err := s.db.Exec("VACUUM INTO ?", path)
 	return err

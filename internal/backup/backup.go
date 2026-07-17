@@ -78,9 +78,8 @@ func Create(dataDir string, s *store.Store, w io.Writer, passphrase []byte) erro
 	return err
 }
 
-// Restore extracts an archive created by Create into dataDir. It writes no
-// server cert/key (the archive never has one) — run `ovcp renew-server`
-// right after to issue one from the restored CA.
+// Restore extracts an archive created by Create into dataDir. No server
+// cert/key is written; run `ovcp renew-server` after to issue one from the restored CA.
 func Restore(dataDir string, r io.Reader, passphrase []byte, force bool) error {
 	if !force {
 		if _, err := os.Stat(filepath.Join(dataDir, "pki", "ca.crt")); err == nil {

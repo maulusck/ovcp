@@ -1,14 +1,7 @@
 #!/sbin/openrc-run
-# shellcheck disable=SC2034  # name/description/command/... are read by
-# openrc-run itself, not by this script — not actually unused.
-# OVCP — OpenVPN control plane (owns PKI, config, and the openvpn worker).
-# Same shape as deploy/systemd/ovcp.service: one command, runs as root
-# (openvpn needs it), a foreground process supervised/respawned rather
-# than forking itself.
-# ponytail: no systemd-grade sandboxing (ProtectSystem, NoNewPrivileges,
-# MemoryDenyWriteExecute, ...) here — OpenRC has no direct equivalent short
-# of hand-rolled namespaces. Add if this ever ships somewhere that needs
-# it enforced at the init layer, not just left to openvpn's own privilege drop.
+# shellcheck disable=SC2034  # name/description/command/... are read by openrc-run itself, not unused.
+# OVCP — OpenVPN control plane, same shape as deploy/systemd/ovcp.service: one root command, supervised/respawned.
+# ponytail: no systemd-grade sandboxing here (no short OpenRC equivalent); add hand-rolled namespaces if ever needed.
 
 name="ovcp"
 description="OVCP — OpenVPN control plane"

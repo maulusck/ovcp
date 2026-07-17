@@ -59,10 +59,8 @@ func TestShouldReplyUnauthorized(t *testing.T) {
 	}
 }
 
-// TestHandleCommandCoversRegisteredSurface guards against the menu (either
-// the "/" autocomplete list or the reply-keyboard buttons) listing an op
-// handleCommand's switch doesn't actually dispatch — every identifier it
-// hands the admin must produce a reply.
+// TestHandleCommandCoversRegisteredSurface guards against the menu listing
+// an op handleCommand's switch doesn't dispatch — every identifier must reply.
 func TestHandleCommandCoversRegisteredSurface(t *testing.T) {
 	var sent int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

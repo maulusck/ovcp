@@ -108,9 +108,17 @@ func TestLogEndpoints(t *testing.T) {
 	}
 }
 
-func TestLogsDownloadZip(t *testing.T) {
+func TestLogsDownloadRequiresOperator(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
+	if r := e.req("GET", "/api/logs/download", "", false); r.StatusCode != 403 {
+		t.Fatalf("readonly must be rejected, got %s", r.Status)
+	}
+}
+
+func TestLogsDownloadZip(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
 	// openvpn.log deliberately absent — must be skipped, not an error.
 	os.MkdirAll(filepath.Join(e.dir, "logs"), 0o750)
 	os.WriteFile(filepath.Join(e.dir, "logs", "ovcp.log"), []byte("line one\nline two\n"), 0o644)
@@ -143,7 +151,7 @@ func TestLogsDownloadZip(t *testing.T) {
 // siblings and status.log must come along, and a symlink must not.
 func TestLogsDownloadWholeDir(t *testing.T) {
 	e := setup(t)
-	e.login("viewer")
+	e.login("admin")
 	logsDir := filepath.Join(e.dir, "logs")
 	os.MkdirAll(logsDir, 0o750)
 	os.WriteFile(filepath.Join(logsDir, "ovcp.log"), []byte("current\n"), 0o644)
@@ -178,7 +186,7 @@ func TestLogsDownloadWholeDir(t *testing.T) {
 // path-traversal attempt, must be silently ignored — same fixed archive.
 func TestLogsDownloadIgnoresQueryParams(t *testing.T) {
 	e := setup(t)
-	e.login("viewer")
+	e.login("admin")
 	os.MkdirAll(filepath.Join(e.dir, "logs"), 0o750)
 	os.WriteFile(filepath.Join(e.dir, "logs", "ovcp.log"), []byte("hi\n"), 0o644)
 
@@ -203,7 +211,7 @@ func TestLogsDownloadIgnoresQueryParams(t *testing.T) {
 // must carry the server CN, and status.json must decode to real, non-null data.
 func TestLogsDownloadStatusJSON(t *testing.T) {
 	e := setup(t)
-	e.login("viewer")
+	e.login("admin")
 	r := e.req("GET", "/api/logs/download", "", false)
 	if r.StatusCode != 200 {
 		t.Fatal(r.Status)
