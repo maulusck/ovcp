@@ -2,7 +2,7 @@
   import {
     api, fmtBytes, fmtRate, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus,
   } from './api.js'
-  import { vpn } from './status.svelte.js'
+  import { vpn, fmtUptime } from './status.svelte.js'
 
   // globalSamples backs "Connected clients" (a per-client scope has no
   // count) and is what "Rate"/"Volume" fall back to for scope === '' —
@@ -83,11 +83,6 @@
     const max = Math.max(...vals, 1)
     const step = 100 / (vals.length - 1)
     return vals.map((v, i) => `${(i * step).toFixed(2)},${(h - (v / max) * h).toFixed(2)}`).join(' ')
-  }
-  function fmtDur(sec) {
-    if (sec < 60) return Math.round(sec) + 's'
-    if (sec < 3600) return Math.round(sec / 60) + 'm'
-    return (sec / 3600).toFixed(1) + 'h'
   }
 </script>
 
@@ -185,7 +180,7 @@
               <td>{s.CN}{#if revokedCNs.has(s.CN)}<span class="revoked" title="Certificate revoked">revoked</span>{/if}</td>
               <td>{s.RealAddress}</td>
               <td>{new Date(s.DisconnectedAt).toLocaleString()}</td>
-              <td>{fmtDur((new Date(s.DisconnectedAt) - new Date(s.ConnectedAt)) / 1000)}</td>
+              <td>{fmtUptime((new Date(s.DisconnectedAt) - new Date(s.ConnectedAt)) / 1000)}</td>
               <td>{fmtBytes(s.BytesRecv)}</td>
               <td>{fmtBytes(s.BytesSent)}</td>
             </tr>
