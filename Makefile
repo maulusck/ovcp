@@ -1,6 +1,7 @@
-# require(cmd,human-message): fail clearly if cmd isn't on PATH. The one
-# shape every tool-presence check in this file shares.
-require = command -v $(1) >/dev/null 2>&1 || { echo "missing: $(2)"; exit 1; }
+# require(cmds,human-message): fail clearly if none of cmds (space-separated
+# alternatives, e.g. "cc gcc") are on PATH. The one shape every tool-presence
+# check in this file shares.
+require = command -v $(firstword $(1)) >/dev/null 2>&1 $(patsubst %,|| command -v % >/dev/null 2>&1,$(wordlist 2,99,$(1))) || { echo "missing: $(2)"; exit 1; }
 
 BINARY  := ovcp
 # strip a leading v (v1.2.3 tags): deb's Version field must start with a
@@ -25,6 +26,7 @@ t-armv7        = arm     7 arm-linux-gnueabihf   arm7
 t-armv7-musl   = arm     7 arm-linux-musleabihf  arm7
 t-armv6        = arm     6 arm-linux-gnueabihf   arm6
 t-armv6-musl   = arm     6 arm-linux-musleabihf  arm6
+t-amd64        = amd64   - x86_64-linux-gnu      amd64
 t-amd64-musl   = amd64   - x86_64-linux-musl     amd64
 t-riscv64      = riscv64 - riscv64-linux-gnu     riscv64
 t-riscv64-musl = riscv64 - riscv64-linux-musl    riscv64
@@ -35,24 +37,38 @@ TARGET ?= host
 GOARCH := $(word 1,$(t-$(TARGET)))
 GOARM  := $(filter-out -,$(word 2,$(t-$(TARGET))))
 CC     := $(if $(word 3,$(t-$(TARGET))),zig cc -target $(word 3,$(t-$(TARGET))))
-ARCH   := $(or $(word 4,$(t-$(TARGET))),amd64)
+# TARGET=host arch, from the go toolchain itself: single source of truth for
+# "the arch of whatever machine this runs on" (nfpm's ARCH below, and the
+# container --platform), instead of a hardcoded guess that's only ever right
+# on amd64.
+HOSTARCH := $(shell go env GOARCH)
+ARCH     := $(or $(word 4,$(t-$(TARGET))),$(HOSTARCH))
+# OCI platform string for the same TARGET: linux/<goarch>, or linux/arm/v<goarm>
+# for the arm variants. Cross (TARGET != host) needs binfmt/QEMU registered on
+# this host, same as any buildx cross build — the final stage's `apk add`
+# really executes as the target arch.
+PLATFORM := linux/$(or $(GOARCH),$(HOSTARCH))$(if $(GOARM),/v$(GOARM))
 
-.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions check-cross check-nfpm
+.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
 
 release: build completions ## UI + binary + shell completions
 
 deps: ## check build tools are on PATH (go, cc, npm, mandoc)
 	@$(call require,go,go (1.22+))
-	@command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || { echo "missing: a C compiler (CGO, for the sqlite driver)"; exit 1; }
+	@$(call require,cc gcc,a C compiler (CGO, for the sqlite driver))
 	@$(call require,npm,npm (web/ui))
 	@$(call require,mandoc,mandoc (renders docs/ovcp.8 for the UI's Docs tab))
 	@echo "build deps OK"
 
 CTR := $(shell command -v podman || command -v docker)
 
-image: ## build all-in-one container image (podman, else docker)
-	@test -n "$(CTR)" || { echo "error: neither podman nor docker found"; exit 1; }
-	$(CTR) build -t ovcp --build-arg VERSION=$(VERSION) -f Containerfile .
+check-image: check-target
+	@$(call require,podman docker,podman or docker (container image build))
+	@test "$(TARGET)" = host || $(CTR) run --rm --platform $(PLATFORM) alpine:latest true >/dev/null 2>&1 || \
+	  { echo "error: this host can't run $(PLATFORM) containers (no binfmt/QEMU registered for it) - see: docker run --privileged --rm tonistiigi/binfmt --install all"; exit 1; }
+
+image: check-image ## build all-in-one container image for TARGET's arch (default: this host's own); podman, else docker
+	$(CTR) build --platform $(PLATFORM) -t ovcp --build-arg VERSION=$(VERSION) -f Containerfile .
 
 check-nfpm:
 	@$(call require,nfpm,nfpm (packaging))
@@ -76,8 +92,10 @@ ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the 
 	cd web/ui && npm run build
 	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 
-check-cross:
+check-target:
 	@test "$(TARGET)" = host -o -n "$(t-$(TARGET))" || { echo "unknown TARGET=$(TARGET) (see: make help)"; exit 1; }
+
+check-cross: check-target
 	@test -z '$(CC)' || { $(call require,zig,zig (cross-compiler for TARGET=$(TARGET))); }
 
 build: check-cross ui ## build bin/ovcp (CGO for sqlite; see help for TARGET= to cross-build via zig)
