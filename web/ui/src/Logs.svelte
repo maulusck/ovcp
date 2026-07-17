@@ -269,7 +269,7 @@
 </div>
 
 <style>
-  .panel-actions { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
+  .panel-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
   /* 600px min caps it at 2 columns even on the widened logs main */
   .logs-grid { grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); }
   .logs-grid :global(.card) { padding: 10px 14px; }
@@ -286,12 +286,11 @@
   @media (min-width: 701px) {
     .scrollbox { height: calc(100vh - 320px); }
   }
-  /* shared by all three panels — denser than the default table since rows are numerous;
-     first column (time) never wraps, last (message/detail) wraps anywhere. */
+  /* shared by all three panels; no cell wraps — scrollbox scrolls horizontally instead,
+     same as Users/Certs tables, so long lines stay on one line and stay readable. */
   .logtable { font-size: 12px; }
   .logtable th, .logtable td { padding: 2px 8px; }
-  .logtable td:first-child { white-space: nowrap; }
-  .logtable td:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .logtable td { white-space: pre; }
   .logtable tbody tr:hover { background: var(--line); }
   .logtable .log-error { color: var(--bad); }
   .logtable .log-warn { color: var(--amber); }
