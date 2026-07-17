@@ -91,7 +91,7 @@
       <label>Username <span class="req">*</span>
         <input bind:value={form.username} required autocomplete="off" />
       </label>
-      <label>Password <span class="req">*</span> (min {minLen} chars, {minClasses} of upper/lower/digit/symbol)
+      <label>Password <span class="req">*</span>
         <input type="password" bind:value={form.password} required minlength={minLen} />
       </label>
       <label>Role
@@ -102,6 +102,7 @@
         </select>
       </label>
     </div>
+    <p class="muted small">Password: min {minLen} chars, {minClasses} of upper/lower/digit/symbol.</p>
     <button type="submit">Add user</button>
   </form>
 

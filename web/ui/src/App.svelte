@@ -68,9 +68,10 @@
     e.preventDefault()
     err = ''
     try {
-      user = await api('POST', '/login', {
+      await api('POST', '/login', {
         Username: login.username, Password: login.password, TOTP: login.totp,
       })
+      await boot() // /login's response lacks version/platform fields; /me has them
       login = { username: '', password: '', totp: '' }; step = 'creds'
     } catch (x) {
       if (x.error === 'totp required') { step = 'totp'; return }
