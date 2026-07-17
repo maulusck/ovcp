@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -123,18 +124,20 @@ func helpText() string {
 
 type versionOut struct {
 	Version        string `json:"version"`
+	Platform       string `json:"platform"`    // runtime.GOOS/GOARCH — always accurate, never injected
+	BuildTarget    string `json:"buildTarget"` // Makefile TARGET/Containerfile arch, e.g. "host", "arm64-musl"
 	OpenVPNVersion string `json:"openvpnVersion,omitempty"`
 	OpenVPNPath    string `json:"openvpnPath,omitempty"`
 }
 
 func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		out := versionOut{Version: version}
+		out := versionOut{Version: version, Platform: runtime.GOOS + "/" + runtime.GOARCH, BuildTarget: buildTarget}
 		if v, p, ok := controller.OpenVPNVersion(); ok {
 			out.OpenVPNVersion, out.OpenVPNPath = v, p
 		}
 		output(out, func(o versionOut) {
-			fmt.Println("ovcp", o.Version)
+			fmt.Println("ovcp", o.Version, paint(ansiCyan, "("+o.Platform+", "+o.BuildTarget+")"))
 			if o.OpenVPNVersion == "" {
 				fmt.Println("openvpn: not found on PATH")
 			} else {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/auth"
@@ -70,7 +71,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u *store.U
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
 	jsonOK(w, map[string]any{
 		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote,
-		"version": s.Version, "openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
+		"version": s.Version, "buildTarget": s.BuildTarget, "platform": runtime.GOOS + "/" + runtime.GOARCH,
+		"openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
 		"minSecretLen": auth.MinSecretLen, "minSecretClasses": auth.MinSecretClasses,
 	})
 }

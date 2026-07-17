@@ -33,6 +33,7 @@ type Server struct {
 	ServerKey      string         // openvpn server key path (renew-server target)
 	DefaultRemote  string         // OVCP_SERVER_CN / server cert CN; default client remote
 	Version        string         // build version, for the status export
+	BuildTarget    string         // Makefile TARGET/Containerfile arch this binary was built for, e.g. "host", "arm64-musl"
 	OpenVPNVersion string         // "" if openvpn isn't on PATH
 	OpenVPNPath    string         // "" if openvpn isn't on PATH
 	UI             fs.FS          // built frontend; nil = API only

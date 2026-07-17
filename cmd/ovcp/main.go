@@ -37,6 +37,12 @@ import (
 
 var version = "dev"
 
+// buildTarget is the Makefile TARGET (or Containerfile arch/libc) this
+// binary was built for — "host" for a plain native build, e.g. "arm64-musl"
+// for a cross build. Set via -X main.buildTarget=... alongside version;
+// never guessed at runtime (glibc vs musl isn't reliably introspectable).
+var buildTarget = "host"
+
 // logLevel backs the default logger; "ovcp debug on|off" flips it at
 // runtime via the control socket, no restart needed.
 var logLevel = new(slog.LevelVar)
@@ -216,6 +222,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 		UI:             web.Dist(),
 		DebugLevel:     logLevel,
 		Version:        version,
+		BuildTarget:    buildTarget,
 		OpenVPNVersion: ovVersion,
 		OpenVPNPath:    ovPath,
 	}

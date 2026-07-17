@@ -8,7 +8,6 @@ BINARY  := ovcp
 # digit, and this feeds nfpm.yaml's version: field for every package format.
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
 VERSION := $(if $(VERSION),$(VERSION),dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
 # GNU Coding Standards: lowercase prefix, uppercase DESTDIR (staged
 # installs). Default /usr, not /usr/local, to match nfpm.yaml's own paths.
 prefix  ?= /usr
@@ -43,6 +42,10 @@ CC     := $(if $(word 3,$(t-$(TARGET))),zig cc -target $(word 3,$(t-$(TARGET))))
 # on amd64.
 HOSTARCH := $(shell go env GOARCH)
 ARCH     := $(or $(word 4,$(t-$(TARGET))),$(HOSTARCH))
+# main.buildTarget mirrors main.version below: baked in at compile time so
+# `ovcp version` can report exactly what it was built for, same TARGET name
+# whether that's "host" or a cross target - never guessed at runtime.
+LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.buildTarget=$(TARGET)
 # OCI platform string for the same TARGET: linux/<goarch>, or linux/arm/v<goarm>
 # for the arm variants. Cross (TARGET != host) needs binfmt/QEMU registered on
 # this host, same as any buildx cross build — the final stage's `apk add`
@@ -68,7 +71,7 @@ CACHE_HINT := podman/docker builder prune reclaims the persistent build cache (i
 check-image: check-target
 	@$(call require,podman docker,podman or docker (container image build))
 	@test "$(TARGET)" = host || $(CTR) run --rm --platform $(PLATFORM) docker.io/library/alpine:latest true >/dev/null 2>&1 || \
-	  { echo "error: this host can't run $(PLATFORM) containers (no binfmt/QEMU registered for it) - see: docker run --privileged --rm tonistiigi/binfmt --install all"; exit 1; }
+	  { echo "error: this host can't run $(PLATFORM) containers (no working QEMU/binfmt for it) - see docs/BUILDING.md, 'Cross-building an image needs QEMU/binfmt'"; exit 1; }
 
 image: check-image ## build all-in-one container image for TARGET's arch (default: this host's own); podman, else docker
 	@echo "using persistent zig/go build cache - $(CACHE_HINT)"

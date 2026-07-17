@@ -202,7 +202,7 @@
     <button type="button" class="ver-toggle" onclick={() => (verLong = !verLong)}
       title={verLong ? 'Show less' : 'Show openvpn version'}>
       {#if verLong}
-        ovcp {user.version || 'dev'} · openvpn {user.openvpnVersion || 'not found'}{user.openvpnPath ? ` (${user.openvpnPath})` : ''}
+        ovcp {user.version || 'dev'} · {user.platform || '?'}{user.buildTarget ? ` (${user.buildTarget})` : ''} · openvpn {user.openvpnVersion || 'not found'}{user.openvpnPath ? ` (${user.openvpnPath})` : ''}
       {:else}
         ovcp {user.version || 'dev'}
       {/if}

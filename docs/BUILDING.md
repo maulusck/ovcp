@@ -108,15 +108,61 @@ and fails immediately, with a clear message and the fix, if that doesn't
 work:
 
 ```
-error: this host can't run linux/arm64 containers (no binfmt/QEMU registered for it)
-  see: docker run --privileged --rm tonistiigi/binfmt --install all
+error: this host can't run linux/arm64 containers (no working QEMU/binfmt for it)
+  see docs/BUILDING.md, 'Cross-building an image needs QEMU/binfmt'
 ```
 
-That one-time host setup (works for both podman and docker) is what CI's
-release pipeline also relies on, via `docker/setup-qemu-action`. There is no
-way around this requirement for this Containerfile's structure — it's
-inherent to any cross-arch image build whose final stage does real
-package-manager work, not a gap in the Makefile.
+Inherent to any cross-arch image build whose final stage does real
+package-manager work — not a Makefile gap. CI never hits it:
+`docker/setup-qemu-action` registers emulation against a real root
+`dockerd`, the path that reliably works. On a workstation, two independent
+causes — check in order:
+
+**1. Nothing registered.**
+
+```sh
+ls /proc/sys/fs/binfmt_misc/ | grep qemu   # empty = nothing registered
+```
+
+Fix — same command regardless of distro or engine, needs real root:
+
+```sh
+sudo docker run --privileged --rm docker.io/tonistiigi/binfmt --install all
+```
+
+Podman/Homebrew installs living outside `sudo`'s restricted PATH
+(`could not find a working conmon binary`) need it preserved explicitly:
+
+```sh
+sudo env PATH="$PATH" $(which podman) run --privileged --rm docker.io/tonistiigi/binfmt --install all
+```
+
+**2. Registered, but this engine still can't use it.**
+
+Some distros (Debian/Ubuntu's `qemu-user-binfmt`) register a *wrapper* that
+dynamically re-execs the real interpreter instead of a static binary — the
+kernel's `F` flag only caches the wrapper's own fd, so if its further exec
+doesn't resolve inside the target container's near-empty rootfs, it still
+fails. `tonistiigi/binfmt` avoids this with genuinely static interpreters,
+which is why cause 1's fix uses it over a distro package either way.
+
+Rootless podman/docker can separately fail to use an emulator that's
+correctly registered and genuinely static — an unprivileged-user-namespace
+limitation, not project-specific. Confirm the registration first
+(`cat /proc/sys/fs/binfmt_misc/qemu-aarch64`, `flags:` should include `F`);
+if it still fails under your normal user, retry as root:
+
+```sh
+sudo env PATH="$PATH" make image TARGET=arm64
+```
+
+(`sudo make ...` alone isn't enough — Make resolves `$(CTR)` with root's own
+PATH first, hitting the same problem one layer up.)
+
+Neither fix persists: `/proc/sys/fs/binfmt_misc` lives in kernel memory only
+and rebuilds from installed packages on every boot. A reboot fully reverts
+both; if a distro package's boot hook re-registers its wrapper afterward,
+cause 2 can resurface and needs re-running.
 
 ### Unknown TARGET fails clearly, not silently
 

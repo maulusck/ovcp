@@ -56,7 +56,7 @@ RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
       *) echo "unsupported platform $TARGETARCH$TARGETVARIANT" >&2; exit 1 ;; \
     esac; \
     CC="zig cc -target $ZIG" CGO_ENABLED=1 GOOS=linux GOARCH=$TARGETARCH GOARM=$GOARM \
-      go build -ldflags "-s -w -X main.version=${VERSION}" -o /ovcp ./cmd/ovcp
+      go build -ldflags "-s -w -X main.version=${VERSION} -X main.buildTarget=${TARGETARCH}${TARGETVARIANT}-musl" -o /ovcp ./cmd/ovcp
 
 FROM docker.io/library/alpine:latest
 # refresh base packages at build time, not just whatever alpine:latest last
