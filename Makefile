@@ -24,6 +24,7 @@ t-arm64-musl   = arm64   - aarch64-linux-musl    arm64
 t-armv7        = arm     7 arm-linux-gnueabihf   arm7
 t-armv7-musl   = arm     7 arm-linux-musleabihf  arm7
 t-armv6        = arm     6 arm-linux-gnueabihf   arm6
+t-armv6-musl   = arm     6 arm-linux-musleabihf  arm6
 t-amd64-musl   = amd64   - x86_64-linux-musl     amd64
 t-riscv64      = riscv64 - riscv64-linux-gnu     riscv64
 t-riscv64-musl = riscv64 - riscv64-linux-musl    riscv64

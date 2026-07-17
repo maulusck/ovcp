@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [host, arm64, armv7, armv6, riscv64, amd64-musl, arm64-musl, armv7-musl, riscv64-musl]
+        target: [host, arm64, armv7, armv6, riscv64, amd64-musl, arm64-musl, armv7-musl, armv6-musl, riscv64-musl]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 } # git describe needs tag history for VERSION
