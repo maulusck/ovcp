@@ -74,10 +74,9 @@ make image                    # this host's own arch
 make image TARGET=arm64       # cross-build a specific arch
 ```
 
-The image is always Alpine-based (musl) regardless of which `TARGET` row you
-name — `arm64` and `arm64-musl` produce the same image, since the
-Containerfile's own build stage picks musl unconditionally. Use whichever
-name you'd naturally reach for.
+The image is always Alpine-based (musl) regardless of which `TARGET` row is named
+— `arm64` and `arm64-musl` produce the same image, since the Containerfile's
+build stage picks musl unconditionally. Either name is accepted interchangeably.
 
 ### Native vs. cross, and what `--platform` actually does
 
@@ -109,7 +108,7 @@ work:
 
 ```
 error: this host can't run linux/arm64 containers (no working QEMU/binfmt for it)
-  see docs/BUILDING.md, 'Cross-building an image needs QEMU/binfmt'
+  see docs/BUILD.md, 'Cross-building an image needs QEMU/binfmt'
 ```
 
 Inherent to any cross-arch image build whose final stage does real
@@ -150,7 +149,7 @@ Rootless podman/docker can separately fail to use an emulator that's
 correctly registered and genuinely static — an unprivileged-user-namespace
 limitation, not project-specific. Confirm the registration first
 (`cat /proc/sys/fs/binfmt_misc/qemu-aarch64`, `flags:` should include `F`);
-if it still fails under your normal user, retry as root:
+if it still fails under a normal user account, retry as root:
 
 ```sh
 sudo env PATH="$PATH" make image TARGET=arm64
@@ -243,8 +242,7 @@ building *one* local image to run or inspect, not for cutting a release.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `unknown TARGET=foo (see: make help)` | Typo, or `foo` isn't in the table above | `make help` lists every valid name |
-| `missing: zig (cross-compiler for TARGET=...)` | Cross build, zig not installed | Install zig, or use `TARGET=host` if you're already on that arch |
+| `missing: zig (cross-compiler for TARGET=...)` | Cross build, zig not installed | Install zig, or use `TARGET=host` when already on that arch |
 | `error: this host can't run linux/X containers (no binfmt/QEMU registered for it)` | Cross image build, no binfmt handlers | `docker run --privileged --rm tonistiigi/binfmt --install all` (one-time, host-wide) |
 | `no value specified for --platform=` | Very old podman/docker invoked *without* going through `make image` (e.g. a hand-typed `podman build` from the Containerfile's header comment) | Use `make image`, which always passes `--platform` explicitly, or add `--platform=linux/$(uname -m)` yourself |
 | Image build takes 6+ minutes every time | Build cache got pruned, or this is the first build on this host | Expected once; subsequent builds reuse `id=ovcp-build-cache` and drop to ~2 minutes |
-| `.deb`/`.rpm` built on an arm64/riscv64 host is labeled `amd64` | Pre-existing bug, fixed — if you still see this, `ARCH` isn't picking up `go env GOARCH` | Check `go env GOARCH` returns the real arch, and that `make`'s `ARCH` variable reflects it (`make -n deb TARGET=host \| grep ARCH=`) |

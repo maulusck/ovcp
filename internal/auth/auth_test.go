@@ -34,11 +34,11 @@ func TestSecretOK(t *testing.T) {
 		v  string
 		ok bool
 	}{
-		{"short1!", false},   // under MinSecretLen
-		{"aaaaaaaa", false},  // 8 chars, 1 class (lower only)
-		{"11111111", false},  // 8 chars, 1 class (digit only)
-		{"hunter22", true},   // 8 chars, 2 classes (lower+digit)
-		{"changeme!", true},  // 2 classes (lower+symbol)
+		{"short1!", false},    // under MinSecretLen
+		{"aaaaaaaa", false},   // 8 chars, 1 class (lower only)
+		{"11111111", false},   // 8 chars, 1 class (digit only)
+		{"hunter22", true},    // 8 chars, 2 classes (lower+digit)
+		{"changeme!", true},   // 2 classes (lower+symbol)
 		{"Str0ng!Pass", true}, // 4 classes
 	}
 	for _, c := range cases {
@@ -169,9 +169,7 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
-// TestRateLimitAcrossIPs: Limiter alone buckets on username+ip, so a brute
-// force spread across many source IPs never trips it. UserLimiter buckets on
-// username alone and catches this.
+// TestRateLimitAcrossIPs: per-IP Limiter alone misses spread brute force; UserLimiter buckets on username alone to catch it.
 func TestRateLimitAcrossIPs(t *testing.T) {
 	a := svc(t)
 	addUser(t, a, "dana", "password1", "readonly")
@@ -183,9 +181,7 @@ func TestRateLimitAcrossIPs(t *testing.T) {
 	}
 }
 
-// TestLimiterSweepBoundsMap: a key that fails once and is never rechecked
-// must not linger forever — Fail sweeps expired entries so the map stays
-// bounded instead of growing for the process's whole life.
+// TestLimiterSweepBoundsMap: a never-rechecked key must not linger — Fail sweeps expired entries.
 func TestLimiterSweepBoundsMap(t *testing.T) {
 	l := NewLimiter(5, time.Minute)
 	now := time.Now()

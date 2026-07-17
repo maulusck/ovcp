@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-// fakeOpenVPN writes a tiny script that ignores openvpn's args and just
-// sleeps, standing in for the real binary so we can exercise the child
-// lifecycle (spawn, signal, reap) without openvpn or root.
+// fakeOpenVPN stands in for the real binary (ignores args, just sleeps) so
+// tests can exercise spawn/signal/reap without openvpn or root.
 func fakeOpenVPN(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "fake-openvpn.sh")
@@ -86,8 +85,8 @@ func TestReconnectRequiresRunning(t *testing.T) {
 	}
 }
 
-// crashingOpenVPN exits immediately every launch, simulating a crash (or an
-// external `kill -9`) rather than a clean, requested stop.
+// crashingOpenVPN exits immediately every launch, simulating a crash rather
+// than a clean, requested stop.
 func crashingOpenVPN(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "crashing-openvpn.sh")
@@ -150,8 +149,8 @@ func TestStopDoesNotAutoRestart(t *testing.T) {
 	}
 }
 
-// TestOpenVPNVersion stubs a script named exactly "openvpn" on PATH (the
-// LookPath match), so it never depends on real openvpn being installed.
+// TestOpenVPNVersion stubs a script named "openvpn" on PATH so it never
+// depends on the real binary being installed.
 func TestOpenVPNVersion(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "openvpn")
@@ -167,8 +166,7 @@ func TestOpenVPNVersion(t *testing.T) {
 	}
 }
 
-// TestOpenVPNVersionNotFound: no openvpn on PATH must report ok=false, not
-// an error — this is advisory, not a precondition.
+// TestOpenVPNVersionNotFound: no openvpn on PATH must report ok=false, not an error.
 func TestOpenVPNVersionNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, _, ok := OpenVPNVersion(); ok {

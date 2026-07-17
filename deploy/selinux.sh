@@ -1,7 +1,6 @@
 #!/bin/sh
-# SELinux (RHEL/Fedora): openvpn runs confined (openvpn_t) and cannot read
-# the non-standard /var/lib/ovcp without labels. ovcp itself runs
-# unconfined_service_t and needs nothing. Adjust OVCP_DATA if you moved it.
+# SELinux (RHEL/Fedora): confined openvpn (openvpn_t) can't read the non-standard
+# /var/lib/ovcp without labels; ovcp itself runs unconfined and needs nothing.
 set -e
 # no-op unless SELinux is enforcing/permissive and the tooling exists
 command -v getenforce >/dev/null 2>&1 || exit 0

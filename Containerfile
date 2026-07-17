@@ -1,24 +1,5 @@
-# OVCP all-in-one image: ovcp (as root) owns the PKI and starts openvpn.
-#
-# First boot (one-shot init; passphrase/password default to "changeme!",
-# override with -e OVCP_CA_PASSPHRASE=... -e OVCP_USER_PASSWORD=...):
-#   podman run --rm -v ovcp:/var/lib/ovcp ovcp init -server-cn vpn.example.com
-#
-# Run:
-#   podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
-#     -p 1194:1194/udp -p 127.0.0.1:8443:8443 \
-#     -v ovcp:/var/lib/ovcp ovcp
-#
-# Split UI and VPN across interfaces with -p bind addresses, e.g. UI on the
-# LAN interface, VPN on the WAN interface:
-#   -p 203.0.113.7:1194:1194/udp -p 192.168.1.10:8443:8443
-#
-# One local image (native or TARGET= to cross-build; adds --platform, a
-# persistent build cache, and preflight checks a raw podman/docker build
-# below won't have) - see `make image` and docs/BUILDING.md.
-#
-# A real multi-arch manifest, all 5 platforms in one push (what CI does):
-#   docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64 -f Containerfile .
+# OVCP all-in-one image: ovcp (as root) owns the PKI and starts openvpn. Run
+# examples: README.md "Container"; TARGET=/cross-build/cache details: docs/BUILD.md.
 FROM --platform=$BUILDPLATFORM docker.io/library/node:22-alpine AS ui
 WORKDIR /src/web/ui
 COPY web/ui/package*.json ./
@@ -26,10 +7,8 @@ RUN npm ci
 COPY web/ui .
 RUN npm run build
 
-# Runs on the builder's own platform (not emulated) and cross-compiles via
-# zig — same mechanism the Makefile uses for every non-native TARGET, one
-# tool for every arch instead of a cross-toolchain per arch. Always musl:
-# this image's final stage is Alpine.
+# Runs on the builder's own platform (not emulated), cross-compiling via zig — same mechanism the Makefile
+# uses. Always musl (final stage is Alpine).
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.22-alpine AS build
 ARG VERSION=dev
 ARG TARGETARCH TARGETVARIANT
@@ -40,12 +19,8 @@ RUN go mod download
 COPY . .
 COPY --from=ui /src/web/dist ./web/dist
 RUN mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
-# cache mount, not a layer: zig's per-target libc/compiler-rt objects and
-# go's build cache would otherwise be rebuilt from scratch on every build,
-# since COPY . . above invalidates this RUN on any source change and an
-# ephemeral container never keeps ~/.cache between runs. Lives in the engine's
-# own build-cache store, not this checkout; reclaim it with
-# `podman builder prune` / `docker builder prune`.
+# cache mount, not a layer: without it, COPY . . above forces a from-scratch zig/go rebuild on every
+# source change. See docs/BUILD.md, "The persistent build cache".
 RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
     case "$TARGETARCH$TARGETVARIANT" in \
       amd64)   ZIG=x86_64-linux-musl ;; \

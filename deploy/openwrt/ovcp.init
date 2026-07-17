@@ -1,13 +1,6 @@
 #!/bin/sh /etc/rc.common
-# OVCP — OpenVPN control plane (owns PKI, config, and the openvpn worker).
-# Same shape as deploy/systemd/ovcp.service and deploy/openrc/ovcp.initd: one
-# command, runs as root (openvpn needs it), respawned by procd rather than
-# forking itself.
-#
-# The apk package (shared with Alpine) ships deploy/openrc/ovcp.initd at
-# /etc/init.d/ovcp by default — wrong interpreter on OpenWrt (no
-# openrc-run). deploy/postinstall.sh swaps this file in when /etc/rc.common
-# (procd's own marker) is present.
+# OVCP — OpenVPN control plane, same shape as the systemd/OpenRC units: one root command, respawned by procd.
+# apk ships openrc/ovcp.initd by default (wrong interpreter here); postinstall.sh swaps this in when /etc/rc.common (procd's marker) is present.
 
 START=95
 STOP=05

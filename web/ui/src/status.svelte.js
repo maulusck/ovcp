@@ -6,8 +6,7 @@ export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: []
 let deadline = 0
 
 // fmtUptime: seconds → compact string, longest unit that keeps it readable.
-// A process-uptime figure (hours to weeks), not a client-session one
-// (seconds to hours) — same idea as Stats.svelte's fmtDur, one more tier.
+// Process uptime (hours to weeks), not client-session (seconds to hours) — one more tier than Stats.svelte's fmtDur.
 function fmtUptime(sec) {
   if (!sec) return ''
   if (sec < 60) return Math.round(sec) + 's'

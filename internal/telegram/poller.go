@@ -23,15 +23,9 @@ const (
 // sensitive audit actions worth a push notification.
 var notifyActions = map[string]bool{"revoke": true, "user_add": true, "user_del": true, "ca_rotate": true}
 
-// unauthorizedBlockThreshold: an unrecognized sender gets a 403 reply for
-// this many attempts, then goes fully silent — no reply, no API call, no
-// log line per message — for the rest of the process's life. Blocking (not
-// just rate-limiting) unrecognized senders keeps a spam burst from turning
-// into an equal burst of outbound sendMessage calls, which is the actual
-// abuse surface here (Telegram can rate-limit the bot's own token for that).
-// ponytail: in-memory, unbounded map growth in theory — a real attacker
-// would need a new Telegram account per ~3 messages to grow it meaningfully,
-// so no eviction/TTL yet; add one if this ever shows up as a real problem.
+// unauthorizedBlockThreshold: an unrecognized sender gets this many 403s,
+// then goes silent for the process's life, capping the sendMessage burst a spam wave would trigger.
+// ponytail: unbounded in-memory map, no eviction/TTL; add one if abused.
 const unauthorizedBlockThreshold = 3
 
 type Poller struct {
@@ -117,10 +111,8 @@ func (p *Poller) Restart() error {
 	return p.Start()
 }
 
-// consecutive getUpdates failures before escalating from Debug to Warn — a
-// blip logs quietly, a sustained outage (bad token revoked, network down)
-// gets loud. Never gives up retrying: unlike a crashed child process, a
-// failed poll costs nothing but the next 5s wait.
+// getUpdatesWarnThreshold: consecutive failures before escalating Debug to
+// Warn. Never gives up retrying — a failed poll only costs the next 5s wait.
 const getUpdatesWarnThreshold = 3
 
 func (p *Poller) loop(ctx context.Context, b *bot, admin string) {
@@ -153,10 +145,8 @@ func (p *Poller) loop(ctx context.Context, b *bot, admin string) {
 	}
 }
 
-// shouldReplyUnauthorized tracks id's unauthorized attempts and reports
-// whether this one still gets a 403 reply. Once id crosses
-// unauthorizedBlockThreshold it's blocked for good (this process's life):
-// no reply, no log, no further bookkeeping for that id.
+// shouldReplyUnauthorized tracks id's attempts and reports whether this one
+// still gets a 403 reply; past unauthorizedBlockThreshold it's blocked for good.
 func (p *Poller) shouldReplyUnauthorized(id int64, username string) bool {
 	p.abuseMu.Lock()
 	defer p.abuseMu.Unlock()
@@ -233,10 +223,8 @@ const (
 	cmdReconnect = "reconnect"
 )
 
-// Reply-keyboard button labels double as the text Telegram sends back on tap
-// (there's no callback_data on a reply keyboard, unlike inline buttons) — so
-// they're matched directly in handleCommand's switch below, same as the
-// slash form.
+// Reply-keyboard labels double as the tap-back text (no callback_data on a
+// reply keyboard), so handleCommand's switch matches them directly, like the slash form.
 const (
 	lblStart     = "▶ start"
 	lblStop      = "⏹ stop"
@@ -245,21 +233,17 @@ const (
 	lblStatus    = "📊 status"
 )
 
-// opsKeyboard is the persistent reply keyboard /menu (and /start) hands out
-// — real buttons that replace the device keyboard, not a one-off attached to
-// a single message. Status alone on its row: it's the one you check without
-// touching anything else, gets the wide button.
+// opsKeyboard is the persistent reply keyboard /menu (and /start) hands out.
+// Status gets its own wide row: it's the one you check without acting.
 var opsKeyboard = rkb(
 	[]string{lblStart, lblStop},
 	[]string{lblRestart, lblReconnect},
 	[]string{lblStatus},
 )
 
-// botCommands drives Telegram's own "/" autocomplete menu (setMyCommands,
-// registered on every poller start) — handleCommand's switch dispatches on
-// these same consts, so the menu can't list something it doesn't handle.
-// Same suite as the reply keyboard: whichever's faster, typing `/stop` or
-// tapping the button, both land on the same op.
+// botCommands drives Telegram's "/" autocomplete menu (registered via
+// setMyCommands on every start), using the same consts handleCommand
+// dispatches on, so the menu can't list something unhandled.
 var botCommands = []botCommand{
 	{cmdStatus, "pid, uptime, client count"},
 	{cmdMenu, "hand out the control-panel keyboard"},
@@ -325,9 +309,7 @@ func (p *Poller) statusText() string {
 }
 
 // Notify best-effort pushes text to the linked admin chat. No-op if not
-// configured or not yet linked (chat id only known after first contact,
-// unless the admin is configured as a numeric id, which doubles as the
-// private-chat id directly).
+// configured or not yet linked (chat id is only known after first contact).
 func (p *Poller) Notify(text string) {
 	admin, _ := p.s.GetSetting(keyAdmin)
 	token, _ := p.s.GetSetting(keyToken)

@@ -14,9 +14,8 @@ import (
 	"time"
 )
 
-// writeExpiredAdminCert plants a pre-expired self-signed cert at the paths
-// EnsureAdminTLS reads, so we can exercise the "past NotAfter" regeneration
-// branch without waiting five years.
+// writeExpiredAdminCert plants a pre-expired cert at the paths EnsureAdminTLS
+// reads, to exercise the "past NotAfter" regeneration branch without waiting five years.
 func writeExpiredAdminCert(t *testing.T, dir, cn string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {

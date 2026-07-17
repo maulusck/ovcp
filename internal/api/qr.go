@@ -8,9 +8,8 @@ import (
 	"rsc.io/qr"
 )
 
-// qrDataURI renders text as a QR code SVG data URI, for inline <img> use.
-// Reuses the qr encoder already vendored for `ovcp user totp`'s terminal
-// output instead of pulling in a JS QR library.
+// qrDataURI renders text as a QR code SVG data URI for inline <img> use,
+// reusing the encoder already vendored for `ovcp user totp` instead of a JS QR library.
 func qrDataURI(text string) (string, error) {
 	code, err := qr.Encode(text, qr.L)
 	if err != nil {

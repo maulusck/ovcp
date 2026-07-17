@@ -1,15 +1,14 @@
 <script>
   import { tick } from 'svelte'
   import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus } from './api.js'
-  let { isAdmin } = $props()
+  let { isAdmin, canOperate } = $props()
 
   // one shared format for every timestamp in this file (audit + both log
   // tables) — 24h, no AM/PM, no date/time comma, browser locale otherwise.
   const fmtTime = (d) => d.toLocaleString(undefined, { hour12: false }).replace(',', '')
 
-  // Splits a line into time/level/msg: ovcp's "time=... level=X ..." text,
-  // ovcp's -log-json JSON-lines form, or openvpn's "YYYY-MM-DD HH:MM:SS ...".
-  // fmtTime reformats the timestamp so every panel shares one display format.
+  // Splits a line into time/level/msg: ovcp's "time=... level=X ..." text, its -log-json
+  // form, or openvpn's "YYYY-MM-DD HH:MM:SS ..." — fmtTime normalizes the timestamp either way.
   function parseLine(line) {
     let raw = '', msg = line, level
     if (line[0] === '{') {
@@ -35,9 +34,8 @@
     return { time: d && !isNaN(d) ? fmtTime(d) : '', level, msg }
   }
 
-  // the two log panels render as a table like the audit panel; audit stays
-  // bespoke in one way (newest-first, no autoscroll) since it's real
-  // structured rows, not parsed text.
+  // the two log panels render as a table like the audit panel; audit stays bespoke
+  // (newest-first, no autoscroll) since it's real structured rows, not parsed text.
   const LOGS = [
     { id: 'openvpn', title: 'OpenVPN log', file: 'openvpn.log' },
     { id: 'ovcp', title: 'OVCP log', file: 'ovcp.log' },
@@ -58,9 +56,8 @@
     { audit: true, openvpn: false, ovcp: false },
     JSON.parse(localStorage.getItem(OPEN_KEY) || '{}')))
 
-  // clamp a box's height to its content: CSS fit-content doesn't work in
-  // the vertical axis in Firefox, so measure instead (also re-clamps a
-  // resize drag on pointerup, so it can't stretch past the log's end).
+  // clamp a box's height to content: CSS fit-content doesn't work vertically in Firefox,
+  // so measure instead (also re-clamps a resize drag on pointerup).
   function fitToContent(el) {
     if (!el) return
     const cur = el.offsetHeight
@@ -124,9 +121,8 @@
   const auditText = () => filteredEntries.map(e =>
     `${fmtTime(new Date(e.TS))} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
 
-  // the archive bundle takes no request input at all (fixed server-side
-  // filenames) — per-log copy/download stays entirely client-side instead
-  // of adding a parametrized single-file endpoint for it.
+  // archive download has fixed server-side filenames, no request input — per-log
+  // copy/download stays client-side instead of adding a parametrized endpoint.
   const downloadAllLogs = () => (window.location.href = '/api/logs/download')
 
   const downloadText = (filename, text) => downloadBlob(new Blob([text], { type: 'text/plain' }), filename)
@@ -205,8 +201,8 @@
     {refreshing ? 'Refreshing…' : 'Refresh now'}</button>
   <button type="button" class="ghost" onclick={() => setAllOpen(true)}>Expand all</button>
   <button type="button" class="ghost" onclick={() => setAllOpen(false)}>Collapse all</button>
-  <button type="button" class="ghost" onclick={downloadAllLogs}
-    title="Full audit package: logs, audit trail, VPN/cert/user/config status — unencrypted, for security/ops review">
+  <button type="button" class="ghost" onclick={downloadAllLogs} disabled={!canOperate}
+    title={canOperate ? "Full audit package: logs, audit trail, VPN/cert/user/config status — unencrypted, for security/ops review" : "Operator or higher"}>
     Download audit package</button>
 </div>
 
@@ -285,16 +281,13 @@
     height: 260px; min-height: 60px; max-height: 80vh;
     overflow: auto; resize: vertical; cursor: grab;
   }
-  /* desktop: fill down toward the window bottom by default instead of a
-     cramped fixed 260px (fitToContent still shrinks it for short logs);
-     mobile keeps the compact fixed height — same breakpoint as App.svelte's
-     nav collapse, so it stays the one stacked-card mobile layout. */
+  /* desktop: fill toward window bottom instead of a cramped fixed 260px (fitToContent
+     still shrinks for short logs); mobile keeps the fixed height, App.svelte's nav breakpoint. */
   @media (min-width: 701px) {
     .scrollbox { height: calc(100vh - 320px); }
   }
-  /* shared by all three panels (audit + openvpn + ovcp) — denser than the
-     default table, rows are numerous. first column (time) never wraps; last
-     column (message/detail, the free-text one) wraps anywhere. */
+  /* shared by all three panels — denser than the default table since rows are numerous;
+     first column (time) never wraps, last (message/detail) wraps anywhere. */
   .logtable { font-size: 12px; }
   .logtable th, .logtable td { padding: 2px 8px; }
   .logtable td:first-child { white-space: nowrap; }

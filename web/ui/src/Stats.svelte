@@ -4,12 +4,8 @@
   } from './api.js'
   import { vpn } from './status.svelte.js'
 
-  // globalSamples backs "Connected clients" (a per-client scope has no
-  // count) and is what "Rate"/"Volume" fall back to for scope === '' —
-  // scopeSamples only diverges from it when a specific CN is picked, and
-  // even then it's the exact same /api/stats?cn= shape, computed the exact
-  // same way server-side (internal/store's Rate/ClampedDelta) — the UI never
-  // re-derives a rate from raw counters itself.
+  // globalSamples backs "Connected clients" and is Rate/Volume's fallback for scope === '';
+  // scopeSamples only diverges when a CN is picked, same /api/stats?cn= shape either way.
   let globalSamples = $state([])
   let scopeSamples = $state([])
   let sessions = $state([])
@@ -52,9 +48,8 @@
   loadGlobal()
   $effect(() => { loadScoped() }) // re-runs on scope change and on every globalSamples refresh alike
 
-  // the selected client can disconnect (it drops out of the dropdown, which
-  // is populated live from vpn.clientList) — fall back to Global instead of
-  // silently polling a CN that's no longer an option.
+  // the selected client can disconnect and drop out of the (live) dropdown — fall back
+  // to Global instead of silently polling a CN that's no longer an option.
   $effect(() => {
     if (scope && vpn.up && !vpn.clientList.some((c) => c.CN === scope)) scope = ''
   })

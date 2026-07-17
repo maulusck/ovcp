@@ -1,8 +1,7 @@
 package main
 
-// Black-box CLI tests: main() calls die() (os.Exit(1)), unsafe in-process,
-// so these drive the compiled binary as a subprocess. `serve`/`vpn start`
-// spawning real openvpn isn't covered here — internal/api/controller do that.
+// Black-box CLI tests: main() calls die() (os.Exit(1)), unsafe in-process, so
+// these drive the compiled binary as a subprocess. serve/vpn start spawning real openvpn is covered elsewhere.
 
 import (
 	"bytes"
@@ -122,9 +121,8 @@ func TestJSONEnvVar(t *testing.T) {
 	}
 }
 
-// TestVersionJSON: -json version must parse, and always carries a version
-// (openvpn fields are omitempty — absent, not null/empty-string, when
-// openvpn isn't on PATH, which this test env generally doesn't have).
+// TestVersionJSON: -json version must parse, always carrying a version
+// (openvpn fields are omitempty, absent rather than null when not on PATH).
 func TestVersionJSON(t *testing.T) {
 	r := run(t, nil, "-json", "version")
 	if r.code != 0 {
@@ -137,8 +135,7 @@ func TestVersionJSON(t *testing.T) {
 }
 
 // TestJSONErrors guards die()'s -json branch: a fatal error must land as
-// {"error":"..."} on stdout (not stderr's plain "error: ..." text), so a
-// script parsing stdout gets a consistent shape on failure too.
+// {"error":"..."} on stdout, not stderr's plain text, so scripts get a consistent shape on failure too.
 func TestJSONErrors(t *testing.T) {
 	r := run(t, nil, "-json", "revoke")
 	if r.code == 0 {
@@ -153,13 +150,8 @@ func TestJSONErrors(t *testing.T) {
 	}
 }
 
-// TestJSONFullAutomation is the "Ansible module" scenario: every secret a
-// command needs supplied only via env var (readSecret's automation path,
-// see readSecret's doc comment), -json throughout, zero terminal involved
-// (run()'s child gets no tty, same as a real automation environment).
-// Guards that no command leaks prompt text onto stdout ahead of its JSON,
-// or writes anything to stderr on success — a script parsing stdout by
-// position, not just validity, must never see stray bytes.
+// TestJSONFullAutomation is the "Ansible module" scenario: every secret via
+// env var, -json throughout, no tty. Guards that no command leaks prompt text onto stdout or writes to stderr on success.
 func TestJSONFullAutomation(t *testing.T) {
 	env := withEnv(baseEnv(t), "OVCP_JSON=1")
 	assertCleanJSON := func(t *testing.T, r result, v any) {
@@ -203,11 +195,8 @@ func TestJSONFullAutomation(t *testing.T) {
 	assertCleanJSON(t, run(t, addBob, "user", "add", "-name", "bob", "-role", "operator"), &userAddOut{})
 }
 
-// TestJSONMissingSecretNoTTY backs the man page's "no env var, no terminal:
-// fails fast, on any command" claim — every readSecret call site is this
-// same function, so proving it for both the confirm=false (single prompt:
-// issue) and confirm=true (prompt+confirm: rotate-ca) shapes covers every
-// call site without re-testing all of them individually.
+// TestJSONMissingSecretNoTTY backs "no env var, no terminal: fails fast, on
+// any command" — covering readSecret's confirm=false and confirm=true shapes covers every call site.
 func TestJSONMissingSecretNoTTY(t *testing.T) {
 	env := withEnv(baseEnv(t), "OVCP_JSON=1")
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -240,11 +229,8 @@ func TestHelp(t *testing.T) {
 }
 
 // TestEveryCommandHelp is the whole-CLI-surface guard: every command in the
-// commands table (the one dispatch/helpText/completion all already share)
-// must have a working, non-empty -h that names itself — table-driven so a
-// newly added command is covered for free, not just whichever ones other
-// tests happen to exercise. This is exactly the class of bug that motivated
-// it: user/backup/telegram's -h used to print nothing at all.
+// table must have a working, non-empty -h that names itself, table-driven so
+// new commands are covered for free (user/backup/telegram's -h used to print nothing).
 func TestEveryCommandHelp(t *testing.T) {
 	for _, c := range commands {
 		r := run(t, nil, c.name, "-h")
@@ -257,9 +243,8 @@ func TestEveryCommandHelp(t *testing.T) {
 	}
 }
 
-// TestDataFlagPosition covers the -data CLI flag itself (every other test
-// uses OVCP_DATA instead). -data is parsed before the subcommand name, so
-// it must come first: ovcp -data DIR <command>, like git -C / docker -H.
+// TestDataFlagPosition covers -data itself (every other test uses OVCP_DATA).
+// It's parsed before the subcommand name, so it must come first: ovcp -data DIR <command>, like git -C / docker -H.
 func TestDataFlagPosition(t *testing.T) {
 	dir := t.TempDir()
 	env := []string{
@@ -274,12 +259,9 @@ func TestDataFlagPosition(t *testing.T) {
 	}
 }
 
-// TestGlobalFlagsBeforeCommand guards the bug this session fixed: several
-// global flags stacked before the command (including -debug and -json,
-// which replaced -log-json) must still dispatch correctly and be stripped
-// the same way completion strips them (see TestCompleteAfterGlobalFlags).
-// -mgmt (renamed from -sock, alongside serve's new -ctrl) must still reach
-// server.conf.
+// TestGlobalFlagsBeforeCommand guards a real bug: several global flags
+// stacked before the command must still dispatch and strip correctly (see
+// TestCompleteAfterGlobalFlags), and -mgmt must still reach server.conf.
 func TestGlobalFlagsBeforeCommand(t *testing.T) {
 	dir := t.TempDir()
 	env := []string{
@@ -339,10 +321,8 @@ func TestLifecycle(t *testing.T) {
 	}
 }
 
-// TestStats covers the snapshot (non-follow) path against an empty history
-// — no live openvpn in this test binary, so samples/sessions are always
-// empty, but that's enough to exercise the text/json branches and the
-// -follow/-json guard without needing a real mgmt socket.
+// TestStats covers the snapshot (non-follow) path against an empty history —
+// no live openvpn here, but enough to exercise the text/json branches and the -follow/-json guard.
 func TestStats(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -494,9 +474,8 @@ func TestUserListSort(t *testing.T) {
 	}
 }
 
-// TestIssueValidation covers the two footguns `issue` used to allow
-// silently: an encrypted server key (unbootable, openvpn can't prompt for
-// it non-interactively) and a non-positive validity (already-expired cert).
+// TestIssueValidation covers two footguns `issue` used to allow silently: an
+// encrypted server key (unbootable, can't prompt non-interactively) and a non-positive validity.
 func TestIssueValidation(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -536,10 +515,8 @@ func TestInitValidation(t *testing.T) {
 	}
 }
 
-// TestExportFollowsConfig covers the bug where `export` ignored the
-// persisted server config (as set via the web UI's Settings tab) and always
-// rendered a profile pointing at the hardcoded 1194/udp/AES-256-GCM
-// defaults regardless of what the server was actually running.
+// TestExportFollowsConfig covers a bug where `export` ignored the persisted
+// server config and always rendered the hardcoded 1194/udp/AES-256-GCM defaults regardless of what the server ran.
 func TestExportFollowsConfig(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -662,9 +639,8 @@ func TestRotateCA(t *testing.T) {
 	}
 }
 
-// TestNoFlagCommandsAcceptHelp: commands with no flags of their own still
-// parse an (empty) FlagSet, so -h and unknown flags behave like every
-// other command instead of being silently ignored.
+// TestNoFlagCommandsAcceptHelp: commands with no flags still parse an empty
+// FlagSet, so -h and unknown flags behave normally instead of being ignored.
 func TestNoFlagCommandsAcceptHelp(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -700,9 +676,8 @@ func TestRenewServer(t *testing.T) {
 	}
 }
 
-// TestBackupRestore mirrors the documented disaster-recovery flow: create,
-// restore into a fresh dir (wrong passphrase must fail), confirm no server
-// cert came along, renew-server, and confirm existing cert metadata survived.
+// TestBackupRestore mirrors the disaster-recovery flow: create, restore into
+// a fresh dir (wrong passphrase must fail), renew-server, confirm cert metadata survived.
 func TestBackupRestore(t *testing.T) {
 	src := baseEnv(t)
 	if r := run(t, src, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -742,8 +717,7 @@ func TestBackupRestore(t *testing.T) {
 	}
 
 	// dstDir is now initialized: restore must refuse without -force, and
-	// -force only works before the positional FILE arg (flag.Parse stops at
-	// the first non-flag arg) — usage text got that backwards once already.
+	// -force only works before the positional FILE arg (flag.Parse stops at the first non-flag arg).
 	if r := run(t, restore, "backup", "restore", backupFile); r.code == 0 {
 		t.Fatalf("restore over an initialized dir without -force should fail: %+v", r)
 	}
@@ -813,14 +787,9 @@ func TestPasswordYOLOCLI(t *testing.T) {
 	}
 }
 
-// TestUnreachableServe covers the CLI's error wiring when no `serve` process
-// is up: every remote-control command should fail cleanly with a nonzero
-// exit rather than hang or panic.
+// TestUnreachableServe: remote-control commands must fail cleanly, not hang, when no `serve` process is up.
 // TestTelegramTokenValidation covers what's reachable without a real
-// Telegram API call: -admin is required, and an unknown telegram op errors.
-// The success path (valid token accepted, saved) is covered in
-// internal/telegram's own tests against a mocked API — this binary talks to
-// the real api.telegram.org, which a unit test must not depend on.
+// Telegram API call: -admin required, unknown op errors. Success path is covered in internal/telegram's own tests (mocked API).
 func TestTelegramTokenValidation(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -834,13 +803,8 @@ func TestTelegramTokenValidation(t *testing.T) {
 	}
 }
 
-// TestFlagAfterOp guards against a real bug this exact shape hit once:
-// vpn/debug/telegram used to register -ctrl on the FlagSet main()'s
-// dispatch loop parses before the op is even known, so "ovcp vpn start
-// -ctrl X" (flag after the op — the normal git/docker/kubectl order)
-// silently parsed nothing past "start" and fell back to the default
-// socket instead of erroring or using X. Asserting the error names the
-// bogus path proves -ctrl was actually parsed, not silently dropped.
+// TestFlagAfterOp guards a real bug: -ctrl on the FlagSet main() parses
+// before the op is known meant "ovcp vpn start -ctrl X" fell back to the default socket. The error naming the bogus path proves it parsed.
 func TestFlagAfterOp(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {

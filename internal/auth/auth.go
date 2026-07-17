@@ -57,10 +57,7 @@ const (
 
 	// MinSecretLen: CA passphrase + user passwords, CLI/env/API alike.
 	MinSecretLen = 8
-	// MinSecretClasses: how many of upper/lower/digit/symbol must appear.
-	// 2 catches the actually-weak case (e.g. "aaaaaaaa", "11111111")
-	// without forcing a specific mix — a zxcvbn-style strength estimate
-	// would judge better but pulls in a dependency for a single-server tool.
+	// MinSecretClasses: how many of upper/lower/digit/symbol must appear; 2 catches weak-but-long passwords without a strength-estimate dependency.
 	MinSecretClasses = 2
 )
 
@@ -97,9 +94,7 @@ func SecretErr(label string) string {
 		label, MinSecretLen, MinSecretClasses)
 }
 
-// SecretYOLOEnv, when set to anything non-empty, waives SecretOK — CLI
-// prompts and the API/UI alike, since `serve` inherits its process env.
-// For the consenting adults who'd rather not be told twice.
+// SecretYOLOEnv, if set, waives SecretOK everywhere (serve inherits process env).
 const SecretYOLOEnv = "OVCP_YOLO_PASSWORD"
 
 // SecretYOLO reports whether the escape hatch above is set.

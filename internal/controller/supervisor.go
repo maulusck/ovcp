@@ -13,12 +13,9 @@ import (
 	"time"
 )
 
-// OpenVPNVersion resolves the openvpn binary from PATH (same lookup Start
-// uses) and runs "openvpn --version" for its first line's version token.
-// ok is false if openvpn isn't found or produced no parseable output — this
-// is advisory (`ovcp version`, the admin UI), never a precondition, so no
-// error to propagate. Exit code is deliberately ignored: it isn't consistent
-// across openvpn versions/distros, but stdout is populated either way.
+// OpenVPNVersion resolves openvpn from PATH and parses its version line.
+// ok=false (not an error) if not found or unparseable — this is advisory
+// only (`ovcp version`, admin UI), never a precondition.
 func OpenVPNVersion() (version, path string, ok bool) {
 	p, err := exec.LookPath("openvpn")
 	if err != nil {
@@ -40,12 +37,9 @@ type Supervisor struct {
 	LogPath    string        // child stdout/stderr are appended here
 	StopWait   time.Duration // graceful SIGTERM timeout; default 5s
 
-	// CrashRestartDelay/CrashLoopWindow/CrashLoopMax tune the auto-restart
-	// on an unexpected exit (crash, OOM-kill, `kill -9` from outside us):
-	// wait CrashRestartDelay then restart, but give up once CrashLoopMax
-	// such exits happen inside one CrashLoopWindow — a bad config that
-	// makes openvpn exit immediately shouldn't spin us in a tight loop.
-	// Defaults: 3s / 60s / 5.
+	// CrashRestartDelay/CrashLoopWindow/CrashLoopMax tune auto-restart on an
+	// unexpected exit: wait Delay, restart, give up after Max such exits in
+	// one Window (so a broken config can't spin-loop us). Defaults: 3s/60s/5.
 	CrashRestartDelay time.Duration
 	CrashLoopWindow   time.Duration
 	CrashLoopMax      int
@@ -86,9 +80,8 @@ func (s *Supervisor) Pid() int {
 	return s.cmd.Process.Pid
 }
 
-// StartedAt returns when the current openvpn child was launched, or the
-// zero time when not running — cleared by the reaper on every exit path
-// (clean stop or crash) alongside running/cmd, so it never lags Pid().
+// StartedAt returns when the current child was launched, or zero when not
+// running — cleared by the reaper alongside running/cmd, so it never lags Pid().
 func (s *Supervisor) StartedAt() time.Time {
 	s.stMu.Lock()
 	defer s.stMu.Unlock()
@@ -209,8 +202,7 @@ func (s *Supervisor) supervise(launched chan<- error) {
 }
 
 // autoRestart re-launches openvpn after an unexpected exit, unless it's
-// crash-looping (CrashLoopMax exits inside CrashLoopWindow) or the VPN has
-// been explicitly stopped/restarted in the meantime.
+// crash-looping or the VPN was explicitly stopped/restarted meanwhile.
 func (s *Supervisor) autoRestart() {
 	delay, window, max := s.CrashRestartDelay, s.CrashLoopWindow, s.CrashLoopMax
 	if delay == 0 {
@@ -253,8 +245,7 @@ func (s *Supervisor) autoRestart() {
 }
 
 // stop sends SIGTERM, waits for the reaper, and escalates to SIGKILL on
-// timeout. A child that exits on its own between the snapshot and the signal
-// is fine: done is already closed and the select returns at once.
+// timeout (a child that already exited just returns via the closed done chan).
 func (s *Supervisor) stop() error {
 	cmd, done, running := s.snapshot()
 	if !running {

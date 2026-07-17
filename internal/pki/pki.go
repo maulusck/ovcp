@@ -33,13 +33,8 @@ type RevokedEntry struct {
 	RevokedAt time.Time
 }
 
-// MaxCNLen bounds every CN this package issues a cert for: RFC 5280's own
-// upper limit on an X.509 CommonName (ub-common-name = 64 bytes), the type
-// a cn here actually is. Enforced once, here, at issuance — the one place
-// a CN longer than this could ever come to exist — so every other bound
-// downstream (internal/api's stats endpoint, which rejects a ?cn= query
-// past this same length) can never see a legitimately-issued CN it treats
-// as invalid.
+// MaxCNLen mirrors RFC 5280's CommonName limit (ub-common-name = 64 bytes),
+// enforced once at issuance so downstream consumers never see a CN that violates it.
 const MaxCNLen = 64
 
 func New(dir string) *PKI { return &PKI{Dir: dir} }
@@ -57,10 +52,7 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 	if _, err := os.Stat(p.caCertPath()); err == nil {
 		return ErrCAExists
 	}
-	// 0701, not 0700: openvpn re-stats crl.pem on every handshake after
-	// dropping to an unprivileged user (ovpnconf's user/group directives),
-	// so this dir needs traversal for "other" — the private keys inside
-	// stay protected by their own 0600, regardless of the dir's bits.
+	// 0701 not 0700: openvpn drops privileges and needs traversal to re-stat crl.pem.
 	if err := os.MkdirAll(p.Dir, 0o701); err != nil {
 		return err
 	}
@@ -97,8 +89,7 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 	if err := os.WriteFile(p.caCertPath(), pemEncode("CERTIFICATE", der), 0o644); err != nil {
 		return err
 	}
-	// Start with an empty CRL so openvpn can be configured with crl-verify
-	// from day one.
+	// empty CRL so crl-verify can be configured from day one
 	return p.RegenCRL(nil, passphrase)
 }
 
@@ -159,9 +150,7 @@ const (
 	KindClient
 )
 
-// Issue creates a keypair + certificate signed by the CA.
-// The private key is generated here and returned; it is the caller's job to
-// hand it to the operator (client bundle) or write it for openvpn (server).
+// Issue creates a keypair + certificate signed by the CA; the private key is returned, not persisted.
 func (p *PKI) Issue(kind CertKind, cn string, days int, passphrase []byte) (*IssuedCert, error) {
 	if n := len(cn); n == 0 || n > MaxCNLen {
 		return nil, fmt.Errorf("pki: cn must be 1-%d bytes, got %d", MaxCNLen, n)
@@ -211,8 +200,7 @@ func (p *PKI) Issue(kind CertKind, cn string, days int, passphrase []byte) (*Iss
 	}, nil
 }
 
-// RegenCRL signs a fresh CRL covering all given revocations.
-// Callers pass the full revoked set from the store (source of truth).
+// RegenCRL signs a fresh CRL from the full revoked set (store is source of truth).
 func (p *PKI) RegenCRL(revoked []RevokedEntry, passphrase []byte) error {
 	caCert, caKey, err := p.loadCA(passphrase)
 	if err != nil {
@@ -260,9 +248,7 @@ func parseCertPEM(data []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-// EncryptKeyPEM converts an unencrypted PKCS#8 EC key PEM into a
-// password-protected "EC PRIVATE KEY" PEM (AES-256-CBC, OpenVPN/OpenSSL
-// compatible). OpenVPN prompts for the password on connect.
+// EncryptKeyPEM wraps a PKCS#8 EC key as a password-protected EC PRIVATE KEY PEM (AES-256-CBC) for OpenVPN's connect-time prompt.
 func EncryptKeyPEM(keyPEM []byte, password string) ([]byte, error) {
 	block, _ := pem.Decode(keyPEM)
 	if block == nil {

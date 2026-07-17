@@ -37,19 +37,16 @@ import (
 
 var version = "dev"
 
-// buildTarget is the Makefile TARGET (or Containerfile arch/libc) this
-// binary was built for — "host" for a plain native build, e.g. "arm64-musl"
-// for a cross build. Set via -X main.buildTarget=... alongside version;
-// never guessed at runtime (glibc vs musl isn't reliably introspectable).
+// buildTarget is the Makefile TARGET/Containerfile arch-libc this binary was
+// built for ("host" for native). Set via -X main.buildTarget=...; never guessed at runtime.
 var buildTarget = "host"
 
 // logLevel backs the default logger; "ovcp debug on|off" flips it at
 // runtime via the control socket, no restart needed.
 var logLevel = new(slog.LevelVar)
 
-// ANSI color codes, the one place any of them is spelled out as a number —
-// both the log-level colorizer below and commands.go's paint() build on
-// these instead of repeating "31"/"32"/etc.
+// ANSI color codes, the one place any of them is spelled out as a number;
+// the log-level colorizer below and commands.go's paint() both build on these.
 const (
 	ansiCyan   = "36"
 	ansiGreen  = "32"
@@ -68,8 +65,7 @@ var logLevelColor = map[string]string{
 	"level=ERROR": ansi(ansiRed, "level=ERROR"),
 }
 
-// noColor is the single on/off switch for every ANSI escape ovcp ever
-// writes — log level tags and the `-json`-adjacent table commands alike.
+// noColor is the single on/off switch for every ANSI escape ovcp ever writes.
 // Set from $NO_COLOR or -no-color in main, before anything prints.
 var noColor = os.Getenv("NO_COLOR") != ""
 
@@ -94,10 +90,8 @@ func (colorStderr) Write(p []byte) (int, error) {
 	return len(p), err
 }
 
-// jsonOut is ovcp's one output-format switch: JSON instead of human text,
-// for whatever the current command emits (slog's wire format for `serve`,
-// output()'s JSON branch for everything else). $OVCP_JSON seeds it, same
-// pattern as $NO_COLOR/noColor; -json in main() can still turn it on.
+// jsonOut is ovcp's one output-format switch (slog's wire format for
+// `serve`, output()'s JSON branch elsewhere). $OVCP_JSON seeds it; -json can still turn it on.
 var jsonOut = os.Getenv("OVCP_JSON") != ""
 
 func logWriter() io.Writer {
@@ -118,20 +112,16 @@ func newLogHandler(w io.Writer) slog.Handler {
 }
 
 // cliContext bundles the runtime dependencies command bodies need. Built
-// once in main(), after flag.Parse, and passed explicitly rather than
-// closed over, so the commands table itself (name/usage/sub/run) stays a
-// plain package-level var usable before Parse runs (flag.Usage needs it
-// during Parse, for -h).
+// once in main() after flag.Parse and passed explicitly (not closed over),
+// so commands stays a plain package-level var usable before Parse runs (flag.Usage needs it during Parse, for -h).
 type cliContext struct {
 	dataDir   string
 	p         *pki.PKI
 	openStore func() *store.Store
 }
 
-// globalFlags registers ovcp's flags that precede the command name — used
-// both for main's real parsing and (on a throwaway FlagSet) by completeArgs,
-// so the two can't drift on what counts as a global flag vs. the command
-// name, same pattern as command.flagNames() below.
+// globalFlags registers ovcp's flags that precede the command name — used by
+// both main's real parsing and completeArgs's throwaway FlagSet, so the two can't drift.
 func globalFlags(fs *flag.FlagSet) (dataDir *string, noColor, jsonOut, debug *bool) {
 	dataDir = fs.String("data", cmp.Or(os.Getenv("OVCP_DATA"), "/var/lib/ovcp"), "data directory")
 	noColor = fs.Bool("no-color", false, "disable ANSI colors (also: $NO_COLOR)")
@@ -172,10 +162,8 @@ func main() {
 	for _, c := range commands {
 		if c.name == args[0] {
 			fs := newFlags(c.name)
-			// c.usage is the same string helpText()/completion already use — sub-op
-			// flags (user/backup/telegram) live on FlagSets created inside the
-			// command's closure, so they don't exist yet for -h's default printer to
-			// find; this line is what -h actually has to show either way.
+			// sub-op flags (user/backup/telegram) live on FlagSets created inside
+			// the closure, so they don't exist yet for -h's default printer to find.
 			fs.Usage = func() {
 				fmt.Fprintf(os.Stderr, "usage: ovcp %s %s\n", c.name, c.usage)
 				fs.PrintDefaults()
@@ -261,11 +249,8 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 		}(addr, ln)
 	}
 
-	// bring the worker up as a reaped foreground child, and expose the
-	// control socket so `ovcp vpn`/`ovcp status`/`ovcp kill`/`ovcp stats
-	// -follow` can all drive/query us while we run — see ServeControl for
-	// why mgmt is threaded through here rather than each of those dialing
-	// openvpn's own management socket a second time.
+	// bring the worker up as a reaped foreground child, and expose the control
+	// socket so vpn/status/kill/stats -follow can drive/query us — see ServeControl.
 	ctl, err := controller.ServeControl(ctrl, sup, mgmt, logLevel, tg)
 	die(err)
 	defer ctl.Close()
@@ -355,8 +340,7 @@ func issueCert(p *pki.PKI, kind pki.CertKind, cn string, days int, pass []byte, 
 }
 
 // writeServerCert persists a freshly issued server cert+key to the paths
-// `serve` reads and records it in the store. Shared by init (first issue)
-// and renew-server (reissue in place); takes effect on the next `vpn restart`.
+// `serve` reads and records it in the store; shared by init and renew-server, takes effect on next `vpn restart`.
 func writeServerCert(pp paths, s *store.Store, ic *pki.IssuedCert) error {
 	if err := os.WriteFile(pp.ServerCert, ic.CertPEM, 0o644); err != nil {
 		return err
@@ -436,10 +420,9 @@ func requirePositive(n int, flag string) {
 	}
 }
 
-// die is the one exit path every command's fatal error routes through — so
-// -json needs handling in exactly one place, matching jsonErr's {"error":..}
-// shape on the web API. Flag-parsing errors (unknown/malformed flags) bypass
-// this, straight from the stdlib flag package: always plain text on stderr.
+// die is the one exit path every command's fatal error routes through,
+// matching jsonErr's {"error":..} shape on the web API. Flag-parsing errors
+// bypass this, straight from stdlib flag: always plain text on stderr.
 func die(err error) {
 	if err == nil {
 		return

@@ -18,9 +18,8 @@ import (
 	"github.com/ovcp/ovcp/internal/telegram"
 )
 
-// handleHealthz is unauthenticated: systemd/container probes have no
-// session to offer. A DB ping is the cheapest real signal that serve is
-// actually working, not just that the listener is up.
+// handleHealthz is unauthenticated (probes have no session); a DB ping is
+// the cheapest real signal serve is actually working, not just listening.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.Ping(); err != nil {
 		jsonErr(w, 503, "db unreachable")
@@ -170,9 +169,8 @@ func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int)
 	return ic, nil
 }
 
-// handleRenewServer reissues the openvpn server cert in place (same CN, new
-// serial), writing to the exact paths `serve` reads. Admin-only: it changes
-// the server's own identity and needs a `vpn restart` to take effect.
+// handleRenewServer reissues the server cert in place (same CN, new serial)
+// at the paths `serve` reads. Admin-only; needs a `vpn restart` to take effect.
 func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct {
 		Passphrase string
@@ -316,9 +314,8 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request, u *stor
 	jsonOK(w, s.LoadConfig())
 }
 
-// mergedConfig decodes r's body onto cur, keeping the server-owned path
-// fields from cur untouched — shared by PUT (apply) and preview (dry-run)
-// so they can't drift on what's client-editable.
+// mergedConfig decodes r's body onto cur, keeping server-owned path fields
+// untouched — shared by PUT and preview so they can't drift on what's editable.
 func mergedConfig(cur ovpnconf.Config, r *http.Request) (ovpnconf.Config, bool) {
 	in := cur
 	if !decode(r, &in) {
@@ -352,9 +349,8 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, u *stor
 	jsonOK(w, in)
 }
 
-// handleConfigPreview is handleConfigPut's dry run: same merge + validation,
-// but renders a diff against the persisted config instead of writing
-// anything, so a bad edit shows up before a restart makes it live.
+// handleConfigPreview is handleConfigPut's dry run: same merge+validation,
+// but diffs against the persisted config instead of writing.
 func (s *Server) handleConfigPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cur := s.LoadConfig()
 	in, ok := mergedConfig(cur, r)
@@ -451,9 +447,8 @@ func (s *Server) handleCertDownload(w http.ResponseWriter, r *http.Request, u *s
 	w.Write(c.CertPEM)
 }
 
-// UserSummary strips the auth-relevant-but-not-secret fields off store.User
-// (never the password/TOTP secret) — shared by /users list, the status
-// export, and the CLI's `user list -json`: one place decides what's safe to leak.
+// UserSummary strips store.User to its non-secret fields — shared by /users,
+// the status export, and `user list -json` so one place decides what's safe to leak.
 type UserSummary struct {
 	Username  string
 	Role      string
@@ -577,8 +572,7 @@ func (s *Server) handleUserPassword(w http.ResponseWriter, r *http.Request, u *s
 }
 
 // handleUserTOTPEnroll mirrors `ovcp user totp`: generates+stores a fresh
-// secret immediately (no separate confirm step) and returns it plus a QR
-// code for display.
+// secret immediately (no confirm step) and returns it with a QR code.
 func (s *Server) handleUserTOTPEnroll(w http.ResponseWriter, r *http.Request, u *store.User) {
 	name := r.PathValue("name")
 	sec, err := auth.TOTPGenerateSecret()

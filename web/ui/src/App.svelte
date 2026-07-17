@@ -24,9 +24,8 @@
   const TAB_KEY = 'ovcp_tab'
   const savedTab = localStorage.getItem(TAB_KEY)
 
-  // source repo — the OVCP logo links here (same host this build's own
-  // remote points at; hardcoded, not a runtime git lookup, since a
-  // packaged/container install ships the binary, not a .git directory).
+  // source repo the OVCP logo links to; hardcoded, not a runtime git lookup, since a
+  // packaged/container install ships the binary, not a .git directory.
   const REPO_URL = 'https://goldrake.bot.nu/c/maulusck/ovcp.git'
 
   let user = $state(null)
@@ -193,7 +192,7 @@
     {:else if tab === 'users'}
       <Users {isAdmin} me={user.username} minLen={user.minSecretLen} minClasses={user.minSecretClasses} />
     {:else if tab === 'logs'}
-      <Logs {isAdmin} />
+      <Logs {isAdmin} {canOperate} />
     {:else}
       <Docs />
     {/if}
@@ -222,10 +221,8 @@
     --bad: #d06a5a;
     --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   }
-  /* amber is the accent/highlight color (button bg, role-pill, warn) — it must
-     read as distinct from both --text and --ok, or accents disappear into
-     body text / success turns indistinguishable from warning. WCAG AA
-     (4.5:1) checked against ink/panel for every var below. */
+  /* amber is the accent/highlight color; must stay distinct from --text and --ok or
+     accents vanish into body text / warning reads as success. WCAG AA (4.5:1) checked below. */
   :global(:root[data-theme='matrix']) {
     --ink: #000000; --panel: #0a0f0a; --line: #14351a; --text: #8fe38f; --dim: #4f9a54;
     --amber: #c8ff3d; --ok: #33ff33; --bad: #ff5555;
@@ -234,17 +231,16 @@
     --ink: #050200; --panel: #120a02; --line: #3d2400; --text: #d99a00; --dim: #b37500;
     --amber: #ffb000; --ok: #c8d400; --bad: #ff3b1f;
   }
-  /* readability comes from the contrast fix above, not a glow — a body-wide
-     bloom just blurred small text further. Glow stays a titles-only flourish. */
+  /* readability comes from the contrast fix above, not glow — a body-wide bloom just
+     blurs small text; glow stays a titles-only flourish. */
   :global(:root[data-theme='matrix'] h1),
   :global(:root[data-theme='matrix'] h2),
   :global(:root[data-theme='retrocrt'] h1),
   :global(:root[data-theme='retrocrt'] h2) {
     text-shadow: 0 0 6px currentColor;
   }
-  /* Frutiger Aero = Vista-era glossy "Aero" chrome + Frutiger's nature
-     photography (blue sky meeting green grass) — teal bridges the two
-     instead of a plain aero blue; panel/ink toned down from icy white. */
+  /* Frutiger Aero = Vista-era glossy chrome + Frutiger's nature photography (sky meeting
+     grass) — teal bridges the two instead of plain aero blue; panel/ink toned down from icy white. */
   :global(:root[data-theme='frutiger']) {
     --ink: #e3f2f0; --panel: #f5fbf8; --line: #cfe8de; --text: #163a30; --dim: #4f6f63;
     --amber: #0d6b80; --ok: #1c7a46; --bad: #c9392f;
@@ -254,9 +250,8 @@
        partway down a scrolled page (the old document-relative version had one). */
     background: linear-gradient(180deg, #bfe3f5 0%, #eef7f2 55%, #dcefe0 100%) fixed;
   }
-  /* teletext: Ceefax/closed-caption coding — a bright hue per role on
-     near-black, cyan included alongside yellow/magenta/green/red for the
-     real 80s teletext palette (white/yellow/cyan/green/magenta/red). */
+  /* teletext: Ceefax/closed-caption coding, a bright hue per role on near-black —
+     the real 80s teletext palette (white/yellow/cyan/green/magenta/red). */
   :global(:root[data-theme='teletext']) {
     --ink: #000000; --panel: #050006; --line: #3a1f45; --text: #ffdd00; --dim: #29c2c2;
     --amber: #e619e6; --ok: #33ff66; --bad: #ff3333;
@@ -304,18 +299,14 @@
     font-family: system-ui, sans-serif; font-size: 12px;
   }
   :global(td) { padding: 7px 10px; border-bottom: 1px solid var(--line); }
-  /* every data row hoverable (Certs/Dashboard/Users/Stats alike) — one rule,
-     not a per-table hover style. Explicit row height is the fix for rows
-     drifting apart in height: a row-action <button> nested in a <td> stacks
-     its own padding+border on top of the td's, so an action row is taller
-     than a plain-text row unless something clamps them to one shared floor. */
+  /* every data row hoverable — one shared rule, not per-table. Explicit row height fixes
+     rows drifting apart: a row-action <button>'s own padding+border stacks on the td's,
+     making an action row taller than a plain-text row unless clamped to one floor. */
   :global(tbody tr:hover) { background: var(--line); }
   :global(tbody tr:hover button.ghost) { border-color: var(--dim); }
   :global(tbody tr) { height: 42px; }
-  /* row-action buttons (Certs' Renew/Revoke, Users' Set password/2FA/Enable/
-     Delete, Dashboard's Disconnect) — same "operator button" family as
-     Settings' Start/Stop/Restart/Backup, just shorter to fit inside a
-     table row instead of a toolbar. */
+  /* row-action buttons (Certs/Users/Dashboard) — same "operator button" family as
+     Settings' Start/Stop/Restart/Backup, just shorter to fit a table row. */
   :global(td button.ghost) { padding: 4px 14px; }
   :global(.err) { color: var(--bad); font-size: 13px; }
   :global(.muted) { color: var(--dim); }
@@ -323,12 +314,8 @@
   :global(.poll-pick) { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; }
   :global(.poll-pick select), :global(.poll-pick input) { width: auto; }
   :global(.poll-pick select) { padding: 3px 6px; font-size: 12px; }
-  /* toggled filter input, and click-to-sort <th>s — every table/log panel.
-     One shared size for every small ghost button (h2's Filter toggle,
-     Logs'/Stats' own toolbar rows, Logs' per-panel actions row) and the
-     filter input, so the input's box height (border-box: padding + border
-     + line-height) always matches the button and .poll-pick select beside
-     it instead of independently-tuned numbers drifting apart. */
+  /* one shared size for every small ghost button and the filter input, so the input's
+     box height always matches the button/.poll-pick select beside it instead of drifting. */
   :global(h2 button.ghost), :global(.panel-actions button.ghost),
   :global(.logs-head button.ghost), :global(.stats-head button.ghost) { padding: 3px 10px; font-size: 12px; }
   :global(h2 button.ghost) { margin-left: 8px; vertical-align: middle; }
@@ -352,14 +339,11 @@
   /* stacked sibling cards (Certs/Settings/Users) always get a gap, not just
      the ones a page happens to mark .form-card */
   :global(.card + .card) { margin-top: 18px; }
-  /* .logs-grid/.stats-grid cards are adjacent .card siblings too, so the
-     rule above leaks in there — stacking on top of the grid's own `gap`
-     and, since it never applies to the first card, throwing every other
-     column out of alignment with it once 2+ columns fit in a row. */
+  /* .logs-grid/.stats-grid cards are adjacent .card siblings too, so the rule above leaks
+     in, stacking atop the grid's own `gap` and misaligning columns once 2+ fit per row. */
   :global(.logs-grid > .card), :global(.stats-grid > .card) { margin-top: 0; }
-  /* shared by Certs/Settings/Users' forms: a checkbox that shouldn't
-     stretch to the grid's field width, a full-width textarea field, a
-     button row, and small print. */
+  /* shared by Certs/Settings/Users' forms: a non-stretching checkbox, full-width
+     textarea, button row, and small print. */
   :global(.check) { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
   :global(.check input) { width: auto; }
   :global(.wide) { grid-column: 1 / -1; }
