@@ -29,6 +29,35 @@ func addUser(t *testing.T, a *Service, name, pass, role string) {
 	}
 }
 
+func TestSecretOK(t *testing.T) {
+	cases := []struct {
+		v  string
+		ok bool
+	}{
+		{"short1!", false},   // under MinSecretLen
+		{"aaaaaaaa", false},  // 8 chars, 1 class (lower only)
+		{"11111111", false},  // 8 chars, 1 class (digit only)
+		{"hunter22", true},   // 8 chars, 2 classes (lower+digit)
+		{"changeme!", true},  // 2 classes (lower+symbol)
+		{"Str0ng!Pass", true}, // 4 classes
+	}
+	for _, c := range cases {
+		if got := SecretOK(c.v); got != c.ok {
+			t.Errorf("SecretOK(%q) = %v, want %v", c.v, got, c.ok)
+		}
+	}
+}
+
+func TestSecretYOLO(t *testing.T) {
+	if SecretYOLO() {
+		t.Fatal("SecretYOLO should default to false")
+	}
+	t.Setenv(SecretYOLOEnv, "1")
+	if !SecretYOLO() {
+		t.Fatal("SecretYOLO should be true once the env var is set")
+	}
+}
+
 func TestHashVerify(t *testing.T) {
 	h, _ := HashPassword("hunter22")
 	if !VerifyPassword("hunter22", h) || VerifyPassword("wrong", h) || VerifyPassword("x", "garbage") {

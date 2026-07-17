@@ -52,9 +52,14 @@ the operator passphrase, used in memory and never persisted.
 anything.
 .PP
 Every operator secret \(en the CA passphrase, admin/user passwords \(en
-must be at least 8 characters, enforced the same way whether set
-interactively, via \fBOVCP_CA_PASSPHRASE\fR / \fBOVCP_USER_PASSWORD\fR, or
-through the web UI.
+must be at least 8 characters and mix at least 2 of upper/lower/digit/
+symbol, enforced the same way whether set interactively, via
+\fBOVCP_CA_PASSPHRASE\fR / \fBOVCP_USER_PASSWORD\fR, or through the web UI.
+\fBOVCP_YOLO_PASSWORD\fR (set to anything non\-empty) waives this \(en CLI
+and UI alike, since \fBserve\fR inherits its process env \(en for anyone
+who has decided, with full knowledge of the consequences, that they don't
+care. Every acceptance through this door is audited
+(\fBweak_password_accepted\fR).
 .PP
 Client private keys are embedded in the exported profile once and never
 stored server\-side (no escrow): a lost profile means revoke + reissue, not
@@ -533,6 +538,12 @@ shared systems: environment variables can leak.
 Non\-interactive equivalents for \fBrotate\-ca\fR's new passphrase and
 \fBbackup\fR's archive passphrase. Same leak caveat as above.
 .TP
+.B OVCP_YOLO_PASSWORD
+Set (to anything non\-empty) to waive the length/complexity check on every
+passphrase/password above, CLI and web UI alike. Every weak secret it lets
+through is still audited as \fBweak_password_accepted\fR. You already know
+this is a bad idea; that's the point.
+.TP
 .B OVCP_TELEGRAM_TOKEN
 Non\-interactive equivalent for \fBtelegram token\fR's bot token. Same
 leak caveat as above; stored in the database afterward regardless (see
@@ -694,7 +705,7 @@ podman run \-d \-\-cap\-add=NET_ADMIN \-\-device /dev/net/tun \e
 .RE
 .fi
 The image defaults \fBOVCP_CA_PASSPHRASE\fR/\fBOVCP_USER_PASSWORD\fR to
-\fIchangeme\fR for the one\-shot init \(en override with \fB\-e\fR. To split
+\fIchangeme!\fR for the one\-shot init \(en override with \fB\-e\fR. To split
 the UI and the VPN across network interfaces, bind each published port to
 the right address, e.g.
 \fB\-p 203.0.113.7:1194:1194/udp \-p 192.168.1.10:8443:8443\fR. docker works

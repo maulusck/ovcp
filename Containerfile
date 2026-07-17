@@ -1,6 +1,6 @@
 # OVCP all-in-one image: ovcp (as root) owns the PKI and starts openvpn.
 #
-# First boot (one-shot init; passphrase/password default to "changeme",
+# First boot (one-shot init; passphrase/password default to "changeme!",
 # override with -e OVCP_CA_PASSPHRASE=... -e OVCP_USER_PASSWORD=...):
 #   podman run --rm -v ovcp:/var/lib/ovcp ovcp init -server-cn vpn.example.com
 #
@@ -54,8 +54,8 @@ RUN apk upgrade --no-cache && apk add --no-cache openvpn
 COPY --from=build /ovcp /usr/bin/ovcp
 ENV OVCP_DATA=/var/lib/ovcp \
     OVCP_LISTEN=0.0.0.0:8443 \
-    OVCP_CA_PASSPHRASE=changeme \
-    OVCP_USER_PASSWORD=changeme \
+    OVCP_CA_PASSPHRASE=changeme! \
+    OVCP_USER_PASSWORD=changeme! \
     OVCP_OPENVPN_GROUP=nobody
 # logrotate/log-shippers expect /var/log; symlink into the data volume
 # instead of duplicating files.

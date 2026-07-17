@@ -142,6 +142,41 @@ func (c *Config) Render() []byte {
 	return []byte(b.String())
 }
 
+// Diff compares two rendered configs and returns the changed lines: present
+// only in old prefixed "-", present only in new prefixed "+" (old first).
+// A set diff, not an aligned unified diff: every directive here is either
+// static or a single-value line, so which line moved doesn't matter, only
+// which values came or went.
+// ponytail: treats lines as a set, not a multiset, so a value repeated
+// verbatim (e.g. the same DNS IP entered twice) is invisible to the diff.
+// Harmless today (Validate doesn't dedupe, but a duplicate push line changes
+// nothing openvpn does with it) — swap in an LCS diff if that ever matters.
+func Diff(old, new []byte) []string {
+	oldLines := strings.Split(strings.TrimRight(string(old), "\n"), "\n")
+	newLines := strings.Split(strings.TrimRight(string(new), "\n"), "\n")
+	inNew := map[string]bool{}
+	for _, l := range newLines {
+		inNew[l] = true
+	}
+	inOld := map[string]bool{}
+	for _, l := range oldLines {
+		inOld[l] = true
+	}
+
+	var out []string
+	for _, l := range oldLines {
+		if !inNew[l] {
+			out = append(out, "-"+l)
+		}
+	}
+	for _, l := range newLines {
+		if !inOld[l] {
+			out = append(out, "+"+l)
+		}
+	}
+	return out
+}
+
 // WriteAtomic renders and installs the config via tmp+rename.
 func (c *Config) WriteAtomic(path string) error {
 	if err := c.Validate(); err != nil {

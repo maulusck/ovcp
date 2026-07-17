@@ -15,15 +15,26 @@
   }
   load()
 
+  function normalized() {
+    cfg.DNS = dns.split(',').map(s => s.trim()).filter(Boolean)
+    cfg.Port = +cfg.Port
+    return cfg
+  }
+
   async function save(e) {
     e.preventDefault()
-    err = ''; ok = ''
+    err = ''; ok = ''; preview = null
     try {
-      cfg.DNS = dns.split(',').map(s => s.trim()).filter(Boolean)
-      cfg.Port = +cfg.Port
-      cfg = await api('PUT', '/config', cfg)
+      cfg = await api('PUT', '/config', normalized())
       ok = 'Saved. Use Restart to apply configuration changes.'
     } catch (x) { err = x.error }
+  }
+
+  let preview = $state(null) // {diff, changed}
+  async function previewConfig() {
+    err = ''; ok = ''
+    try { preview = await api('POST', '/config/preview', normalized()) }
+    catch (x) { err = x.error }
   }
 
   // Config and CRL changes require a full Restart (fresh root process re-reads
@@ -137,9 +148,20 @@
       </div>
       {#if err}<p class="err">{err}</p>{/if}
       {#if ok}<p class="ok">{ok}</p>{/if}
+      {#if preview}
+        {#if preview.changed}
+          <p class="muted small">Changes vs. the saved server.conf:</p>
+          <pre class="diff">{#each preview.diff as line}<span class={line[0] === '+' ? 'add' : 'del'}>{line}
+</span>{/each}</pre>
+        {:else}
+          <p class="muted small">No changes vs. the saved server.conf.</p>
+        {/if}
+      {/if}
       {#if isAdmin}
         <div class="row">
           <button type="submit">Save configuration</button>
+          <button type="button" class="ghost" onclick={previewConfig}
+            title="Show what Save would change in server.conf, without applying it">Preview</button>
           <button type="button" class="ghost" onclick={start}
             title="Launch openvpn if it isn't running">Start</button>
           <button type="button" class="ghost" onclick={stop}
@@ -202,4 +224,8 @@
   .tg-status { font-family: var(--mono); font-size: 12px; color: var(--dim); }
   .tg-status.running { color: var(--ok); }
   .tg-status .dot.pulse { display: inline-block; animation: pulse 1s ease-in-out infinite; }
+  .diff { font-family: var(--mono); font-size: 12px; white-space: pre; overflow-x: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .diff .add { color: var(--ok); }
+  .diff .del { color: var(--bad); }
 </style>

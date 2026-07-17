@@ -790,6 +790,29 @@ func TestUserManagement(t *testing.T) {
 	}
 }
 
+// TestPasswordYOLOCLI: OVCP_YOLO_PASSWORD waives complexity for readSecret's
+// env-var path too (init's OVCP_USER_PASSWORD), with a warning on stderr.
+func TestPasswordYOLOCLI(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+
+	weak := withEnv(env, "OVCP_USER_PASSWORD=alllowercase")
+	if r := run(t, weak, "user", "add", "-name", "eve", "-role", "operator"); r.code == 0 {
+		t.Fatalf("single-class password should be rejected: %+v", r)
+	}
+
+	yolo := withEnv(weak, "OVCP_YOLO_PASSWORD=1")
+	r := run(t, yolo, "user", "add", "-name", "eve", "-role", "operator")
+	if r.code != 0 {
+		t.Fatalf("weak password should be accepted with OVCP_YOLO_PASSWORD set: %+v", r)
+	}
+	if !strings.Contains(r.stderr, "OVCP_YOLO_PASSWORD") {
+		t.Fatalf("expected a warning naming OVCP_YOLO_PASSWORD on stderr, got: %+v", r)
+	}
+}
+
 // TestUnreachableServe covers the CLI's error wiring when no `serve` process
 // is up: every remote-control command should fail cleanly with a nonzero
 // exit rather than hang or panic.

@@ -191,7 +191,7 @@
     {:else if tab === 'settings'}
       <Settings {isAdmin} />
     {:else if tab === 'users'}
-      <Users {isAdmin} me={user.username} />
+      <Users {isAdmin} me={user.username} minLen={user.minSecretLen} minClasses={user.minSecretClasses} />
     {:else if tab === 'logs'}
       <Logs {isAdmin} />
     {:else}

@@ -1090,7 +1090,9 @@ func cmdCompletion(fs *flag.FlagSet) func(ctx *cliContext) {
 }
 
 // readSecret prompts for a secret (env override for automation); both paths
-// enforce the same length rule, or init could accept what issue rejects later.
+// enforce the same complexity rule, or init could accept what issue rejects
+// later — unless $OVCP_YOLO_PASSWORD is set (see auth.SecretYOLO), in which
+// case: your funeral.
 func readSecret(label, env string, confirm bool) []byte {
 	v := []byte(os.Getenv(env))
 	if len(v) == 0 {
@@ -1106,8 +1108,13 @@ func readSecret(label, env string, confirm bool) []byte {
 			die(fmt.Errorf("mismatch"))
 		}
 	}
-	if !auth.SecretLenOK(string(v)) {
-		die(fmt.Errorf("%s", auth.SecretLenErr(label)))
+	if !auth.SecretOK(string(v)) {
+		if !auth.SecretYOLO() {
+			die(fmt.Errorf("%s", auth.SecretErr(label)))
+		}
+		fmt.Fprintf(os.Stderr,
+			"warning: %s ignored — %s is set, so the lock is now purely decorative\n",
+			auth.SecretErr(label), auth.SecretYOLOEnv)
 	}
 	return v
 }

@@ -1,6 +1,6 @@
 <script>
   import { api, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus } from './api.js'
-  let { isAdmin, me } = $props()
+  let { isAdmin, me, minLen, minClasses } = $props()
   let users = $state([])
   let err = $state('')
   let ok = $state('')
@@ -53,7 +53,7 @@
   }
 
   async function setPassword(u) {
-    const pw = prompt(`New password for ${u.Username} (min 8 chars):`)
+    const pw = prompt(`New password for ${u.Username} (min ${minLen} chars, ${minClasses} of upper/lower/digit/symbol):`)
     if (!pw) return
     err = ''; ok = ''
     try {
@@ -91,8 +91,8 @@
       <label>Username <span class="req">*</span>
         <input bind:value={form.username} required autocomplete="off" />
       </label>
-      <label>Password <span class="req">*</span>
-        <input type="password" bind:value={form.password} required minlength="8" />
+      <label>Password <span class="req">*</span> (min {minLen} chars, {minClasses} of upper/lower/digit/symbol)
+        <input type="password" bind:value={form.password} required minlength={minLen} />
       </label>
       <label>Role
         <select bind:value={form.role}>

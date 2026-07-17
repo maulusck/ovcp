@@ -9,8 +9,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/crypto/argon2"
 
@@ -55,15 +57,53 @@ const (
 
 	// MinSecretLen: CA passphrase + user passwords, CLI/env/API alike.
 	MinSecretLen = 8
+	// MinSecretClasses: how many of upper/lower/digit/symbol must appear.
+	// 2 catches the actually-weak case (e.g. "aaaaaaaa", "11111111")
+	// without forcing a specific mix — a zxcvbn-style strength estimate
+	// would judge better but pulls in a dependency for a single-server tool.
+	MinSecretClasses = 2
 )
 
-// SecretLenOK reports whether v meets MinSecretLen.
-func SecretLenOK(v string) bool { return len(v) >= MinSecretLen }
+// SecretOK reports whether v meets the length and complexity bar.
+func SecretOK(v string) bool { return len(v) >= MinSecretLen && secretClasses(v) >= MinSecretClasses }
 
-// SecretLenErr is the one rejection message every call site shares.
-func SecretLenErr(label string) string {
-	return fmt.Sprintf("%s too short (min %d)", label, MinSecretLen)
+// secretClasses counts how many of upper/lower/digit/symbol appear in v.
+func secretClasses(v string) int {
+	var upper, lower, digit, symbol bool
+	for _, r := range v {
+		switch {
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsLower(r):
+			lower = true
+		case unicode.IsDigit(r):
+			digit = true
+		default:
+			symbol = true
+		}
+	}
+	n := 0
+	for _, ok := range [...]bool{upper, lower, digit, symbol} {
+		if ok {
+			n++
+		}
+	}
+	return n
 }
+
+// SecretErr is the one rejection message every call site shares.
+func SecretErr(label string) string {
+	return fmt.Sprintf("%s too weak (min %d chars, %d of upper/lower/digit/symbol)",
+		label, MinSecretLen, MinSecretClasses)
+}
+
+// SecretYOLOEnv, when set to anything non-empty, waives SecretOK — CLI
+// prompts and the API/UI alike, since `serve` inherits its process env.
+// For the consenting adults who'd rather not be told twice.
+const SecretYOLOEnv = "OVCP_YOLO_PASSWORD"
+
+// SecretYOLO reports whether the escape hatch above is set.
+func SecretYOLO() bool { return os.Getenv(SecretYOLOEnv) != "" }
 
 // HashPassword → PHC string: $argon2id$v=19$m=..,t=..,p=..$salt$hash
 func HashPassword(password string) (string, error) {

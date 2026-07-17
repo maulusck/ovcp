@@ -68,9 +68,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u *store.U
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, map[string]string{
+	jsonOK(w, map[string]any{
 		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote,
 		"version": s.Version, "openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
+		"minSecretLen": auth.MinSecretLen, "minSecretClasses": auth.MinSecretClasses,
 	})
 }
 
@@ -313,16 +314,26 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request, u *stor
 	jsonOK(w, s.LoadConfig())
 }
 
-func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cur := s.LoadConfig()
+// mergedConfig decodes r's body onto cur, keeping the server-owned path
+// fields from cur untouched — shared by PUT (apply) and preview (dry-run)
+// so they can't drift on what's client-editable.
+func mergedConfig(cur ovpnconf.Config, r *http.Request) (ovpnconf.Config, bool) {
 	in := cur
 	if !decode(r, &in) {
+		return in, false
+	}
+	in.CACert, in.ServerCert, in.ServerKey = cur.CACert, cur.ServerCert, cur.ServerKey
+	in.CRL, in.TLSCrypt, in.MgmtSocket, in.StatusLog = cur.CRL, cur.TLSCrypt, cur.MgmtSocket, cur.StatusLog
+	return in, true
+}
+
+func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, u *store.User) {
+	cur := s.LoadConfig()
+	in, ok := mergedConfig(cur, r)
+	if !ok {
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	// path fields are server-owned; ignore client attempts to change them
-	in.CACert, in.ServerCert, in.ServerKey = cur.CACert, cur.ServerCert, cur.ServerKey
-	in.CRL, in.TLSCrypt, in.MgmtSocket, in.StatusLog = cur.CRL, cur.TLSCrypt, cur.MgmtSocket, cur.StatusLog
 	if err := in.Validate(); err != nil {
 		jsonErr(w, 400, err.Error())
 		return
@@ -337,6 +348,24 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, u *stor
 	}
 	s.Store.Audit(u.Username, "config_change", "")
 	jsonOK(w, in)
+}
+
+// handleConfigPreview is handleConfigPut's dry run: same merge + validation,
+// but renders a diff against the persisted config instead of writing
+// anything, so a bad edit shows up before a restart makes it live.
+func (s *Server) handleConfigPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
+	cur := s.LoadConfig()
+	in, ok := mergedConfig(cur, r)
+	if !ok {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	if err := in.Validate(); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	diff := ovpnconf.Diff(cur.Render(), in.Render())
+	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0})
 }
 
 // handleVPN drives the openvpn worker: start|stop|restart|reconnect.
@@ -448,14 +477,27 @@ func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request, u *stor
 	jsonOK(w, out)
 }
 
+// checkPassword enforces auth.SecretOK, unless auth.SecretYOLO() is set — in
+// which case it's let through, audited so the paper trail says so.
+func (s *Server) checkPassword(w http.ResponseWriter, actor, target, password string) bool {
+	if auth.SecretOK(password) {
+		return true
+	}
+	if !auth.SecretYOLO() {
+		jsonErr(w, 400, auth.SecretErr("password"))
+		return false
+	}
+	s.Store.Audit(actor, "weak_password_accepted", "target="+target+" reason="+auth.SecretYOLOEnv+" is set")
+	return true
+}
+
 func (s *Server) handleUserAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Username, Password, Role string }
 	if !decode(r, &in) || in.Username == "" || !auth.ValidRole(in.Role) {
 		jsonErr(w, 400, "username and valid role required")
 		return
 	}
-	if !auth.SecretLenOK(in.Password) {
-		jsonErr(w, 400, auth.SecretLenErr("password"))
+	if !s.checkPassword(w, u.Username, in.Username, in.Password) {
 		return
 	}
 	h, err := auth.HashPassword(in.Password)
@@ -516,8 +558,7 @@ func (s *Server) handleUserPassword(w http.ResponseWriter, r *http.Request, u *s
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if !auth.SecretLenOK(in.Password) {
-		jsonErr(w, 400, auth.SecretLenErr("password"))
+	if !s.checkPassword(w, u.Username, name, in.Password) {
 		return
 	}
 	h, err := auth.HashPassword(in.Password)

@@ -87,6 +87,30 @@ func TestCanSplitTunnel(t *testing.T) {
 	}
 }
 
+func TestDiff(t *testing.T) {
+	c := valid()
+	same := Diff(c.Render(), c.Render())
+	if len(same) != 0 {
+		t.Fatalf("identical renders should diff empty, got %v", same)
+	}
+
+	changed := valid()
+	changed.Port = 443
+	d := Diff(c.Render(), changed.Render())
+	want := []string{"-port 1194", "+port 443"}
+	if len(d) != len(want) || d[0] != want[0] || d[1] != want[1] {
+		t.Fatalf("port change diff = %v, want %v", d, want)
+	}
+
+	added := valid()
+	added.DNS = append(added.DNS, "8.8.8.8")
+	d = Diff(c.Render(), added.Render())
+	want = []string{`+push "dhcp-option DNS 8.8.8.8"`}
+	if len(d) != 1 || d[0] != want[0] {
+		t.Fatalf("added DNS diff = %v, want %v", d, want)
+	}
+}
+
 func TestLoadCorrupt(t *testing.T) {
 	if c := Load("{corrupt"); c.Port != Default().Port || c.Proto != Default().Proto {
 		t.Fatalf("corrupt JSON must fall back to defaults, got %+v", c)

@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/backup", s.wrap(auth.RoleAdmin, s.handleBackup))
 	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
 	mux.Handle("PUT /api/config", s.wrap(auth.RoleAdmin, s.handleConfigPut))
+	mux.Handle("POST /api/config/preview", s.wrap(auth.RoleAdmin, s.handleConfigPreview))
 	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleVPN))
 	mux.Handle("GET /api/telegram", s.wrap(auth.RoleReadonly, s.handleTelegramGet))
 	mux.Handle("PUT /api/telegram", s.wrap(auth.RoleAdmin, s.handleTelegramPut))

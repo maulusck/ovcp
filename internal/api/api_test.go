@@ -247,6 +247,55 @@ func TestConfigPutValidation(t *testing.T) {
 	}
 }
 
+// TestConfigPreview: preview must report the same delta PUT would apply,
+// without applying it — GET /api/config stays untouched either way.
+func TestConfigPreview(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+
+	r := e.req("POST", "/api/config/preview", `{}`, true)
+	var pv struct {
+		Diff    []string
+		Changed bool
+	}
+	if r.StatusCode != 200 {
+		t.Fatal("no-op preview:", r.Status)
+	}
+	json.NewDecoder(r.Body).Decode(&pv)
+	if pv.Changed || len(pv.Diff) != 0 {
+		t.Fatalf("no-op preview should report no change, got %+v", pv)
+	}
+
+	r = e.req("POST", "/api/config/preview", `{"Port":443}`, true)
+	json.NewDecoder(r.Body).Decode(&pv)
+	if r.StatusCode != 200 || !pv.Changed {
+		t.Fatalf("port-change preview: status=%d %+v", r.StatusCode, pv)
+	}
+	if !containsLine(pv.Diff, "-port 1194") || !containsLine(pv.Diff, "+port 443") {
+		t.Fatalf("preview diff missing the port change: %+v", pv.Diff)
+	}
+
+	r = e.req("GET", "/api/config", "", true)
+	var got struct{ Port int }
+	json.NewDecoder(r.Body).Decode(&got)
+	if got.Port != 1194 {
+		t.Fatalf("preview must not persist: GET /api/config Port = %d, want 1194", got.Port)
+	}
+
+	if r := e.req("POST", "/api/config/preview", `{"Proto":"sctp"}`, true); r.StatusCode != 400 {
+		t.Fatal("bad proto preview must 400, got", r.Status)
+	}
+}
+
+func containsLine(lines []string, want string) bool {
+	for _, l := range lines {
+		if l == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestUserEndpoints covers the user-management routes, above all the two
 // self-lockout guards ("cannot delete/disable your own account") that exist
 // only in this layer — the CLI has no such guard and auth never sees them.
@@ -258,6 +307,9 @@ func TestUserEndpoints(t *testing.T) {
 	}
 	if r := e.req("POST", "/api/users", `{"Username":"eve","Password":"short","Role":"operator"}`, true); r.StatusCode != 400 {
 		t.Fatal("short password must 400, got", r.Status)
+	}
+	if r := e.req("POST", "/api/users", `{"Username":"eve","Password":"alllowercase","Role":"operator"}`, true); r.StatusCode != 400 {
+		t.Fatal("single-class password must 400, got", r.Status)
 	}
 	if r := e.req("DELETE", "/api/users/admin", "", true); r.StatusCode != 400 {
 		t.Fatal("self-delete must 400, got", r.Status)
@@ -284,6 +336,38 @@ func TestUserEndpoints(t *testing.T) {
 	}
 	if r := e.req("DELETE", "/api/users/bob", "", true); r.StatusCode != 400 {
 		t.Fatal("deleting a missing user must 400, got", r.Status)
+	}
+}
+
+// TestPasswordYOLO: OVCP_YOLO_PASSWORD waives complexity through the API
+// (not just the CLI) since `serve` inherits its process env — and every
+// acceptance through that door is audited.
+func TestPasswordYOLO(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	if r := e.req("POST", "/api/users", `{"Username":"eve","Password":"alllowercase","Role":"operator"}`, true); r.StatusCode != 400 {
+		t.Fatal("weak password must 400 without the env var, got", r.Status)
+	}
+
+	t.Setenv(auth.SecretYOLOEnv, "1")
+	if r := e.req("POST", "/api/users", `{"Username":"eve","Password":"alllowercase","Role":"operator"}`, true); r.StatusCode != 200 {
+		t.Fatal("weak password must be accepted with the env var set, got", r.Status)
+	}
+	if r := e.req("POST", "/api/users/eve/password", `{"Password":"stillweak"}`, true); r.StatusCode != 200 {
+		t.Fatal("weak password change must be accepted with the env var set, got", r.Status)
+	}
+
+	r := e.req("GET", "/api/audit", "", true)
+	var tail []struct{ Actor, Action, Detail string }
+	json.NewDecoder(r.Body).Decode(&tail)
+	var found int
+	for _, e := range tail {
+		if e.Action == "weak_password_accepted" {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatalf("expected 2 weak_password_accepted audit entries, got %d in %+v", found, tail)
 	}
 }
 
