@@ -22,10 +22,8 @@ runs as root, is the sole owner of the PKI and configuration, and starts
 openvpn itself as a reaped foreground child \(en the same on the host, under
 systemd, and inside the container.
 .PP
-The CA private key is stored encrypted (argon2id + AES\-256\-GCM). Every
-signing operation (issue, revoke) requires the CA passphrase, which is
-used in memory and never persisted: compromise of the host alone does not
-compromise the CA.
+The CA private key is encrypted at rest; a passphrase held only in memory
+gates every signing operation (see \fBSECURITY\fR).
 .PP
 This page is also rendered into the web UI's \fBDocs\fR tab at build time
 \(en one source, readable with or without a terminal.
@@ -96,9 +94,9 @@ checked against exactly one configured Telegram identity (numeric id or
 otherwise ignored \(en for the first 3 attempts. Past that, the sender is
 blocked for the rest of the process's life: no more 403s, no API call, no
 log line. The bot's own command surface is deliberately narrow
-(\fB/status\fR, and \fB/menu\fR's Start/Stop/Restart, the last two behind
-a confirm step) \(en revoke, user management, CA rotation, config, and
-backup are unreachable from Telegram at any privilege.
+(\fB/status\fR, and \fB/menu\fR's Start/Stop/Restart/Reconnect, Stop and
+Restart behind a confirm step) \(en revoke, user management, CA rotation,
+config, and backup are unreachable from Telegram at any privilege.
 .SH QUICK START
 .nf
 .RS
@@ -284,7 +282,7 @@ result) and needs \fBserve\fR running.
 Disconnect a client immediately, via a running \fBserve\fR's control
 socket (see \fBOVCP_CTRL_SOCK\fR).
 .TP
-.B vpn start|stop|restart|reconnect|status
+.B vpn start|stop|restart|reconnect|status [\fB\-ctrl\fR \fIPATH\fR]
 Manage or inspect the openvpn worker owned by a running
 .B serve
 (over the control socket, see \fBOVCP_CTRL_SOCK\fR).
@@ -313,7 +311,7 @@ reports \(lqalready started\(rq rather than spawning a second process.
 .TQ
 .B user totp \fB\-name\fR \fINAME\fR [\fB\-off\fR]
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
-(certificates, disconnects), \fBreadonly\fR (default for \fBadd\fR).
+(certificates, disconnects, default for \fBadd\fR), \fBreadonly\fR.
 \fBuser list\fR's \fB\-sort\fR reorders (default: today's order); \fB\-desc\fR
 reverses it, and its enabled/DISABLED status is colored (see
 \fB\-no\-color\fR). Same as the web UI's Users tab \(en see
@@ -329,32 +327,39 @@ currently\-authenticated admin.
 Print the last 50 audit entries (logins, issues, revocations, kills,
 config changes), newest first.
 .TP
-.B debug on|off
+.B debug on|off [\fB\-ctrl\fR \fIPATH\fR]
 Toggle verbose logging on a running \fBserve\fR (over the control socket,
 see \fBOVCP_CTRL_SOCK\fR) \(en no restart, resets to normal on the next one.
 .TP
 .B telegram token \fB\-admin\fR \fIID\-or\-@user\fR
 .TQ
-.B telegram start|stop|restart|status
+.B telegram start|stop|restart|status [\fB\-ctrl\fR \fIPATH\fR]
 Notify\-only Telegram bot, with a narrow control surface. \fBtoken\fR
 saves a bot token (prompted, or \fBOVCP_TELEGRAM_TOKEN\fR; validated
 against Telegram's \fBgetMe\fR before saving) together with the one
-Telegram identity \(en a numeric user id or \fB@username\fR \(en the bot
-will ever respond to; anyone else gets a 403 reply and nothing else.
+Telegram identity \(en a numeric user id or \fB@username\fR, \fB\-admin\fR
+or \fBOVCP_TELEGRAM_ADMIN\fR \(en the bot will ever respond to; anyone
+else gets a 403 reply and nothing else.
 \fBstart\fR/\fBstop\fR/\fBrestart\fR/\fBstatus\fR drive the poller inside a
 running \fBserve\fR over the control socket (see \fBOVCP_CTRL_SOCK\fR),
 same as \fBvpn\fR; the poller also auto\-starts with \fBserve\fR if a token
 is already set. Once linked, the bot pushes notifications for revoke,
 user add/del, CA rotate, and a cert entering its 30\-day expiry window
 (once per cert); \fB/status\fR and \fB/menu\fR (inline Start/Stop/Restart/
-Status buttons, Stop/Restart behind a confirm step) are the only commands
-it accepts \(en revoke, user management, CA rotation, config, and backup
-stay CLI/web\-login only.
+Reconnect/Status buttons, Stop/Restart behind a confirm step) are the
+only commands it accepts \(en revoke, user management, CA rotation,
+config, and backup stay CLI/web\-login only.
 .TP
 .B version
 Print \fBovcp\fR's version, and the \fBopenvpn\fR binary's version and path
 if one is found on \fBPATH\fR (advisory only \(en absent, not an error, if
 not).
+.TP
+.B completion bash|zsh|fish
+Print a shell completion script to stdout. Install once, e.g.
+\fBovcp completion bash > /etc/bash_completion.d/ovcp\fR; distro packages
+already install these (see \fBBUILD.md\fR). Rejects \fB\-json\fR (see
+\fBMACHINE\-READABLE OUTPUT\fR).
 .SH OPTIONS
 .TP
 .B \-data \fIDIR\fR
@@ -538,7 +543,7 @@ certificate (falls back to the VPN server certificate's CN).
 .TP
 .B OVCP_CA_PASSPHRASE, OVCP_USER_PASSWORD
 Non\-interactive passphrase/password for automation, tests, and container
-init (the image defaults both to \fIchangeme\fR). Avoid on
+init (the image defaults both to \fIchangeme!\fR). Avoid on
 shared systems: environment variables can leak.
 .TP
 .B OVCP_CA_NEW_PASSPHRASE, OVCP_BACKUP_PASSPHRASE
@@ -555,6 +560,10 @@ is, not a setting to reach for by accident.
 Non\-interactive equivalent for \fBtelegram token\fR's bot token. Same
 leak caveat as above; stored in the database afterward regardless (see
 \fBSECURITY\fR).
+.TP
+.B OVCP_TELEGRAM_ADMIN
+Non\-interactive equivalent for \fBtelegram token\fR's \fB\-admin\fR flag: the
+numeric Telegram id or \fB@username\fR the bot will ever respond to.
 .TP
 .B OVCP_OPENVPN_USER, OVCP_OPENVPN_GROUP
 Unprivileged account openvpn drops to after startup (default \fInobody\fR
