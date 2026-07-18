@@ -208,7 +208,7 @@
 
 <div class="logs-grid">
   <details class="card" style="order: {openState.audit ? 0 : 1}" bind:open={openState.audit} bind:this={cards.audit}>
-    <summary>Audit log</summary>
+    <summary onclick={(e) => maximized === 'audit' && e.preventDefault()}>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
     {:else}
@@ -238,7 +238,7 @@
 
   {#each LOGS as l}
     <details class="card" style="order: {openState[l.id] ? 0 : 1}" bind:open={openState[l.id]} bind:this={cards[l.id]}>
-      <summary>{l.title}</summary>
+      <summary onclick={(e) => maximized === l.id && e.preventDefault()}>{l.title}</summary>
       {#if lines[l.id].length === 0}
         <p class="muted">No log yet.</p>
       {:else}
@@ -302,4 +302,7 @@
     /* !important so fullscreen wins over the inline height set by drags/fitToContent */
     height: auto !important; max-height: calc(100vh - 100px); resize: none;
   }
+  /* toggle is disabled while maximized (see onclick guards above); the arrow would be a dead affordance */
+  .card:fullscreen summary { list-style: none; cursor: default; color: var(--amber); font-size: 17px; }
+  .card:fullscreen summary::-webkit-details-marker { display: none; }
 </style>

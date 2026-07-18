@@ -32,6 +32,7 @@
   let verLong = $state(false) // footer: short "ovcp X" vs long "ovcp X · openvpn Y (path)"
   let tab = $state(tabs.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
   let navOpen = $state(false)
+  let themeOpen = $state(false)
   // set by Dashboard's CN click, consumed (and cleared) by Certs to scroll/flash the matching row
   let focusCN = $state('')
   function goToCert(cn) { tab = 'certs'; focusCN = cn }
@@ -56,10 +57,13 @@
 
   $effect(() => { localStorage.setItem(TAB_KEY, tab) })
 
-  // close the mobile nav dropdown on an outside tap (native <details> has no such behavior)
+  // close the mobile nav/theme dropdowns on an outside tap (native <details> has no such behavior)
   $effect(() => {
-    if (!navOpen) return
-    const onClick = (e) => { if (!e.target.closest('.nav-mobile')) navOpen = false }
+    if (!navOpen && !themeOpen) return
+    const onClick = (e) => {
+      if (!e.target.closest('.nav-mobile')) navOpen = false
+      if (!e.target.closest('.theme-mobile')) themeOpen = false
+    }
     document.addEventListener('click', onClick)
     return () => document.removeEventListener('click', onClick)
   })
@@ -108,6 +112,7 @@
 
   const canOperate = $derived(user && user.role !== 'readonly')
   const isAdmin = $derived(user && user.role === 'admin')
+  const currentTheme = $derived(THEMES.find(t => t.name === theme.name) ?? THEMES[0])
   const phaseText = $derived(
     vpn.phase === 'ok' ? `VPN running · up ${vpn.uptime} · ${vpn.clients} client${vpn.clients === 1 ? '' : 's'} connected` +
       (vpn.ovcpUptime ? ` · ovcp up ${vpn.ovcpUptime}` : '') :
@@ -173,6 +178,15 @@
           <option value={t.name} style="background:{t.bg}; color:{t.fg}">{t.label}</option>
         {/each}
       </select>
+      <!-- mobile-only twin: icon-sized button (theme's initial) instead of the full-text select above -->
+      <details class="theme-mobile" bind:open={themeOpen}>
+        <summary style="background:{currentTheme.bg}; color:{currentTheme.fg}" title="UI theme: {currentTheme.label}">{currentTheme.label[0]}</summary>
+        <div class="nav-menu">
+          {#each THEMES as t}
+            <button class:active={theme.name === t.name} onclick={() => { setTheme(t.name); themeOpen = false }}>{t.label}</button>
+          {/each}
+        </div>
+      </details>
       <div class="account" title="user: {user.username}  role: {user.role}">
         <span class="avatar">{@html identicon(user.username)}</span>
         <span class="acct-name">{user.username}</span>
@@ -391,7 +405,7 @@
     background: var(--ink); color: var(--text); opacity: 1;
   }
   nav button.active, .nav-menu button.active { color: var(--text); background: var(--ink); }
-  .nav-mobile { display: none; } /* shown only under the mobile breakpoint below */
+  .nav-mobile, .theme-mobile { display: none; } /* shown only under the mobile breakpoint below */
   .who { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--dim); }
   .theme-pick { width: auto; padding: 5px 8px; font-size: 12px; }
   .account { display: flex; align-items: center; gap: 8px; }
@@ -419,20 +433,26 @@
     main { padding: 12px; }
     .brand :global(.glyph), .brand strong, .acct-name, .avatar, .pill-text { display: none; } /* status dot, role pill still identify things */
     nav { display: none; }
-    .nav-mobile { display: block; position: relative; }
-    .nav-mobile summary {
-      display: block; list-style: none; cursor: pointer; color: var(--text); background: var(--ink);
-      border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; font-size: 13px;
+    .nav-mobile, .theme-mobile { display: block; position: relative; }
+    .theme-pick { display: none; }
+    /* select ignores vertical padding, so height+line-height is what actually equalizes the two */
+    .nav-mobile summary, .theme-mobile summary {
+      display: block; height: 31px; line-height: 29px; font-size: 13px; cursor: pointer; list-style: none;
+      border: 1px solid var(--line); border-radius: 4px;
     }
+    .nav-mobile summary { padding: 0 12px; color: var(--text); background: var(--ink); }
     .nav-mobile summary:hover { border-color: var(--amber); }
-    .nav-mobile summary::-webkit-details-marker { display: none; }
+    .theme-mobile summary { width: 31px; text-align: center; font-weight: 700; text-transform: uppercase; }
+    .nav-mobile summary::-webkit-details-marker, .theme-mobile summary::-webkit-details-marker { display: none; }
     .nav-mobile summary::after { content: ' \25be'; }
     .nav-menu {
-      display: none; flex-direction: column; position: absolute; top: calc(100% + 4px); left: 0; z-index: 10;
+      display: none; flex-direction: column; position: absolute; top: calc(100% + 4px); z-index: 10;
       min-width: 220px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
       padding: 4px; box-shadow: 0 8px 20px rgba(0,0,0,.35);
     }
-    .nav-mobile[open] .nav-menu { display: flex; }
+    .nav-mobile .nav-menu { left: 0; }
+    .theme-mobile .nav-menu { right: 0; min-width: 140px; }
+    .nav-mobile[open] .nav-menu, .theme-mobile[open] .nav-menu { display: flex; }
     .nav-menu button { text-align: left; }
   }
 </style>
