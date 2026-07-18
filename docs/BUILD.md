@@ -1,42 +1,52 @@
 # Building OVCP
 
-How to build the binary, distro packages, and the container image — natively
-on any supported host, or cross-compiled from any other. This is developer/
-packager documentation; end-user CLI docs are `docs/ovcp.8` (`man ./docs/ovcp.8`
-or `make man`).
+Building the `ovcp` binary, distro packages, and the container image —
+natively on any supported host, or cross-compiled from any other.
 
-`make help` is always the source of truth for targets and variables; this
-document explains the *why* behind them.
+This document covers building and packaging only. Runtime commands,
+configuration, and deployment are documented in `man ovcp`
+([`docs/ovcp.8`](ovcp.8)); internal design in
+[`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
+
+`make help` lists every target and variable; this document explains what
+they do and why.
 
 ## Requirements
 
-`make deps` checks all of these are on `PATH` and explains what's missing:
+`make deps` checks the base build requirements are on `PATH` and reports
+what is missing:
 
 - Go 1.22+
-- a C compiler (`cc` or `gcc` — CGO, for the sqlite driver; only needed for
-  `TARGET=host`, see below)
+- a C compiler (`cc` or `gcc` — CGO, for the SQLite driver)
 - npm (`web/ui`, the Svelte admin UI)
 - mandoc (renders `docs/ovcp.8` into the UI's Docs tab)
-- [zig](https://ziglang.org/) — only for cross-compiling (`TARGET=` set to
-  anything other than `host`)
-- [nfpm](https://nfpm.goreleaser.com/) — only for `.deb`/`.rpm`/`.apk`/Arch
-  packages
-- podman or docker — only for the container image
 
-## TARGET: the one knob for every arch
+Additional tools are required only for specific targets, and are checked
+individually when that target runs — not by `make deps`:
 
-Every build/package/image target reads `TARGET` (default `host`):
+- [zig](https://ziglang.org/) — cross-compiling (`TARGET=` set to anything
+  other than `host`); checked by `build` and packaging targets via
+  `check-cross`
+- [nfpm](https://nfpm.goreleaser.com/) — `.deb`/`.rpm`/`.apk`/Arch
+  packages; checked by `deb`/`rpm`/`apk`/`archlinux` via `check-nfpm`
+- podman or docker — the container image; checked by `image` via
+  `check-image`
 
-- **`TARGET=host`** — a plain native build. No cross toolchain, no zig, just
-  the system's own `cc`/`gcc` and `go build` targeting whatever the go
-  toolchain runs on. This is the fast path and requires nothing beyond the
-  base `deps` list.
-- **Any other `TARGET`** — cross-compiles via [zig cc](https://ziglang.org/),
-  which bundles clang + a libc/compiler-rt sysroot for every target below.
-  One tool covers every arch and both libcs, instead of a different
-  cross-toolchain package per arch. Real (non-emulated) cross-compilation —
-  no QEMU involved for `build`/packaging, only for cross container **images**
-  (see below).
+## Build targets
+
+Every build, packaging, and image target reads the `TARGET` variable
+(default `host`).
+
+- **`TARGET=host`** — a native build using the host's own `cc`/`gcc` and
+  `go build`. No cross toolchain is required beyond the base requirements
+  above.
+- **Any other `TARGET`** — cross-compiles via
+  [zig cc](https://ziglang.org/), which bundles clang and a libc/
+  compiler-rt sysroot for each target below. One toolchain covers every
+  supported architecture and libc combination. This is genuine
+  cross-compilation, not emulation — QEMU is not involved for `build` or
+  packaging targets; it is required only for cross-architecture container
+  **images** (see Container image, below).
 
 | TARGET | GOARCH | GOARM | libc | zig triple | nfpm arch |
 |---|---|---|---|---|---|
@@ -51,21 +61,30 @@ Every build/package/image target reads `TARGET` (default `host`):
 | `riscv64` | riscv64 | — | glibc | `riscv64-linux-gnu` | `riscv64` |
 | `riscv64-musl` | riscv64 | — | musl | `riscv64-linux-musl` | `riscv64` |
 
-`TARGET=host` on an amd64 machine and `TARGET=amd64` are *not* the same
-thing: the former never touches zig, the latter always does, even though the
-result targets the same arch. There's no auto-detection that skips the cross
-path when `TARGET`'s arch happens to match the host — one rule (`host` is
-native, everything else is cross), applied uniformly, is simpler than a rule
-plus an exception.
+`TARGET=host` on an amd64 machine and `TARGET=amd64` produce the same
+architecture but are not equivalent: `TARGET=host` never invokes zig;
+`TARGET=amd64` always does. There is no auto-detection that routes a
+matching `TARGET` through the native path — `host` is native, every other
+value is cross-compiled, without exception.
 
 ```sh
 make build                  # native, whatever this host is
 make build TARGET=arm64     # cross, glibc arm64
-make deb TARGET=arm64-musl  # cross, musl arm64, packaged as a .apk-style deb (Alpine consumers use `make apk`)
 ```
 
-`make help`'s `TARGET` line is generated from this same table (`CROSS_TARGETS`
-in the Makefile), so it can't drift out of sync with it.
+`make help`'s `TARGET` line is generated from this table (`CROSS_TARGETS`
+in the Makefile) and stays in sync with it automatically.
+
+Install a native build directly, without packaging it — binary, man page,
+and shell completions, `DESTDIR`/`prefix` honored (GNU Coding Standards):
+
+```sh
+sudo make install
+```
+
+This does not install the systemd unit or the SELinux policy; a distro
+package includes the unit (see Packages, below), and a from-source
+deployment adds it manually — see `man ovcp`, `DEPLOYMENT`.
 
 ## Container image
 
@@ -74,48 +93,51 @@ make image                    # this host's own arch
 make image TARGET=arm64       # cross-build a specific arch
 ```
 
-The image is always Alpine-based (musl) regardless of which `TARGET` row is named
-— `arm64` and `arm64-musl` produce the same image, since the Containerfile's
-build stage picks musl unconditionally. Either name is accepted interchangeably.
+The image is Alpine-based (musl) regardless of which `TARGET` row is used
+— `arm64` and `arm64-musl` produce an identical image, since the
+Containerfile's build stage selects musl unconditionally. Both names are
+accepted.
 
-### Native vs. cross, and what `--platform` actually does
+### Native vs. cross, and what `--platform` does
 
 `make image` always passes an explicit `--platform`, derived from the same
-`GOARCH`/`GOARM` as `build`/packaging (`TARGET=host` falls back to the host's
-real arch via `go env GOARCH`). This is deliberate, not decorative: podman
-and docker can auto-detect the target platform from the host when
-`--platform` is *omitted*, but that auto-detection is a newer, tool-and-
-version-dependent feature — on an engine or version that doesn't implement
-it, `podman build`/`docker build` fails hard on the very first `FROM` line
-with `no value specified for --platform=`, before any of the Containerfile's
-own logic runs. Passing `--platform` explicitly removes that dependency
-entirely; it's a long-standing, universally-supported flag on both tools.
+`GOARCH`/`GOARM` as `build` and packaging (`TARGET=host` resolves to the
+host's actual architecture via `go env GOARCH`).
+
+Podman and Docker can auto-detect the target platform from the host when
+`--platform` is omitted, but that auto-detection is version-dependent: on
+an engine that does not implement it, `podman build`/`docker build` fails
+on the first `FROM` line with `no value specified for --platform=`, before
+any Containerfile logic runs. Passing `--platform` explicitly removes that
+dependency; it is a long-standing, universally supported flag on both
+tools.
 
 ### Cross-building an image needs QEMU/binfmt
 
 The Containerfile's builder stage (`FROM --platform=$BUILDPLATFORM ...`) is
-pinned to the *build* machine's own arch — Go and npm never run emulated,
-zig cross-compiles the binary directly. But the **final** stage (`FROM
-alpine:latest`, `apk add openvpn`) is not pinned that way: for a genuine
-cross build it has to run *as* the target arch, because `apk` itself has to
-execute. Without binfmt handlers registered for that arch, that step fails
-with `exec container process: Exec format error`.
+pinned to the build machine's own architecture: Go and npm never run
+emulated, since zig cross-compiles the binary directly. The final stage
+(`FROM alpine:latest`, `apk add openvpn`) is not pinned the same way — for
+a genuine cross build it must run as the target architecture, because
+`apk` itself has to execute. Without binfmt handlers registered for that
+architecture, this step fails with `exec container process: Exec format
+error`.
 
-`make image TARGET=<cross-arch>` preflights this before starting the real
-build (`check-image`): it runs a trivial container for the target platform
-and fails immediately, with a clear message and the fix, if that doesn't
-work:
+`make image TARGET=<cross-arch>` preflights this condition before starting
+the build (`check-image`): it runs a trivial container for the target
+platform and fails immediately, with the cause and the fix, if that does
+not succeed:
 
 ```
 error: this host can't run linux/arm64 containers (no working QEMU/binfmt for it)
   see docs/BUILD.md, 'Cross-building an image needs QEMU/binfmt'
 ```
 
-Inherent to any cross-arch image build whose final stage does real
-package-manager work — not a Makefile gap. CI never hits it:
+This is inherent to any cross-architecture image build whose final stage
+performs real package-manager work. CI does not encounter it:
 `docker/setup-qemu-action` registers emulation against a real root
-`dockerd`, the path that reliably works. On a workstation, two independent
-causes — check in order:
+`dockerd`. On a workstation, there are two independent causes; check in
+order.
 
 **1. Nothing registered.**
 
@@ -123,14 +145,15 @@ causes — check in order:
 ls /proc/sys/fs/binfmt_misc/ | grep qemu   # empty = nothing registered
 ```
 
-Fix — same command regardless of distro or engine, needs real root:
+Fix (same command regardless of distro or engine; requires real root):
 
 ```sh
 sudo docker run --privileged --rm docker.io/tonistiigi/binfmt --install all
 ```
 
-Podman/Homebrew installs living outside `sudo`'s restricted PATH
-(`could not find a working conmon binary`) need it preserved explicitly:
+Podman or Homebrew installations outside `sudo`'s restricted `PATH`
+(`could not find a working conmon binary`) require the `PATH` to be
+preserved explicitly:
 
 ```sh
 sudo env PATH="$PATH" $(which podman) run --privileged --rm docker.io/tonistiigi/binfmt --install all
@@ -138,111 +161,159 @@ sudo env PATH="$PATH" $(which podman) run --privileged --rm docker.io/tonistiigi
 
 **2. Registered, but this engine still can't use it.**
 
-Some distros (Debian/Ubuntu's `qemu-user-binfmt`) register a *wrapper* that
-dynamically re-execs the real interpreter instead of a static binary — the
-kernel's `F` flag only caches the wrapper's own fd, so if its further exec
-doesn't resolve inside the target container's near-empty rootfs, it still
-fails. `tonistiigi/binfmt` avoids this with genuinely static interpreters,
-which is why cause 1's fix uses it over a distro package either way.
+Some distributions (Debian/Ubuntu's `qemu-user-binfmt`) register a wrapper
+that re-execs the real interpreter dynamically instead of shipping a
+static binary. The kernel's `F` flag caches only the wrapper's own file
+descriptor; if the wrapper's further exec cannot resolve inside the target
+container's near-empty root filesystem, the step still fails.
+`tonistiigi/binfmt` avoids this with statically linked interpreters, which
+is why the fix above uses it in preference to a distribution package.
 
-Rootless podman/docker can separately fail to use an emulator that's
-correctly registered and genuinely static — an unprivileged-user-namespace
-limitation, not project-specific. Confirm the registration first
-(`cat /proc/sys/fs/binfmt_misc/qemu-aarch64`, `flags:` should include `F`);
-if it still fails under a normal user account, retry as root:
+Rootless Podman or Docker can separately fail to use an emulator that is
+correctly registered and statically linked; this is an unprivileged
+user-namespace limitation, not specific to this project. Confirm the
+registration first (`cat /proc/sys/fs/binfmt_misc/qemu-aarch64`; `flags:`
+should include `F`). If it still fails under a normal user account, retry
+as root:
 
 ```sh
 sudo env PATH="$PATH" make image TARGET=arm64
 ```
 
-(`sudo make ...` alone isn't enough — Make resolves `$(CTR)` with root's own
-PATH first, hitting the same problem one layer up.)
+(`sudo make ...` alone is not sufficient: Make resolves `$(CTR)` using
+root's own `PATH`, which hits the same problem one layer up.)
 
-Neither fix persists: `/proc/sys/fs/binfmt_misc` lives in kernel memory only
-and rebuilds from installed packages on every boot. A reboot fully reverts
-both; if a distro package's boot hook re-registers its wrapper afterward,
-cause 2 can resurface and needs re-running.
+Neither fix persists across a reboot: `/proc/sys/fs/binfmt_misc` is kernel
+memory only and is rebuilt from installed packages on every boot. If a
+distribution package's boot hook re-registers its wrapper afterward, cause
+2 can recur and the fix must be re-applied.
 
-### Unknown TARGET fails clearly, not silently
+### Unrecognized TARGET values
 
-Both `build` and `image` share a `check-target` prerequisite: an unrecognized
-`TARGET` is rejected up front (`unknown TARGET=foo (see: make help)`) rather
-than silently falling back to the host's own arch. `check-cross` (used only
-by `build`/packaging) additionally requires `zig` on the host `PATH` — a
-requirement `image` doesn't have, since zig runs *inside* the builder
-container, not on the machine invoking `podman build`.
+`build` and `image` share a `check-target` prerequisite: an unrecognized
+`TARGET` is rejected immediately (`unknown TARGET=foo (see: make help)`)
+rather than falling back to the host architecture. `check-cross` (used by
+`build` and packaging only) additionally requires `zig` on the host
+`PATH`; `image` does not have this requirement, since zig runs inside the
+builder container rather than on the machine invoking `podman build`.
 
 ### The persistent build cache
 
-The Containerfile's final `RUN` (the `zig cc`/`go build` step) uses a
+The Containerfile's final `RUN` step (`zig cc` / `go build`) uses a
 BuildKit/buildah cache mount:
 
 ```
 RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache ...
 ```
 
-Without it, every single image build recompiles from a cold cache: zig
-rebuilds its target's libc/compiler-rt objects from scratch, and `go build`
-has no prior object cache either, because `~/.cache` lives inside the
-ephemeral build container and nothing preserves it between `podman build`
-invocations. `COPY . .` earlier in the same stage means this step re-runs on
-*any* source change, so paying that cold-cache cost every time compounds
-fast.
+Without this mount, every image build recompiles from a cold cache: zig
+rebuilds its target's libc/compiler-rt objects from scratch, and
+`go build` has no prior object cache, because `~/.cache` lives inside the
+ephemeral build container and is not preserved between `podman build`
+invocations. `COPY . .` earlier in the same stage means this step re-runs
+on any source change, so the cold-cache cost is paid repeatedly without
+the mount.
 
-The cache mount fixes this by living in the container engine's own
-build-cache store instead — not this checkout, nothing to `.gitignore`,
-shared across builds on the same host regardless of Docker's normal layer
-cache. Measured on this project: **~6.5 minutes cold, ~2 minutes warm** for
-the same build. `make image` prints a reminder that it's in use; `make
-clean` prints a reminder that it *isn't* touched (it only removes files this
-project writes into the checkout — `bin/`, `web/dist/`, `dist/`). Reclaim it
-explicitly:
+The mount persists the cache in the container engine's own build-cache
+store — outside the checkout, shared across builds on the same host,
+independent of Docker's normal layer cache. Measured on this project:
+~6.5 minutes cold, ~2 minutes warm, for the same build. `make image`
+reports that the cache is in use; `make clean` reports that the cache is
+untouched (it removes only files this project writes into the checkout:
+`bin/`, `web/dist/`, `dist/`). Reclaim the cache explicitly:
 
 ```sh
 podman builder prune    # or: docker builder prune
 ```
 
-## Packages (.deb/.rpm/.apk/Arch)
+## Packages
 
 ```sh
 make deb                     # native host arch
-make deb TARGET=arm64        # cross-compile the binary first, then package it (glibc, for Debian/Fedora/Arch bases)
-make apk TARGET=riscv64-musl # musl, for Alpine/OpenWrt bases
+make deb TARGET=arm64        # cross-compile the binary first, then package it (glibc: Debian/Fedora/Arch bases)
+make apk TARGET=riscv64-musl # musl: Alpine/OpenWrt bases
 ```
 
-`ARCH` (fed to `nfpm.yaml`'s `arch:` field) comes from the same `TARGET`
-table (last column above); for `TARGET=host` it falls back to `go env
-GOARCH` — never a hardcoded guess, so a package built natively on, say, an
-arm64 host is correctly labeled `arm64`, not silently mislabeled `amd64`.
+`nfpm` builds `.deb`, `.rpm`, `.apk`, and Arch packages from a single
+manifest ([`deploy/nfpm.yaml`](../deploy/nfpm.yaml)): the binary, man page,
+shell completions, and `LICENSE` at their standard paths, plus a service
+file — the systemd unit for `.deb`/`.rpm`/Arch, an OpenRC init script
+([`deploy/openrc/ovcp.initd`](../deploy/openrc/ovcp.initd)) for `.apk`,
+since Alpine has no systemd. On OpenWrt (also an `.apk` consumer),
+[`deploy/postinstall.sh`](../deploy/postinstall.sh) replaces the OpenRC
+script with [`deploy/openwrt/ovcp.init`](../deploy/openwrt/ovcp.init) (a
+procd script), detected via the presence of `/etc/rc.common`. Neither init
+script replicates the systemd unit's sandboxing (see
+[`docs/ARCHITECTURE.md`](ARCHITECTURE.md), Privilege model) — OpenRC and
+procd have no short equivalent to `ProtectSystem`/`NoNewPrivileges`.
 
-`apk` targets use OpenRC's init script by default; `postinstall.sh` swaps in
-the procd one automatically when `/etc/rc.common` (OpenWrt's marker) is
-present — see `deploy/nfpm.yaml`.
+`ARCH` (the `nfpm.yaml` `arch:` field) is derived from the `TARGET` table
+above; for `TARGET=host` it falls back to `go env GOARCH`, so a package
+built natively on an arm64 host is labeled `arm64`, not a hardcoded
+default.
+
+Install a built package:
+
+```sh
+sudo apt install ./dist/ovcp_*.deb              # Debian/Ubuntu
+sudo rpm -i dist/ovcp-*.rpm                      # Fedora/RHEL
+sudo apk add --allow-untrusted dist/ovcp-*.apk   # Alpine/OpenWrt
+```
+
+### Void Linux
+
+Void Linux packages (xbps) are built from a template contributed to
+[void-packages](https://github.com/void-linux/void-packages), not shipped
+by this repository — that is how Void distributes packages generally.
+[`deploy/void/template`](../deploy/void/template) and
+[`deploy/void/files/ovcp/run`](../deploy/void/files/ovcp/run) (a runit
+service) are the starting point. `make install DESTDIR="$DESTDIR"
+prefix=/usr`, invoked via `build_style=gnu-makefile`, is what the
+template's `do_install` hook uses. Any packaging system that calls plain
+`make install` already works; `DESTDIR` and `prefix` are honored per the
+GNU Coding Standards.
+
+## Development workflow
+
+```sh
+make help                  # every target and variable
+go test ./...              # Go test suite
+cd web/ui && npm run dev   # UI dev server; proxy the API manually or run `ovcp serve` alongside
+```
 
 ## CI / the release pipeline
 
-`.github/workflows/release.yml` builds every `TARGET` row above as a
-separate matrix job (binaries, shell completions, packages), and separately
-pushes a real multi-arch container image manifest to `ghcr.io` via:
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs on
+every `v*` tag push and has three stages:
 
-```sh
-docker buildx build \
-  --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64 \
-  --push -f Containerfile .
-```
+1. **`build`** — every `TARGET` row above, as a separate matrix job:
+   binary, shell completions, and (`.deb`/`.rpm`/`.zst` for glibc targets,
+   `.apk` for musl targets) the matching package, uploaded as a build
+   artifact.
+2. **`release`** — downloads every matrix artifact, computes a combined
+   `SHA256SUMS`, and publishes a GitHub Release with all binaries,
+   packages, and the checksum file attached.
+3. **`image`** — pushes a multi-arch container image manifest to
+   `ghcr.io`, tagged with the release tag and `latest`:
 
-That's a fundamentally different shape than `make image` (one manifest list
-spanning every platform, pushed to a registry, with QEMU set up via
-`docker/setup-qemu-action` and GitHub Actions' own layer cache) and
-deliberately isn't routed through the Makefile — `make image` is for
-building *one* local image to run or inspect, not for cutting a release.
+   ```sh
+   docker buildx build \
+     --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64 \
+     --push -f Containerfile .
+   ```
+
+   This differs from `make image` in shape: one manifest list spanning
+   every platform, pushed to a registry, with QEMU provisioned via
+   `docker/setup-qemu-action` and GitHub Actions' own layer cache. It is
+   not routed through the Makefile — `make image` builds one local image
+   to run or inspect, not a release artifact.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `unknown TARGET=foo (see: make help)` | Typo, or `foo` isn't in the table above | `make help` lists every valid name |
-| `missing: zig (cross-compiler for TARGET=...)` | Cross build, zig not installed | Install zig, or use `TARGET=host` when already on that arch |
+| `unknown TARGET=foo (see: make help)` | Typo, or `foo` is not in the table above | `make help` lists every valid name |
+| `missing: zig (cross-compiler for TARGET=...)` | Cross build, zig not installed | Install zig, or use `TARGET=host` when already on that architecture |
 | `error: this host can't run linux/X containers (no binfmt/QEMU registered for it)` | Cross image build, no binfmt handlers | `docker run --privileged --rm tonistiigi/binfmt --install all` (one-time, host-wide) |
-| `no value specified for --platform=` | Very old podman/docker invoked *without* going through `make image` (e.g. a hand-typed `podman build` from the Containerfile's header comment) | Use `make image`, which always passes `--platform` explicitly, or add `--platform=linux/$(uname -m)` yourself |
-| Image build takes 6+ minutes every time | Build cache got pruned, or this is the first build on this host | Expected once; subsequent builds reuse `id=ovcp-build-cache` and drop to ~2 minutes |
+| `no value specified for --platform=` | An old podman/docker invoked directly, bypassing `make image` | Use `make image`, which always passes `--platform` explicitly, or add `--platform=linux/$(uname -m)` manually |
+| Image build takes 6+ minutes every time | Build cache was pruned, or this is the first build on this host | Expected once; subsequent builds reuse `id=ovcp-build-cache` and drop to ~2 minutes |
