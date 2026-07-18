@@ -22,6 +22,7 @@ codebase.
 | `internal/telegram` | Optional notification bot: long-poller, narrow command surface, expiry sweep. |
 | `internal/api` | REST/JSON handlers, the embedded web UI, HTTPS, CSRF, and the session/RBAC middleware chain. |
 | `web/ui` | Svelte 5 sources for the admin UI, built to `web/dist` and embedded in the binary. |
+| `web` | `go:embed`s the built `web/dist` tree and exposes it as an `fs.FS` to `internal/api`. |
 
 ## Process model
 

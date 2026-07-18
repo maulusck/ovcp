@@ -167,7 +167,7 @@ static binary. The kernel's `F` flag caches only the wrapper's own file
 descriptor; if the wrapper's further exec cannot resolve inside the target
 container's near-empty root filesystem, the step still fails.
 `tonistiigi/binfmt` avoids this with statically linked interpreters, which
-is why the fix above uses it in preference to a distribution package.
+is why the fix above uses it in preference to a distro package.
 
 Rootless Podman or Docker can separately fail to use an emulator that is
 correctly registered and statically linked; this is an unprivileged
@@ -185,8 +185,8 @@ root's own `PATH`, which hits the same problem one layer up.)
 
 Neither fix persists across a reboot: `/proc/sys/fs/binfmt_misc` is kernel
 memory only and is rebuilt from installed packages on every boot. If a
-distribution package's boot hook re-registers its wrapper afterward, cause
-2 can recur and the fix must be re-applied.
+distro package's boot hook re-registers its wrapper afterward, cause 2 can
+recur and the fix must be re-applied.
 
 ### Unrecognized TARGET values
 
