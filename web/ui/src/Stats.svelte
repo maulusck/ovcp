@@ -188,7 +188,6 @@
 
 <style>
   .stats-grid { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
-  .card.wide { grid-column: 1 / -1; }
   .spark { width: 100%; height: 60px; display: block; }
   .spark polyline { fill: none; stroke: var(--amber); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
   .spark polyline.recv { stroke: var(--ok); }
