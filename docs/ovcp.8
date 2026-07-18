@@ -28,22 +28,19 @@ used in memory and never persisted: compromise of the host alone does not
 compromise the CA.
 .PP
 This page is also rendered into the web UI's \fBDocs\fR tab at build time
-(\fBmandoc\fR, see \fImake ui\fR) \(en one source, readable with or without
-a terminal.
+\(en one source, readable with or without a terminal.
+.PP
+This page is the complete runtime reference. Building and packaging are
+documented in \fBBUILD.md\fR; internal design in \fBARCHITECTURE.md\fR.
 .SH REQUIREMENTS
-Runtime:
 .BR openvpn (8)
 on \fBPATH\fR \(en ovcp starts, stops, and controls it but never bundles
 it. Linux with \fI/dev/net/tun\fR; root or \fBCAP_NET_ADMIN\fR for openvpn
 to bring the tunnel up (see \fBPRIVILEGES\fR).
 .PP
-Build: Go 1.22+, a C compiler (\fBCGO_ENABLED=1\fR, needed by the sqlite
-driver), Node/npm (Svelte UI sources), and \fBmandoc\fR (renders this page
-into the UI's Docs tab, see \fImake ui\fR). Optional: \fBnfpm\fR (\fImake
-deb\fR/\fImake rpm\fR), \fBpodman\fR or \fBdocker\fR (\fImake image\fR),
-.BR zig (1)
-(cross\-arch/libc builds, \fBmake build TARGET=...\fR, see \fBpackages\fR
-below).
+Building ovcp itself \(en compiler and toolchain requirements,
+cross\-compiling, packaging, and the container image \(en is documented in
+\fBBUILD.md\fR, not here.
 .SH SECURITY
 Tier\-2 CA model: the CA private key is encrypted at rest (argon2id +
 AES\-256\-GCM); every signing operation (\fBissue\fR, \fBrevoke\fR) requires
@@ -55,10 +52,10 @@ Every operator secret \(en the CA passphrase, admin/user passwords \(en
 must be at least 8 characters and mix at least 2 of upper/lower/digit/
 symbol, enforced the same way whether set interactively, via
 \fBOVCP_CA_PASSPHRASE\fR / \fBOVCP_USER_PASSWORD\fR, or through the web UI.
-\fBOVCP_YOLO_PASSWORD\fR (set to anything non\-empty) waives this \(en CLI
-and UI alike, since \fBserve\fR inherits its process env \(en for anyone
-who has decided, with full knowledge of the consequences, that they don't
-care. Every acceptance through this door is audited
+\fBOVCP_YOLO_PASSWORD\fR (set to anything non\-empty) waives this
+requirement across the CLI and web UI, since \fBserve\fR inherits its
+process environment \(en named for what it is, not a setting to reach for
+by accident. Every acceptance through this door is still audited
 (\fBweak_password_accepted\fR).
 .PP
 Client private keys are embedded in the exported profile once and never
@@ -551,8 +548,8 @@ Non\-interactive equivalents for \fBrotate\-ca\fR's new passphrase and
 .B OVCP_YOLO_PASSWORD
 Set (to anything non\-empty) to waive the length/complexity check on every
 passphrase/password above, CLI and web UI alike. Every weak secret it lets
-through is still audited as \fBweak_password_accepted\fR. You already know
-this is a bad idea; that's the point.
+through is still audited as \fBweak_password_accepted\fR. Named for what it
+is, not a setting to reach for by accident.
 .TP
 .B OVCP_TELEGRAM_TOKEN
 Non\-interactive equivalent for \fBtelegram token\fR's bot token. Same
@@ -697,12 +694,10 @@ In containers, run with \-\-cap\-add NET_ADMIN; the runtime dir
 \fI/run/ovcp\fR (0750) holds the management and control sockets. openvpn
 runs as a foreground child of ovcp and cannot outlive it (Pdeathsig).
 .PP
-A privilege\-separated admin UI (root supervisor + non\-root HTTP worker)
-was considered and deliberately not built: reaching the admin UI at all
-already means the VPN's own auth+CSRF+RBAC+TOTP has been breached, so a
-second process and an IPC protocol didn't earn their complexity for this
-tool's threat model. The shipped systemd unit sandboxes the whole process
-instead (\fBProtectSystem=strict\fR, \fBNoNewPrivileges\fR,
+ovcp does not separate the admin UI from the PKI/openvpn\-supervision path
+into a lower\-privilege process; see \fBARCHITECTURE.md\fR for the
+rationale. The shipped systemd unit sandboxes the whole process instead
+(\fBProtectSystem=strict\fR, \fBNoNewPrivileges\fR,
 \fBMemoryDenyWriteExecute\fR, and more) \(en native containment, not an
 app\-level privilege split.
 .SH DEPLOYMENT
@@ -712,9 +707,10 @@ and inside a container. If ovcp restarts, its \fBserve\fR process brings
 openvpn back up.
 .SS systemd
 A single unit runs ovcp as root; ovcp starts and stops openvpn itself.
+Distro packages install \fIovcp.service\fR automatically; a from\-source
+build does not (see \fBBUILD.md\fR) and needs it copied in manually:
 .nf
 .RS
-make release && sudo make install
 sudo install \-m644 deploy/systemd/ovcp.service /usr/lib/systemd/system/
 sudo OVCP_DATA=/var/lib/ovcp ovcp init \-server\-cn vpn.example.com
 sudo systemctl enable \-\-now ovcp
@@ -767,40 +763,6 @@ external traffic. Fix: set \fBservice.spec.externalTrafficPolicy: Local\fR.
 .PP
 \fBGET /healthz\fR is an unauthenticated, database\-ping health check \(en
 point a container/Kubernetes liveness or readiness probe at it.
-.SS packages
-.B make deb|rpm|apk|archlinux
-builds a distro package via \fBnfpm\fR: binary, man page, shell completions,
-and \fILICENSE\fR to their standard paths, plus a service file \(en the
-systemd unit for deb/rpm/archlinux, an OpenRC init script
-(\fIdeploy/openrc/ovcp.initd\fR) for apk, since Alpine has no systemd. On
-OpenWrt (also an apk consumer), \fIdeploy/postinstall.sh\fR swaps in
-\fIdeploy/openwrt/ovcp.init\fR (a procd script) in place of the OpenRC one,
-detected via \fI/etc/rc.common\fR. Neither init script has an equivalent to
-the systemd unit's sandboxing (\fBPRIVILEGES\fR) \(en OpenRC and procd have
-no short equivalent to \fBProtectSystem\fR/\fBNoNewPrivileges\fR/etc.
-Cross\-arch/libc packages: pass \fBTARGET=\fR (\fImake help\fR lists the
-values \(en e.g. \fBmake deb TARGET=arm64\fR, \fBmake apk
-TARGET=arm64\-musl\fR for a Raspberry Pi). Cross builds use
-.BR zig (1)
-as the C compiler (\fBzig cc\fR, real native cross\-compilation, not
-emulated) instead of this host's own \fBcc\fR \(en one tool covers every
-supported glibc/musl/arm combination, no per\-target toolchain to install.
-Native (\fBTARGET=host\fR, the default) needs nothing beyond the usual
-build requirements above.
-.PP
-Void Linux packages (xbps) are built from a template contributed to
-.UR https://github.com/void-linux/void-packages
-void\-packages
-.UE
-, not shipped by this repository \(en that's how Void itself distributes
-packages. \fIdeploy/void/template\fR and \fIdeploy/void/ovcp/run\fR (a
-runit service) are a ready starting point:
-.BR "make install DESTDIR=\(dq$DESTDIR\(dq prefix=/usr" ,
-called via \fBbuild_style=gnu-makefile\fR, is what the template's
-.B do_install
-hook uses \(en any packaging system that calls plain
-.B make install
-already works, \fBDESTDIR\fR/\fBprefix\fR are honored (GNU Coding Standards).
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

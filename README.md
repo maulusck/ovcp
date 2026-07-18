@@ -6,22 +6,24 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
 
-Run and manage one [OpenVPN](https://openvpn.net/) server without easy-rsa,
-docker-compose spaghetti, or a separate PKI toolchain. OVCP is a single
-static Go binary — a built-in certificate authority, a web admin UI, a
-scriptable CLI, and OpenVPN process supervision, all in one process.
+**OVCP (OpenVPN Control Plane)** runs and manages one [OpenVPN](https://openvpn.net/)
+server without `easy-rsa`, a multi-container compose stack, or a separate
+PKI toolchain. It's a single static Go binary: a built-in certificate
+authority, a web admin UI, a scriptable CLI, and OpenVPN process
+supervision, all in one process, all on one host.
+
+## Features
 
 - **Native PKI** — issue, revoke, and renew client/server certificates; no
-  `easy-rsa`, no shell scripts. CA private key stored encrypted
+  `easy-rsa`, no shell scripts. The CA private key is stored encrypted
   (argon2id + AES-256-GCM); every sign/revoke needs the passphrase in memory,
   never on disk.
 - **One binary** — the Svelte web UI is embedded in the Go binary. No
   Node.js, reverse proxy, or separate frontend deploy in production.
 - **Full CLI** — every UI action has a CLI equivalent. `-json` (or
-  `$OVCP_JSON`) switches *every* command to machine-readable output —
-  same fields either way, just JSON instead of text — for Ansible,
-  scripts, or anything else that isn't a human. Shell completion for
-  bash/zsh/fish.
+  `$OVCP_JSON`) switches *every* command to machine-readable output — same
+  fields either way, just JSON instead of text — for Ansible, scripts, or
+  anything else that isn't a human. Shell completion for bash/zsh/fish.
 - **Client export** — generate ready-to-import `.ovpn` profiles (optionally
   key-encrypted) or a scannable QR code, from the CLI or the UI.
 - **Live stats & audit log** — per-client traffic/connection history, a
@@ -29,54 +31,56 @@ scriptable CLI, and OpenVPN process supervision, all in one process.
 - **Optional Telegram bot** — push notifications for revokes, user changes,
   and cert-expiry warnings, plus a narrow Start/Stop/Restart menu gated to
   one linked admin chat. Off by default; nothing else depends on it.
-- **Encrypted backup/restore** — one command exports CA, CRL, tls-crypt key,
-  config, and database into a single encrypted archive.
-- **Prod-ready deployment** — systemd unit, `.deb`/`.rpm`/`.apk`/Arch
+- **Encrypted backup/restore** — one command exports the CA, CRL, tls-crypt
+  key, config, and database into a single encrypted archive.
+- **Access control** — role-based access (admin/operator/readonly), optional
+  TOTP 2FA, rate-limited logins, and CSRF-protected, HTTPS-only sessions.
+- **Prod-ready packaging** — a systemd unit, `.deb`/`.rpm`/`.apk`/Arch/Void
   packages (amd64, ARM — Raspberry Pi and similar SBCs, and RISC-V; glibc or
   musl), an all-in-one multi-arch container image, and a SELinux policy, all
-  included. Every arch builds natively on its own host or cross-compiles from
-  any other — see [`docs/BUILD.md`](docs/BUILD.md).
+  included.
 
 ## Requirements
 
-- **Runtime:** Linux with `/dev/net/tun`, and [`openvpn`](https://openvpn.net/)
-  on `PATH`. OVCP runs as root — it owns the PKI and starts openvpn itself
-  as a supervised child process.
-- **Build:** Go 1.22+, a C compiler (CGO, for the SQLite driver), Node/npm
-  (Svelte UI), and `mandoc` (renders the man page into the UI's Docs tab).
-  Run `make deps` to check, or see `man ovcp`'s **REQUIREMENTS** section.
-  Cross-compiling for another arch/libc (`make build TARGET=arm64`, see
-  `make help`) additionally needs [`zig`](https://ziglang.org/) — one tool
-  covers every supported target, no per-arch toolchain to install.
+Linux with `/dev/net/tun`, and [`openvpn`](https://openvpn.net/) on `PATH`.
+OVCP runs as root — it owns the PKI and starts openvpn itself as a
+supervised child process.
+
+This is sufficient to run ovcp. Building it from source has its own
+toolchain requirements — see [`docs/BUILD.md`](docs/BUILD.md).
 
 ## Install
 
-Pick one:
+OVCP ships in three equivalent forms; choose based on your host:
 
-```sh
-# Debian/Ubuntu or Fedora/RHEL — prebuilt package (needs nfpm to build it)
-make deb   # or: make rpm
-sudo apt install ./dist/ovcp_*.deb   # or: sudo rpm -i dist/ovcp-*.rpm
+- **Distro package** — `.deb`, `.rpm`, `.apk`, or Arch/Void — installs the
+  binary, man page, shell completions, and a service file for your init
+  system in one step.
+- **Container image** — one image, OpenVPN included, nothing else to
+  install.
+- **Static binary** — drop `ovcp` on `PATH`; nothing else required at
+  runtime beyond `openvpn` itself.
 
-# Container (podman or docker) — OpenVPN included, nothing else to install
-make image   # this host's own arch; TARGET= to cross-build, see docs/BUILD.md
-
-# From source
-make deps && make release   # → bin/ovcp, dist/completion/*
-```
+No tagged release exists yet, so none of these are published as
+ready-to-download artifacts — build from source; see
+[`docs/BUILD.md`](docs/BUILD.md) for your architecture and libc.
 
 ## Quick start
+
+The examples below assume `ovcp` is on `PATH` — a distro package puts it
+there; a from-source build needs `sudo make install` first, or run
+`bin/ovcp` directly from the checkout (see [`docs/BUILD.md`](docs/BUILD.md)).
 
 Setup is two commands: `init` once, then `serve`.
 
 ```sh
 export OVCP_DATA=$PWD/data   # or run as root against /var/lib/ovcp — see below
 
-bin/ovcp init -server-cn vpn.example.com
+ovcp init -server-cn vpn.example.com
 # → CA, server cert, tls-crypt key, server.conf, admin user
 # → prompts for a CA passphrase and the admin password
 
-bin/ovcp serve
+ovcp serve
 # → starts openvpn (ovcp owns the process) and the admin UI
 # → https://127.0.0.1:8443 (self-signed cert on first run)
 ```
@@ -88,10 +92,10 @@ the fix.
 Issue a client and hand them a ready-to-import profile:
 
 ```sh
-bin/ovcp export -cn alice -remote vpn.example.com > alice.ovpn
+ovcp export -cn alice -remote vpn.example.com > alice.ovpn
 ```
 
-**Production**, via the installed package:
+**Production**, via an installed package:
 
 ```sh
 sudo ovcp init -server-cn vpn.example.com
@@ -107,10 +111,10 @@ podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
   -v ovcp:/var/lib/ovcp ovcp
 ```
 
-Every client showing the same `RealAddress`? That's your container
-runtime's userspace port proxy rewriting the source address, not an ovcp
-bug — see `man ovcp`'s **DEPLOYMENT** → **container** section for the fix
-(Docker, Podman, and Kubernetes each have a different one).
+If every client shows the same `RealAddress`, the container runtime's
+userspace port proxy is rewriting the source address — not an ovcp bug.
+See `man ovcp`'s **DEPLOYMENT** → **container** section for the fix
+(Docker, Podman, and Kubernetes each require a different one).
 
 ## CLI
 
@@ -128,48 +132,23 @@ result to encode.
 ovcp -json list | jq -r '.[] | select(.status == "expired") | .cn'
 ```
 
-## Full reference
+## Documentation
 
-`man ovcp` (`make man` to preview before installing) is the complete,
-maintained reference: every command and flag, the security model, the
-privilege model (and why it's *not* privilege-separated), every environment
-variable, every file ovcp reads or writes, and deployment recipes for
-systemd, containers, SELinux, and distro packages. This README stays a
-pitch and a quick start; nothing above duplicates it, so it can't drift out
-of sync.
+Four documents, four altitudes, nothing duplicated between them:
 
-The same page is also in the web UI's **Docs** tab (`mandoc` renders
-`docs/ovcp.8` at build time into `web/dist/docs.html`, embedded in the
-binary like the rest of the UI) — no terminal needed to read it, one source
-either way.
-
-## Layout
-
-```
-cmd/ovcp             CLI + serve entrypoint
-internal/pki         CA, issue/revoke, CRL, .ovpn bundles, tls-crypt
-internal/store       SQLite (metadata only — never private keys)
-internal/backup      encrypted export/import (CA, CRL, tls-crypt, config, database)
-internal/controller  openvpn Supervisor (reaped child) + control socket; mgmt client
-internal/ovpnconf    validated server.conf generation
-internal/auth        argon2id, sessions, TOTP, rate-limit, RBAC
-internal/api         REST/JSON + embedded UI, HTTPS, CSRF
-web/ui               Svelte 5 sources → web/dist (embedded)
-deploy/              systemd units, nfpm packaging, selinux.sh
-docs/ovcp.8          man page
-```
-
-## Development
-
-```sh
-make help
-go test ./...
-cd web/ui && npm run dev   # UI dev server (proxy API manually or run serve)
-```
-
-`make image` keeps a zig/go build cache in the container engine's own storage
-(not this checkout, nothing to `.gitignore`) so repeated builds stay fast —
-it grows the more you rebuild; `podman/docker builder prune` reclaims it.
+- **This README** — what OVCP is, why it exists, and the shortest path to
+  a running server.
+- **[`man ovcp`](docs/ovcp.8)** — the complete runtime reference: every
+  command and flag, the security and privilege model, every environment
+  variable, every file ovcp reads or writes, and deployment recipes for
+  systemd, containers, and SELinux. The same page renders into the web
+  UI's **Docs** tab at build time — no terminal needed to read it, one
+  source either way.
+- **[`docs/BUILD.md`](docs/BUILD.md)** — building the binary, cross-compiling
+  for another arch/libc, the container image, and distro/Void packages.
+- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — internal design:
+  source layout, the process and IPC model, and the rationale behind
+  decisions that affect more than one package.
 
 ## License
 
