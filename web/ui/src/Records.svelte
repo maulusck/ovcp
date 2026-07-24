@@ -1,5 +1,6 @@
 <script>
   import { api, procOp } from './api.js'
+  import { expectDnsRecovery } from './status.svelte.js'
   let { isAdmin } = $props()
 
   let dnsErr = $state('')
@@ -17,16 +18,16 @@
     catch (x) { dnsErr = x.error; e.target.checked = !want }
   }
 
-  async function dns(op, confirmMsg, done) {
+  async function dns(op, confirmMsg, recoverMs, done, label) {
     dnsErr = ''; dnsOk = ''
     try {
-      const r = await procOp('/dns/', op, { confirm: confirmMsg })
+      const r = await procOp('/dns/', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectDnsRecovery(ms, label) })
       if (r) dnsOk = done
     } catch (x) { dnsErr = x.error }
   }
-  const start = () => dns('start', null, 'Started.')
-  const stop = () => dns('stop', 'Stop internal DNS? Connected clients stop resolving local names.', 'Stopped.')
-  const restart = () => dns('restart', 'Restart internal DNS?', 'Restarted.')
+  const start = () => dns('start', null, 10000, 'Started.', 'starting')
+  const stop = () => dns('stop', 'Stop internal DNS? Connected clients stop resolving local names.', 0, 'Stopped.')
+  const restart = () => dns('restart', 'Restart internal DNS?', 10000, 'Restarted.', 'restarting')
 
   let content = $state('')
   let preview = $state(null) // {diff, changed}
@@ -65,9 +66,9 @@
   </label>
   {#if isAdmin}
     <div class="row">
-      <button type="button" class="ghost" onclick={start}>Start</button>
-      <button type="button" class="ghost" onclick={stop}>Stop</button>
-      <button type="button" class="ghost" onclick={restart}>Restart</button>
+      <button type="button" class="ghost" onclick={start} title="Launch dnsmasq if it isn't running">Start</button>
+      <button type="button" class="ghost" onclick={stop} title="SIGTERM dnsmasq; clients stop resolving local names">Stop</button>
+      <button type="button" class="ghost" onclick={restart} title="Full stop + fresh start; applies hosts and config changes">Restart</button>
     </div>
   {:else}
     <p class="muted small">Read-only: your role can view but not change this.</p>

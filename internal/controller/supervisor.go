@@ -100,8 +100,20 @@ func (s *Supervisor) StartedAt() time.Time {
 	return s.startedAt
 }
 
+// acquireOp claims opMu for one lifecycle op — held for the op's real
+// duration, so the next request is only ever allowed in once this op has
+// genuinely reported its finish status (success or error), not a guessed delay.
+func (s *Supervisor) acquireOp() error {
+	if !s.opMu.TryLock() {
+		return fmt.Errorf("controller: %s: %w", s.Name, ErrBusy)
+	}
+	return nil
+}
+
 func (s *Supervisor) Start() error {
-	s.opMu.Lock()
+	if err := s.acquireOp(); err != nil {
+		return err
+	}
 	defer s.opMu.Unlock()
 	s.stMu.Lock()
 	s.desired = true
@@ -110,7 +122,9 @@ func (s *Supervisor) Start() error {
 }
 
 func (s *Supervisor) Stop() error {
-	s.opMu.Lock()
+	if err := s.acquireOp(); err != nil {
+		return err
+	}
 	defer s.opMu.Unlock()
 	s.stMu.Lock()
 	s.desired = false
@@ -119,7 +133,9 @@ func (s *Supervisor) Stop() error {
 }
 
 func (s *Supervisor) Restart() error {
-	s.opMu.Lock()
+	if err := s.acquireOp(); err != nil {
+		return err
+	}
 	defer s.opMu.Unlock()
 	s.stMu.Lock()
 	s.desired = true
@@ -131,7 +147,9 @@ func (s *Supervisor) Restart() error {
 }
 
 func (s *Supervisor) Reconnect() error {
-	s.opMu.Lock()
+	if err := s.acquireOp(); err != nil {
+		return err
+	}
 	defer s.opMu.Unlock()
 	cmd, _, running := s.snapshot()
 	if !running {

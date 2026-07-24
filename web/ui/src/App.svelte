@@ -123,13 +123,15 @@
   const phaseText = $derived(
     vpn.phase === 'ok' ? `VPN running · up ${vpn.uptime} · ${vpn.clients} client${vpn.clients === 1 ? '' : 's'} connected` +
       (vpn.ovcpUptime ? ` · ovcp up ${vpn.ovcpUptime}` : '') :
-    vpn.phase === 'reloading' ? 'VPN restarting…' : 'VPN unreachable')
-  // second blinker on the same pill — passive/dim (not red) when dnsmasq
-  // was never installed, that's a normal deployment, not an alarm.
-  const dnsState = $derived(!user?.dnsmasqVersion ? 'na' : dns.up ? 'ok' : 'down')
+    vpn.phase === 'reloading' ? `VPN ${vpn.reloadLabel}…` : 'VPN unreachable')
+  // second pill, same ok/down/reloading shape as vpn.phase — passive/dim
+  // (not red) when dnsmasq was never installed, that's a normal deployment,
+  // not an alarm.
+  const dnsState = $derived(!user?.dnsmasqVersion ? 'na' : dns.phase)
   const dnsText = $derived(
     dnsState === 'na' ? 'DNS: not installed' :
-    dnsState === 'ok' ? `DNS running · up ${dns.uptime}` : 'DNS unreachable')
+    dnsState === 'ok' ? `DNS running · up ${dns.uptime}` :
+    dnsState === 'reloading' ? `DNS ${dns.reloadLabel}…` : 'DNS unreachable')
 </script>
 
 {#if !user}
@@ -165,11 +167,13 @@
         <Logo />
         <strong>OVCP</strong>
       </a>
-      <span class="pill {vpn.phase}" title={phaseText} role="status">
-        <i></i><span class="pill-text">{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? 'restarting' : 'vpn down'}</span>
+      <span class="pill" title={phaseText} role="status">
+        <span class="status-dot {vpn.phase}"></span>
+        <span class="pill-text">{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? vpn.reloadLabel : 'vpn down'}</span>
       </span>
-      <span class="pill {dnsState}" title={dnsText} role="status">
-        <i></i><span class="pill-text">{dnsState === 'ok' ? 'dns up' : dnsState === 'down' ? 'dns down' : 'dns —'}</span>
+      <span class="pill" title={dnsText} role="status">
+        <span class="status-dot {dnsState}"></span>
+        <span class="pill-text">{dnsState === 'ok' ? 'dns up' : dnsState === 'reloading' ? dns.reloadLabel : dnsState === 'down' ? 'dns down' : 'dns —'}</span>
       </span>
     </div>
     <nav>
@@ -305,7 +309,7 @@
   }
   :global(button) {
     font: inherit; color: var(--ink); background: var(--amber);
-    border: 0; border-radius: 4px; padding: 7px 14px; cursor: pointer;
+    border: 0; border-radius: 4px; padding: 4px 14px; cursor: pointer;
     transition: opacity .15s, background .15s;
   }
   :global(button:hover:not(:disabled)) { opacity: .85; }
@@ -422,11 +426,12 @@
     font-family: var(--mono); font-size: 11px; color: var(--dim);
     border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
   }
-  .pill i { width: 8px; height: 8px; border-radius: 50%; }
-  .pill.ok i { background: var(--ok); box-shadow: 0 0 6px 1px var(--ok); }
-  .pill.down i { background: var(--bad); box-shadow: 0 0 6px 1px var(--bad); }
-  .pill.na i { background: var(--dim); opacity: .45; } /* dnsmasq never installed — same "inactive" look as :disabled, not an alarm */
-  .pill.reloading i {
+  /* ok/down/na/reloading dot — shared with Settings.svelte's Telegram status line */
+  :global(.status-dot) { width: 8px; height: 8px; border-radius: 50%; }
+  :global(.status-dot.ok) { background: var(--ok); box-shadow: 0 0 6px 1px var(--ok); }
+  :global(.status-dot.down) { background: var(--bad); box-shadow: 0 0 6px 1px var(--bad); }
+  :global(.status-dot.na) { background: var(--dim); opacity: .45; } /* not installed/configured — same "inactive" look as :disabled, not an alarm */
+  :global(.status-dot.reloading) {
     background: var(--amber); box-shadow: 0 0 6px 1px var(--amber);
     animation: pulse 1s ease-in-out infinite;
   }

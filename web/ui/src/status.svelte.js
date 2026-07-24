@@ -1,10 +1,11 @@
 // Shared live VPN status. Polled app-wide; phase drives the header glow.
 import { api } from './api.js'
 
-export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', ovcpUptime: '' }) // ok | down | reloading
-export const dns = $state({ up: false, uptime: '' }) // dnsmasq is optional — absent fields just mean "not configured"
+export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', ovcpUptime: '', reloadLabel: '' }) // ok | down | reloading
+export const dns = $state({ up: false, phase: 'down', uptime: '', reloadLabel: '' }) // ok | down | reloading; dnsmasq is optional — App.svelte overrides to "na" when never installed
 
 let deadline = 0
+let dnsDeadline = 0
 
 // fmtUptime: seconds → compact string, longest unit that keeps it readable.
 // Shared with Stats.svelte's session-duration column.
@@ -34,18 +35,36 @@ export async function pollOnce() {
     }
     dns.up = !!d.dns_up
     dns.uptime = fmtUptime(d.dns_uptime_seconds)
+    if (d.dns_up) {
+      dns.phase = 'ok'
+      dnsDeadline = 0
+    } else if (dns.phase === 'reloading' && Date.now() < dnsDeadline) {
+      // still within the grace window
+    } else {
+      dns.phase = 'down'
+    }
     return d
   } catch {
     if (!(vpn.phase === 'reloading' && Date.now() < deadline)) {
       vpn.phase = 'down'; vpn.up = false; vpn.clientList = []; vpn.uptime = ''; vpn.ovcpUptime = ''
     }
-    dns.up = false; dns.uptime = ''
+    if (!(dns.phase === 'reloading' && Date.now() < dnsDeadline)) {
+      dns.phase = 'down'; dns.up = false; dns.uptime = ''
+    }
     return { vpn_up: false, clients: [] }
   }
 }
 
-// Call when a reload/restart was requested: yellow until back up, red after timeout.
-export function expectRecovery(ms = 30000) {
+// Call when a reload/restart/reconnect was requested: yellow until back up
+// (or timeout) — label is what the pill/tooltip call it meanwhile, since
+// "restarting" during a Reconnect (SIGUSR1, process never stops) would lie.
+export function expectRecovery(ms = 30000, label = 'restarting') {
   vpn.phase = 'reloading'
+  vpn.reloadLabel = label
   deadline = Date.now() + ms
+}
+export function expectDnsRecovery(ms = 15000, label = 'restarting') {
+  dns.phase = 'reloading'
+  dns.reloadLabel = label
+  dnsDeadline = Date.now() + ms
 }

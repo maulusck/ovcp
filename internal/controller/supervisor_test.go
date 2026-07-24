@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -51,6 +52,36 @@ func TestStartStopReaps(t *testing.T) {
 	// This is the regression guard for the container zombie bug.
 	if syscall.Kill(pid, 0) == nil {
 		t.Fatal("child not reaped — signal 0 still succeeds (zombie)")
+	}
+}
+
+// TestBusy: a Start genuinely in flight (blocked in PreStart, real opMu hold,
+// no synthetic lock/sleep) must reject a concurrent one — and admit a new
+// call only once that real op has actually finished.
+func TestBusy(t *testing.T) {
+	s := newSup(t)
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	s.PreStart = func() []string {
+		close(entered)
+		<-release
+		return []string{"--config", "/dev/null"}
+	}
+	go func() { done <- s.Start() }()
+	<-entered // first Start is now mid-flight, opMu genuinely held
+
+	if err := s.Start(); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Start while another is mid-flight: got %v, want ErrBusy", err)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("blocked start: %v", err)
+	}
+	if !s.Running() {
+		t.Fatal("expected running once the blocked op completed")
+	}
+	if err := s.Start(); err != nil {
+		t.Fatalf("start after real completion: %v", err)
 	}
 }
 

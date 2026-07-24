@@ -150,14 +150,17 @@
               <td class="actions">
                 <button class="ghost" onclick={() => setPassword(u)}>Set password</button>
                 {#if u.TOTP}
-                  <button class="ghost" onclick={() => disableTOTP(u)}>Turn off 2FA</button>
+                  <button class="ghost" onclick={() => disableTOTP(u)}
+                    title="Removes the TOTP requirement; account falls back to password-only login">Turn off 2FA</button>
                 {:else}
                   <button class="ghost" onclick={() => enrollTOTP(u)}>Enroll 2FA</button>
                 {/if}
                 <button class="ghost" onclick={() => toggleDisabled(u)}
-                  disabled={u.Username === me}>{u.Disabled ? 'Enable' : 'Disable'}</button>
+                  disabled={u.Username === me}
+                  title={u.Disabled ? 'Restore login access' : 'Block login; account and its certs stay intact'}>{u.Disabled ? 'Enable' : 'Disable'}</button>
                 <button class="ghost" onclick={() => remove(u)}
-                  disabled={u.Username === me}>Delete</button>
+                  disabled={u.Username === me}
+                  title="Remove the account permanently; VPN certs are unaffected">Delete</button>
               </td>
             </tr>
           {/each}

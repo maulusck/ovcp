@@ -61,7 +61,8 @@
             <td>{fmtBytes(c.BytesSent)}</td>
             <td>{new Date(c.ConnectedSince).toLocaleString()}</td>
             {#if canOperate}
-              <td><button class="ghost" onclick={() => kill(c.CN)}>Disconnect</button></td>
+              <td><button class="ghost" onclick={() => kill(c.CN)}
+                title="Kill this session; cert stays valid, client can reconnect immediately">Disconnect</button></td>
             {/if}
           </tr>
         {/each}

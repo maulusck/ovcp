@@ -3,6 +3,7 @@ package controller
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -16,6 +17,10 @@ import (
 // from inside the `ovcp serve` process itself; a CLI invocation gets its own
 // near-zero copy and must read it over the wire instead (ControlResult.ServeStartedAt).
 var ProcessStartedAt = time.Now()
+
+// ErrBusy: a lifecycle op rejects instead of queuing behind one already in
+// flight — queuing would let repeated calls each fully execute in turn.
+var ErrBusy = errors.New("operation already in progress")
 
 // Lifecycle is a supervised worker's control surface (implemented by
 // *Supervisor) — shared by openvpn and dnsmasq.

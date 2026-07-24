@@ -75,9 +75,43 @@ func (p *Poller) Status() controller.TelegramStatus {
 	return controller.TelegramStatus{Running: p.running, TokenSet: token != "", Admin: admin}
 }
 
+// acquireOp claims mu for one Start/Stop/Restart — held for the op's real
+// duration, so a concurrent call only ever gets in once this one has
+// genuinely finished, not after a guessed delay.
+func (p *Poller) acquireOp() error {
+	if !p.mu.TryLock() {
+		return fmt.Errorf("telegram: %w", controller.ErrBusy)
+	}
+	return nil
+}
+
 func (p *Poller) Start() error {
-	p.mu.Lock()
+	if err := p.acquireOp(); err != nil {
+		return err
+	}
 	defer p.mu.Unlock()
+	return p.start()
+}
+
+func (p *Poller) Stop() error {
+	if err := p.acquireOp(); err != nil {
+		return err
+	}
+	defer p.mu.Unlock()
+	return p.stop()
+}
+
+func (p *Poller) Restart() error {
+	if err := p.acquireOp(); err != nil {
+		return err
+	}
+	defer p.mu.Unlock()
+	p.stop()
+	return p.start()
+}
+
+// start/stop assume p.mu is already held (mirrors Supervisor's opMu/start/stop split).
+func (p *Poller) start() error {
 	if p.running {
 		return nil
 	}
@@ -94,9 +128,7 @@ func (p *Poller) Start() error {
 	return nil
 }
 
-func (p *Poller) Stop() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (p *Poller) stop() error {
 	if !p.running {
 		return nil
 	}
@@ -104,11 +136,6 @@ func (p *Poller) Stop() error {
 	p.running = false
 	slog.Info("telegram: poller stopped")
 	return nil
-}
-
-func (p *Poller) Restart() error {
-	p.Stop()
-	return p.Start()
 }
 
 // getUpdatesWarnThreshold: consecutive failures before escalating Debug to

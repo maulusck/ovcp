@@ -2,11 +2,14 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ovcp/ovcp/internal/controller"
 )
 
 type fakeLife struct{}
@@ -36,6 +39,20 @@ func TestMatches(t *testing.T) {
 		if got := matches(c.admin, c.u); got != c.want {
 			t.Errorf("matches(%q, %+v) = %v, want %v", c.admin, c.u, got, c.want)
 		}
+	}
+}
+
+// TestBusy: an op already holding mu must reject a concurrent one instead
+// of queuing behind it — same guard as controller.Supervisor's opMu.
+func TestBusy(t *testing.T) {
+	p := &Poller{}
+	p.mu.Lock()
+	if err := p.Stop(); !errors.Is(err, controller.ErrBusy) {
+		t.Fatalf("Stop while busy: got %v, want ErrBusy", err)
+	}
+	p.mu.Unlock()
+	if err := p.Stop(); err != nil {
+		t.Fatalf("stop after release: %v", err)
 	}
 }
 

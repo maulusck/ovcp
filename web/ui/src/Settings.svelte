@@ -39,18 +39,18 @@
 
   // Config and CRL changes require a full Restart (fresh root process re-reads
   // the keys); Reconnect only soft-resets live sessions for recovery.
-  async function vpn(op, confirmMsg, recoverMs, done) {
+  async function vpn(op, confirmMsg, recoverMs, done, label) {
     err = ''; ok = ''
     try {
-      const r = await procOp('/vpn/', op, { confirm: confirmMsg, recoverMs, onRecover: expectRecovery })
+      const r = await procOp('/vpn/', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectRecovery(ms, label) })
       if (r) ok = done
     } catch (x) { err = x.error }
   }
 
-  const start     = () => vpn('start', null, 30000, 'Start requested.')
+  const start     = () => vpn('start', null, 30000, 'Start requested.', 'starting')
   const stop      = () => vpn('stop', 'Stop OpenVPN? All tunnels disconnect.', 0, 'Stopped. All tunnels disconnected.')
-  const restart   = () => vpn('restart', 'Restart OpenVPN? Connected clients will briefly drop.', 30000, 'Restarting. Applies all configuration changes.')
-  const reconnect = () => vpn('reconnect', null, 15000, 'Reconnect signal sent. Live sessions reset.')
+  const restart   = () => vpn('restart', 'Restart OpenVPN? Connected clients will briefly drop.', 30000, 'Restarting. Applies all configuration changes.', 'restarting')
+  const reconnect = () => vpn('reconnect', null, 15000, 'Reconnect signal sent. Live sessions reset.', 'reconnecting')
 
   async function renewServer() {
     const passphrase = prompt('CA passphrase to renew the server certificate:')
@@ -95,16 +95,21 @@
     } catch (x) { tgErr = x.error }
   }
 
-  let tgBusy = $state(false)
-  async function telegramOp(op) {
-    tgErr = ''; tgOk = ''; tgBusy = true
-    try { tg = await api('POST', '/telegram/' + op) }
-    catch (x) { tgErr = x.error }
-    finally { tgBusy = false }
+  async function telegramOp(op, done) {
+    tgErr = ''; tgOk = ''
+    try {
+      tg = await procOp('/telegram/', op)
+      tgOk = done
+    } catch (x) { tgErr = x.error }
   }
-  const tgStart = () => telegramOp('start')
-  const tgStop = () => telegramOp('stop')
-  const tgRestart = () => telegramOp('restart')
+  const tgStart = () => telegramOp('start', 'Started.')
+  const tgStop = () => telegramOp('stop', 'Stopped.')
+  const tgRestart = () => telegramOp('restart', 'Restarted.')
+
+  const tgState = $derived(!tg?.tokenSet ? 'na' : tg.running ? 'ok' : 'down')
+  const tgLabel = $derived(
+    tgState === 'na' ? 'not configured' :
+    tgState === 'ok' ? `running · admin: ${tg.admin}` : 'stopped')
 </script>
 
 <div class="card">
@@ -187,19 +192,15 @@
     {#if tgErr}<p class="err">{tgErr}</p>{/if}
     {#if tgOk}<p class="ok">{tgOk}</p>{/if}
     {#if tg}
-      <p class="tg-status" class:running={tg.running}>
-        {#if !tg.tokenSet}not configured
-        {:else}<span class="dot" class:pulse={tgBusy}>{tg.running ? '●' : '○'}</span> {tg.running ? 'running' : 'stopped'} · admin: {tg.admin}{/if}
-      </p>
+      <p class="tg-status"><span class="status-dot {tgState}"></span> {tgLabel}</p>
     {/if}
     <div class="row">
-      <button type="button" class="ghost" onclick={setTelegramToken} disabled={tgBusy}>
-        {tg?.tokenSet ? 'Regenerate token' : 'Set token'}</button>
+      <button type="button" class="ghost" onclick={setTelegramToken}
+        title="Set the bot token and admin identity">{tg?.tokenSet ? 'Regenerate token' : 'Set token'}</button>
       {#if tg?.tokenSet}
-        <button type="button" class="ghost" onclick={tgStart} disabled={tgBusy}
-          title="Bring the poller up (also starts automatically when serve starts, if a token is set)">Start</button>
-        <button type="button" class="ghost" onclick={tgStop} disabled={tgBusy}>Stop</button>
-        <button type="button" class="ghost" onclick={tgRestart} disabled={tgBusy}>Restart</button>
+        <button type="button" class="ghost" onclick={tgStart} title="Bring the poller up">Start</button>
+        <button type="button" class="ghost" onclick={tgStop} title="Stop the poller; bot goes quiet">Stop</button>
+        <button type="button" class="ghost" onclick={tgRestart} title="Full stop + fresh start of the poller">Restart</button>
       {/if}
     </div>
   </div>
@@ -219,7 +220,5 @@
 
 <style>
   .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
-  .tg-status { font-family: var(--mono); font-size: 12px; color: var(--dim); }
-  .tg-status.running { color: var(--ok); }
-  .tg-status .dot.pulse { display: inline-block; animation: pulse 1s ease-in-out infinite; }
+  .tg-status { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
 </style>

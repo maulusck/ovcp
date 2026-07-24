@@ -410,7 +410,7 @@ func (s *Server) handleProc(name string, target controller.Lifecycle, allowRecon
 			return
 		}
 		if err != nil {
-			jsonErr(w, 502, err.Error())
+			jsonErr(w, opStatus(err), err.Error())
 			return
 		}
 		s.Store.Audit(u.Username, name+"_"+op, "")
@@ -453,11 +453,20 @@ func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *sto
 		return
 	}
 	if err != nil {
-		jsonErr(w, 502, err.Error())
+		jsonErr(w, opStatus(err), err.Error())
 		return
 	}
 	s.Store.Audit(u.Username, "telegram_"+op, "")
 	jsonOK(w, s.Telegram.Status())
+}
+
+// opStatus: an op already in flight is a client retry situation, not a
+// server failure — 409 instead of the generic 502.
+func opStatus(err error) int {
+	if errors.Is(err, controller.ErrBusy) {
+		return 409
+	}
+	return 502
 }
 
 // handleCertDNS toggles whether a cert's CN gets a certs.hosts line while

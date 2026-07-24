@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -319,6 +320,17 @@ func TestDNSProc(t *testing.T) {
 	}
 	if r := e.req("POST", "/api/dns/reconnect", "", true); r.StatusCode != 404 {
 		t.Fatalf("dns reconnect must not exist, got %s", r.Status)
+	}
+}
+
+// TestOpStatus: a busy lifecycle op is a 409 (client should retry), anything
+// else stays the generic 502.
+func TestOpStatus(t *testing.T) {
+	if got := opStatus(fmt.Errorf("wrap: %w", controller.ErrBusy)); got != 409 {
+		t.Errorf("busy: got %d, want 409", got)
+	}
+	if got := opStatus(fmt.Errorf("openvpn not found")); got != 502 {
+		t.Errorf("other error: got %d, want 502", got)
 	}
 }
 
