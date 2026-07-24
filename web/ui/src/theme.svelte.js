@@ -4,8 +4,8 @@ const KEY = 'ovcp_theme'
 // name, label, and the two colors used to preview it in the dropdown itself.
 export const THEMES = [
   { name: 'default', label: 'Default', bg: '#171f28', fg: '#e0a136' },
-  { name: 'matrix', label: 'Matrix', bg: '#0a0f0a', fg: '#33ff33' },
-  { name: 'retrocrt', label: 'RetroCRT', bg: '#120a02', fg: '#ffb000' },
+  { name: 'matrix', label: 'Matrix', bg: '#030603', fg: '#39ff14' },
+  { name: 'retrocrt', label: 'RetroCRT', bg: '#14100b', fg: '#ffcf4d' },
   { name: 'frutiger', label: 'Frutiger', bg: '#e3f2f0', fg: '#0d6b80' },
   { name: 'teletext', label: 'Teletext', bg: '#000000', fg: '#ffdd00' },
 ]

@@ -247,13 +247,17 @@
   }
   /* amber is the accent/highlight color; must stay distinct from --text and --ok or
      accents vanish into body text / warning reads as success. WCAG AA (4.5:1) checked below. */
+  /* deep-black hacker terminal; accent is BIOS/DOS-interface blue (not gold — gold
+     is the default theme's identity) so warnings read as a distinct hue from ok/bad. */
   :global(:root[data-theme='matrix']) {
-    --ink: #000000; --panel: #0a0f0a; --line: #14351a; --text: #8fe38f; --dim: #4f9a54;
-    --amber: #c8ff3d; --ok: #33ff33; --bad: #ff5555;
+    --ink: #000000; --panel: #030603; --line: #123318; --text: #4fdd5f; --dim: #3a9a48;
+    --amber: #5566ff; --ok: #39ff14; --bad: #ff2b2b;
   }
+  /* dark-cockpit avionics: amber is the main glow, cyan marks "nominal" status
+     (glass-cockpit convention: amber=caution, cyan/green=nominal, red=critical). */
   :global(:root[data-theme='retrocrt']) {
-    --ink: #050200; --panel: #120a02; --line: #3d2400; --text: #d99a00; --dim: #b37500;
-    --amber: #ffb000; --ok: #c8d400; --bad: #ff3b1f;
+    --ink: #030201; --panel: #14100b; --line: #3a4a4a; --text: #e2a100; --dim: #a87a00;
+    --amber: #ffcf4d; --ok: #29e6e6; --bad: #ff4020;
   }
   /* readability comes from the contrast fix above, not glow — a body-wide bloom just
      blurs small text; glow stays a titles-only flourish. */
@@ -262,6 +266,11 @@
   :global(:root[data-theme='retrocrt'] h1),
   :global(:root[data-theme='retrocrt'] h2) {
     text-shadow: 0 0 6px currentColor;
+  }
+  /* "follow the white rabbit" — the brand wordmark only, never body text. */
+  :global(:root[data-theme='matrix'] .login h1),
+  :global(:root[data-theme='matrix'] .brand strong) {
+    color: #eafff0; text-shadow: 0 0 8px #39ff14;
   }
   /* Frutiger Aero = Vista-era glossy chrome + Frutiger's nature photography (sky meeting
      grass) — teal bridges the two instead of plain aero blue; panel/ink toned down from icy white. */
