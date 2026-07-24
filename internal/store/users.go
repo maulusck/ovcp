@@ -76,15 +76,13 @@ func (s *Store) ListUsers() ([]User, error) {
 }
 
 func (s *Store) SetUserDisabled(username string, disabled bool) error {
-	d := 0
-	if disabled {
-		d = 1
-	}
-	return s.mustAffect(s.db.Exec(`UPDATE users SET disabled=? WHERE username=?`, d, username))
+	res, err := s.db.Exec(`UPDATE users SET disabled=? WHERE username=?`, boolInt(disabled), username)
+	return s.mustAffect(res, err, "store: no such user")
 }
 
 func (s *Store) SetUserPassword(username, passHash string) error {
-	return s.mustAffect(s.db.Exec(`UPDATE users SET pass_hash=? WHERE username=?`, passHash, username))
+	res, err := s.db.Exec(`UPDATE users SET pass_hash=? WHERE username=?`, passHash, username)
+	return s.mustAffect(res, err, "store: no such user")
 }
 
 func (s *Store) SetUserTOTP(username, secret string) error {
@@ -92,7 +90,8 @@ func (s *Store) SetUserTOTP(username, secret string) error {
 	if err != nil {
 		return err
 	}
-	return s.mustAffect(s.db.Exec(`UPDATE users SET totp_secret=? WHERE username=?`, enc, username))
+	res, execErr := s.db.Exec(`UPDATE users SET totp_secret=? WHERE username=?`, enc, username)
+	return s.mustAffect(res, execErr, "store: no such user")
 }
 
 // encryptTOTP/decryptTOTP keep totp_secret encrypted at rest (AES-256-GCM,
@@ -145,12 +144,12 @@ func (s *Store) totpGCM() (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-func (s *Store) mustAffect(res sql.Result, err error) error {
+func (s *Store) mustAffect(res sql.Result, err error, notFoundMsg string) error {
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return errors.New("store: no such user")
+		return errors.New(notFoundMsg)
 	}
 	return nil
 }
@@ -185,5 +184,6 @@ func (s *Store) DeleteSession(tokenHash string) error {
 }
 
 func (s *Store) DeleteUser(username string) error {
-	return s.mustAffect(s.db.Exec(`DELETE FROM users WHERE username=?`, username))
+	res, err := s.db.Exec(`DELETE FROM users WHERE username=?`, username)
+	return s.mustAffect(res, err, "store: no such user")
 }

@@ -22,6 +22,16 @@ export async function api(method, path, body) {
   return data
 }
 
+// procOp: confirm (if asked), POST prefix+op, and hand back the result —
+// shared by the vpn and dns control panels. onRecover (e.g. expectRecovery)
+// is opt-in, not baked in: only vpn's header pill tracks a recovery window.
+export async function procOp(prefix, op, { confirm: confirmMsg, recoverMs, onRecover } = {}) {
+  if (confirmMsg && !confirm(confirmMsg)) return null
+  const result = await api('POST', prefix + op)
+  if (recoverMs && onRecover) onRecover(recoverMs)
+  return result
+}
+
 // apiBlob: api()'s counterpart for file-download endpoints — same CSRF'd POST, but
 // returns the raw blob and server-suggested filename instead of parsed JSON.
 export async function apiBlob(method, path, body) {

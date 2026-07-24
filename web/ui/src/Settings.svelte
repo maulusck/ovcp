@@ -1,5 +1,5 @@
 <script>
-  import { api, apiBlob, downloadBlob } from './api.js'
+  import { api, apiBlob, downloadBlob, procOp } from './api.js'
   import { expectRecovery } from './status.svelte.js'
   let { isAdmin } = $props()
   let cfg = $state(null)
@@ -40,12 +40,10 @@
   // Config and CRL changes require a full Restart (fresh root process re-reads
   // the keys); Reconnect only soft-resets live sessions for recovery.
   async function vpn(op, confirmMsg, recoverMs, done) {
-    if (confirmMsg && !confirm(confirmMsg)) return
     err = ''; ok = ''
     try {
-      await api('POST', '/vpn/' + op)
-      if (recoverMs) expectRecovery(recoverMs)
-      ok = done
+      const r = await procOp('/vpn/', op, { confirm: confirmMsg, recoverMs, onRecover: expectRecovery })
+      if (r) ok = done
     } catch (x) { err = x.error }
   }
 
@@ -224,8 +222,4 @@
   .tg-status { font-family: var(--mono); font-size: 12px; color: var(--dim); }
   .tg-status.running { color: var(--ok); }
   .tg-status .dot.pulse { display: inline-block; animation: pulse 1s ease-in-out infinite; }
-  .diff { font-family: var(--mono); font-size: 12px; white-space: pre; overflow-x: auto;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
-  .diff .add { color: var(--ok); }
-  .diff .del { color: var(--bad); }
 </style>

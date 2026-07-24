@@ -21,10 +21,11 @@ func fakeOpenVPN(t *testing.T) string {
 
 func newSup(t *testing.T) *Supervisor {
 	return &Supervisor{
-		Bin:        fakeOpenVPN(t),
-		ConfigPath: "/dev/null",
-		LogPath:    filepath.Join(t.TempDir(), "openvpn.log"),
-		StopWait:   3 * time.Second,
+		Name:     "openvpn",
+		Bin:      fakeOpenVPN(t),
+		Args:     []string{"--config", "/dev/null"},
+		LogPath:  filepath.Join(t.TempDir(), "openvpn.log"),
+		StopWait: 3 * time.Second,
 	}
 }
 
@@ -50,6 +51,37 @@ func TestStartStopReaps(t *testing.T) {
 	// This is the regression guard for the container zombie bug.
 	if syscall.Kill(pid, 0) == nil {
 		t.Fatal("child not reaped — signal 0 still succeeds (zombie)")
+	}
+}
+
+// TestPreStart: a non-nil PreStart must recompute Args before every launch,
+// not just the first one.
+func TestPreStart(t *testing.T) {
+	firstArgs := []string{"-first"}
+	secondArgs := []string{"-second"}
+	calls := 0
+	s := newSup(t)
+	s.PreStart = func() []string {
+		calls++
+		if calls == 1 {
+			return firstArgs
+		}
+		return secondArgs
+	}
+
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || s.Args[0] != firstArgs[0] {
+		t.Fatalf("after Start: calls=%d args=%v, want calls=1 args=%v", calls, s.Args, firstArgs)
+	}
+
+	if err := s.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	s.Stop()
+	if calls != 2 || s.Args[0] != secondArgs[0] {
+		t.Fatalf("after Restart: calls=%d args=%v, want calls=2 args=%v", calls, s.Args, secondArgs)
 	}
 }
 
@@ -98,8 +130,9 @@ func crashingOpenVPN(t *testing.T) string {
 
 func TestCrashLoopBreakerStopsRetrying(t *testing.T) {
 	s := &Supervisor{
+		Name:              "openvpn",
 		Bin:               crashingOpenVPN(t),
-		ConfigPath:        "/dev/null",
+		Args:              []string{"--config", "/dev/null"},
 		LogPath:           filepath.Join(t.TempDir(), "openvpn.log"),
 		CrashRestartDelay: 5 * time.Millisecond,
 		CrashLoopWindow:   time.Second,
@@ -132,8 +165,9 @@ func TestCrashLoopBreakerStopsRetrying(t *testing.T) {
 
 func TestStopDoesNotAutoRestart(t *testing.T) {
 	s := &Supervisor{
+		Name:              "openvpn",
 		Bin:               fakeOpenVPN(t),
-		ConfigPath:        "/dev/null",
+		Args:              []string{"--config", "/dev/null"},
 		LogPath:           filepath.Join(t.TempDir(), "openvpn.log"),
 		CrashRestartDelay: 5 * time.Millisecond,
 	}
@@ -171,5 +205,30 @@ func TestOpenVPNVersionNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, _, ok := OpenVPNVersion(); ok {
 		t.Fatal("expected ok=false with no openvpn on PATH")
+	}
+}
+
+// TestDnsmasqVersion stubs a script named "dnsmasq" on PATH so it never
+// depends on the real binary being installed.
+func TestDnsmasqVersion(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "dnsmasq")
+	script := "#!/bin/sh\necho 'Dnsmasq version 2.90  Copyright (c) 2000-2023 Simon Kelley'\n"
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	version, path, ok := DnsmasqVersion()
+	if !ok || version != "Dnsmasq 2.90" || path != p {
+		t.Fatalf("got version=%q path=%q ok=%v, want %q %q true", version, path, ok, "Dnsmasq 2.90", p)
+	}
+}
+
+// TestDnsmasqVersionNotFound: no dnsmasq on PATH must report ok=false, not an error.
+func TestDnsmasqVersionNotFound(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, _, ok := DnsmasqVersion(); ok {
+		t.Fatal("expected ok=false with no dnsmasq on PATH")
 	}
 }

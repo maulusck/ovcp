@@ -39,20 +39,21 @@ func (s *Store) OnAudit(fn AuditHook) { s.auditHook = fn }
 const ExpiryWarnDays = 30
 
 type Cert struct {
-	Serial    string
-	CN        string
-	Kind      string // "server" | "client"
-	CertPEM   []byte
-	IssuedAt  time.Time
-	NotAfter  time.Time
-	RevokedAt *time.Time
+	Serial     string
+	CN         string
+	Kind       string // "server" | "client"
+	CertPEM    []byte
+	IssuedAt   time.Time
+	NotAfter   time.Time
+	RevokedAt  *time.Time
+	IncludeDNS bool // whether this CN gets a certs.hosts line while connected (Records tab); default true
 }
 
 // CertFrom is the store row for a freshly issued cert — every issue path
 // (CLI and API) writes this same shape.
 func CertFrom(ic *pki.IssuedCert, kind string) Cert {
 	return Cert{Serial: ic.SerialHex, CN: ic.CN, Kind: kind,
-		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter}
+		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter, IncludeDNS: true}
 }
 
 type AuditEntry struct {
@@ -138,6 +139,14 @@ func (s *Store) activeCertSerial(cn, kind string) (string, error) {
 	return serial, err
 }
 
+// boolInt converts a Go bool to the 0/1 SQLite stores it as.
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // AddCert is the one funnel every issue path uses, so the active-CN check lives here, once.
 // ponytail: check-then-insert race needs two concurrent issues of the same new CN — not this tool's load.
 func (s *Store) AddCert(c Cert) error {
@@ -147,9 +156,16 @@ func (s *Store) AddCert(c Cert) error {
 		return fmt.Errorf("store: %s: %w", c.CN, ErrDuplicateCN)
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO certs(serial, cn, kind, cert_pem, issued_at, not_after) VALUES (?,?,?,?,?,?)`,
-		c.Serial, c.CN, c.Kind, c.CertPEM, c.IssuedAt.Unix(), c.NotAfter.Unix())
+		`INSERT INTO certs(serial, cn, kind, cert_pem, issued_at, not_after, include_dns) VALUES (?,?,?,?,?,?,?)`,
+		c.Serial, c.CN, c.Kind, c.CertPEM, c.IssuedAt.Unix(), c.NotAfter.Unix(), boolInt(c.IncludeDNS))
 	return err
+}
+
+// SetCertDNS toggles whether serial's CN gets a certs.hosts line, mirroring
+// SetUserDisabled's shape.
+func (s *Store) SetCertDNS(serial string, include bool) error {
+	res, err := s.db.Exec(`UPDATE certs SET include_dns=? WHERE serial=?`, boolInt(include), serial)
+	return s.mustAffect(res, err, "store: no such cert")
 }
 
 // ReplaceCert retires c's outgoing active cert (same CN+kind), if any, then
@@ -169,13 +185,13 @@ func (s *Store) ReplaceCert(c Cert) error {
 
 func (s *Store) GetCert(serial string) (*Cert, error) {
 	row := s.db.QueryRow(
-		`SELECT serial, cn, kind, cert_pem, issued_at, not_after, revoked_at FROM certs WHERE serial = ?`, serial)
+		`SELECT serial, cn, kind, cert_pem, issued_at, not_after, revoked_at, include_dns FROM certs WHERE serial = ?`, serial)
 	return scanCert(row)
 }
 
 func (s *Store) ListCerts() ([]Cert, error) {
 	rows, err := s.db.Query(
-		`SELECT serial, cn, kind, cert_pem, issued_at, not_after, revoked_at FROM certs ORDER BY issued_at DESC`)
+		`SELECT serial, cn, kind, cert_pem, issued_at, not_after, revoked_at, include_dns FROM certs ORDER BY issued_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +225,7 @@ func (s *Store) Revoke(serial string, at time.Time) error {
 // RevokedCerts returns the full revoked set (feeds CRL regeneration).
 func (s *Store) RevokedCerts() ([]Cert, error) {
 	rows, err := s.db.Query(
-		`SELECT serial, cn, kind, cert_pem, issued_at, not_after, revoked_at FROM certs WHERE revoked_at IS NOT NULL`)
+		`SELECT serial, cn, kind, cert_pem, issued_at, not_after, revoked_at, include_dns FROM certs WHERE revoked_at IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +247,8 @@ func scanCert(r scanner) (*Cert, error) {
 	var c Cert
 	var issued, notAfter int64
 	var revoked sql.NullInt64
-	if err := r.Scan(&c.Serial, &c.CN, &c.Kind, &c.CertPEM, &issued, &notAfter, &revoked); err != nil {
+	var includeDNS int
+	if err := r.Scan(&c.Serial, &c.CN, &c.Kind, &c.CertPEM, &issued, &notAfter, &revoked, &includeDNS); err != nil {
 		return nil, err
 	}
 	c.IssuedAt = time.Unix(issued, 0)
@@ -240,6 +257,7 @@ func scanCert(r scanner) (*Cert, error) {
 		t := time.Unix(revoked.Int64, 0)
 		c.RevokedAt = &t
 	}
+	c.IncludeDNS = includeDNS != 0
 	return &c, nil
 }
 

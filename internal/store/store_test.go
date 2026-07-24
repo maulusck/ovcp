@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/ovcp/ovcp/internal/pki"
 )
 
 func TestCertLifecycle(t *testing.T) {
@@ -36,6 +38,49 @@ func TestCertLifecycle(t *testing.T) {
 	all, _ := s.ListCerts()
 	if len(all) != 1 {
 		t.Fatalf("list = %d", len(all))
+	}
+}
+
+// TestCertIncludeDNS: CertFrom defaults IncludeDNS true, and SetCertDNS
+// round-trips both directions.
+func TestCertIncludeDNS(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ic := &pki.IssuedCert{SerialHex: "dns1", CN: "carol", CertPEM: []byte("PEM"), NotAfter: time.Now().AddDate(1, 0, 0)}
+	c := CertFrom(ic, "client")
+	if !c.IncludeDNS {
+		t.Fatal("CertFrom must default IncludeDNS true")
+	}
+	if err := s.AddCert(c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetCert("dns1")
+	if err != nil || !got.IncludeDNS {
+		t.Fatalf("get after add: %+v err=%v, want IncludeDNS=true", got, err)
+	}
+
+	if err := s.SetCertDNS("dns1", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetCert("dns1")
+	if err != nil || got.IncludeDNS {
+		t.Fatalf("get after exclude: %+v err=%v, want IncludeDNS=false", got, err)
+	}
+
+	if err := s.SetCertDNS("dns1", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetCert("dns1")
+	if err != nil || !got.IncludeDNS {
+		t.Fatalf("get after re-include: %+v err=%v, want IncludeDNS=true", got, err)
+	}
+
+	if err := s.SetCertDNS("nonexistent", true); err == nil {
+		t.Fatal("SetCertDNS on an unknown serial must error")
 	}
 }
 

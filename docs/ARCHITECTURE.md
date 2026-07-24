@@ -77,6 +77,14 @@ available for a soft session reset that does not replace the process.
 Command-level behavior for `vpn start|stop|restart|reconnect|status` is
 documented in `man ovcp`, `COMMANDS`.
 
+dnsmasq (Records tab, optional — only if found on `PATH`) is a second
+worker under the same `Supervisor`/`Lifecycle` type, reachable over the
+same control socket via a `dns-` op prefix; no `reconnect`. Its `Args` are
+recomputed fresh on every (re)start (`Supervisor.PreStart`) from the
+persisted server config's subnet, not baked in once, so a subnet change
+or OpenVPN restart never leaves it listening on a stale address
+(`--bind-dynamic` also tolerates the address not existing yet).
+
 ## Privilege model
 
 `ovcp` runs as a single root-owned process; the admin UI, the REST API, and

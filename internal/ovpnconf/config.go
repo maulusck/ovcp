@@ -32,6 +32,25 @@ type Config struct {
 	// paths (filled by the app from its data dir)
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, MgmtSocket, StatusLog string
 	RunAsUser, RunAsGroup                                               string // e.g. nobody/nogroup; empty = omit
+	ServerCN                                                            string // admin cert CN; drives DOMAIN-SEARCH push (Records tab)
+}
+
+// ServerTunIP returns the server's own address within Subnet — OpenVPN's own
+// "server takes network+1" convention, same one Render's "server %s %s" line
+// relies on. Used for certs.hosts' server line (Records tab).
+func (c Config) ServerTunIP() (net.IP, error) {
+	_, ipnet, err := net.ParseCIDR(c.Subnet)
+	if err != nil {
+		return nil, fmt.Errorf("ovpnconf: subnet: %w", err)
+	}
+	ip := ipnet.IP.To4()
+	if ip == nil {
+		return nil, fmt.Errorf("ovpnconf: subnet must be IPv4")
+	}
+	server := make(net.IP, len(ip))
+	copy(server, ip)
+	server[len(server)-1]++
+	return server, nil
 }
 
 func Default() Config {
@@ -125,6 +144,17 @@ func (c *Config) Render() []byte {
 	}
 	for _, d := range c.DNS {
 		w(`push "dhcp-option DNS %s"`, d)
+	}
+	// bare shortname ServerCN (no dot) has no domain to search — resolve it
+	// directly instead, nothing to push. Both DOMAIN and DOMAIN-SEARCH are
+	// pushed together: Windows applies DOMAIN reliably but not DOMAIN-SEARCH,
+	// while NetworkManager's bundled openvpn helper only understands DOMAIN
+	// (not DOMAIN-SEARCH at all) — pushing both is OpenVPN's own documented
+	// way to cover every client.
+	if i := strings.Index(c.ServerCN, "."); i >= 0 {
+		domain := c.ServerCN[i+1:]
+		w(`push "dhcp-option DOMAIN %s"`, domain)
+		w(`push "dhcp-option DOMAIN-SEARCH %s"`, domain)
 	}
 	for _, r := range c.Routes {
 		rip, rnet, _ := net.ParseCIDR(r)

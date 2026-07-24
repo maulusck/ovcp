@@ -13,29 +13,39 @@ import (
 	"time"
 )
 
-// OpenVPNVersion resolves openvpn from PATH and parses its version line.
-// ok=false (not an error) if not found or unparseable — this is advisory
-// only (`ovcp version`, admin UI), never a precondition.
-func OpenVPNVersion() (version, path string, ok bool) {
-	p, err := exec.LookPath("openvpn")
+// binVersion resolves bin from PATH and parses its version line, joining
+// fields[0] (the name) with fields[verIdx] (the version number — 1 for
+// openvpn's "OpenVPN 2.6.3", 2 for dnsmasq's "Dnsmasq version 2.90").
+// ok=false (not an error) if not found or unparseable — advisory only,
+// never a hard precondition.
+func binVersion(bin string, verIdx int) (version, path string, ok bool) {
+	p, err := exec.LookPath(bin)
 	if err != nil {
 		return "", "", false
 	}
 	out, _ := exec.Command(p, "--version").Output()
 	first, _, _ := strings.Cut(string(out), "\n")
 	fields := strings.Fields(first)
-	if len(fields) < 2 {
+	if len(fields) <= verIdx {
 		return "", "", false
 	}
-	return fields[0] + " " + fields[1], p, true
+	return fields[0] + " " + fields[verIdx], p, true
 }
 
-// Supervisor runs openvpn as a foreground child (Pdeathsig ties its life to ours, surviving openvpn's own setuid drop to nobody); no SIGHUP — Restart always re-reads fresh instead.
+// OpenVPNVersion is advisory only (`ovcp version`, admin UI), never a precondition.
+func OpenVPNVersion() (version, path string, ok bool) { return binVersion("openvpn", 1) }
+
+// DnsmasqVersion gates the Records tab/CLI; advisory only.
+func DnsmasqVersion() (version, path string, ok bool) { return binVersion("dnsmasq", 2) }
+
+// Supervisor runs one worker (openvpn or dnsmasq) as a foreground child (Pdeathsig ties its life to ours, surviving the worker's own setuid drop); no SIGHUP — Restart always re-reads fresh instead.
 type Supervisor struct {
-	Bin        string        // openvpn binary; "" → resolve from PATH
-	ConfigPath string        // rendered server.conf
-	LogPath    string        // child stdout/stderr are appended here
-	StopWait   time.Duration // graceful SIGTERM timeout; default 5s
+	Name     string          // "openvpn" | "dnsmasq" — log lines and the not-found error only
+	Bin      string          // resolved worker binary path; caller resolves via exec.LookPath, empty means "not found"
+	Args     []string        // full argv (excluding argv[0]) — e.g. openvpn's {"--config", path} or dnsmasq's flag set
+	PreStart func() []string // optional: recomputes Args fresh before each launch; nil keeps Args static
+	LogPath  string          // child stdout/stderr are appended here
+	StopWait time.Duration   // graceful SIGTERM timeout; default 5s
 
 	// CrashRestartDelay/CrashLoopWindow/CrashLoopMax tune auto-restart on an
 	// unexpected exit: wait Delay, restart, give up after Max such exits in
@@ -131,10 +141,13 @@ func (s *Supervisor) Reconnect() error {
 	return cmd.Process.Signal(syscall.SIGUSR1)
 }
 
-// start launches openvpn and blocks only until it is up (or fails to launch).
+// start launches the worker and blocks only until it is up (or fails to launch).
 func (s *Supervisor) start() error {
 	if s.Running() {
 		return nil
+	}
+	if s.PreStart != nil {
+		s.Args = s.PreStart()
 	}
 	launched := make(chan error, 1)
 	go s.supervise(launched)
@@ -147,12 +160,8 @@ func (s *Supervisor) supervise(launched chan<- error) {
 
 	bin := s.Bin
 	if bin == "" {
-		p, err := exec.LookPath("openvpn")
-		if err != nil {
-			launched <- fmt.Errorf("controller: openvpn not found on PATH")
-			return
-		}
-		bin = p
+		launched <- fmt.Errorf("controller: %s not found on PATH", s.Name)
+		return
 	}
 	if err := os.MkdirAll(filepath.Dir(s.LogPath), 0o750); err != nil {
 		launched <- err
@@ -163,12 +172,12 @@ func (s *Supervisor) supervise(launched chan<- error) {
 		launched <- err
 		return
 	}
-	cmd := exec.Command(bin, "--config", s.ConfigPath)
+	cmd := exec.Command(bin, s.Args...)
 	cmd.Stdout, cmd.Stderr = lf, lf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	if err := cmd.Start(); err != nil {
 		lf.Close()
-		launched <- fmt.Errorf("controller: openvpn start: %w", err)
+		launched <- fmt.Errorf("controller: %s start: %w", s.Name, err)
 		return
 	}
 
@@ -176,7 +185,7 @@ func (s *Supervisor) supervise(launched chan<- error) {
 	s.stMu.Lock()
 	s.cmd, s.done, s.running, s.startedAt = cmd, done, true, time.Now()
 	s.stMu.Unlock()
-	slog.Info("openvpn started", "pid", cmd.Process.Pid, "bin", bin)
+	slog.Info(s.Name+" started", "pid", cmd.Process.Pid, "bin", bin)
 	launched <- nil
 
 	err = cmd.Wait() // reap — no zombie can accumulate; runs for both a clean stop() and an unexpected crash
@@ -192,17 +201,17 @@ func (s *Supervisor) supervise(launched chan<- error) {
 
 	uptime := time.Since(startedAt).Round(time.Second)
 	if stopped {
-		slog.Info("openvpn exited", "pid", cmd.Process.Pid, "err", err, "uptime", uptime)
+		slog.Info(s.Name+" exited", "pid", cmd.Process.Pid, "err", err, "uptime", uptime)
 		return
 	}
-	slog.Error("openvpn exited unexpectedly", "pid", cmd.Process.Pid, "err", err, "uptime", uptime)
+	slog.Error(s.Name+" exited unexpectedly", "pid", cmd.Process.Pid, "err", err, "uptime", uptime)
 	if desired {
 		go s.autoRestart()
 	}
 }
 
-// autoRestart re-launches openvpn after an unexpected exit, unless it's
-// crash-looping or the VPN was explicitly stopped/restarted meanwhile.
+// autoRestart re-launches the worker after an unexpected exit, unless it's
+// crash-looping or was explicitly stopped/restarted meanwhile.
 func (s *Supervisor) autoRestart() {
 	delay, window, max := s.CrashRestartDelay, s.CrashLoopWindow, s.CrashLoopMax
 	if delay == 0 {
@@ -224,7 +233,7 @@ func (s *Supervisor) autoRestart() {
 	streak := s.crashStreak
 	s.stMu.Unlock()
 	if streak > max {
-		slog.Error("openvpn crash-looping, giving up auto-restart; run `ovcp vpn start` once the underlying issue is fixed", "streak", streak)
+		slog.Error(s.Name+" crash-looping, giving up auto-restart until manually restarted once the underlying issue is fixed", "streak", streak)
 		return
 	}
 

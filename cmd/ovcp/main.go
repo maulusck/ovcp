@@ -15,7 +15,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -192,27 +195,39 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 	die(err)
 	defer s.Close()
 
-	sup := newSupervisor(dataDir)
+	ovVersion, ovPath, _ := controller.OpenVPNVersion() // both "" if not found — advisory only
+	sup := newSupervisor(dataDir, ovPath)
+	dnsVersion, dnsPath, _ := controller.DnsmasqVersion() // same advisory-only treatment
+	dnsGid := dnsGID(dnsRunAsGroup())
+	if err := ensureDNSDir(pp, dnsGid); err != nil {
+		slog.Warn("dns dir setup failed", "err", err)
+	}
+	dnsSup := newDNSSupervisor(pp, dnsPath, s)
 	mgmt := controller.NewClient(sock)
 	tg := telegram.New(s, sup, mgmt)
 	s.OnAudit(tg.OnAudit)
-	ovVersion, ovPath, _ := controller.OpenVPNVersion() // both "" if not found — advisory only
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
-		Mgmt:           mgmt,
-		VPN:            sup,
-		Telegram:       tg,
-		DataDir:        dataDir,
-		ConfigPath:     pp.ServerConf,
-		TLSCrypt:       pp.TLSCrypt,
-		ServerCert:     pp.ServerCert,
-		ServerKey:      pp.ServerKey,
-		UI:             web.Dist(),
-		DebugLevel:     logLevel,
-		Version:        version,
-		BuildTarget:    buildTarget,
-		OpenVPNVersion: ovVersion,
-		OpenVPNPath:    ovPath,
+		Mgmt:            mgmt,
+		VPN:             sup,
+		Telegram:        tg,
+		DataDir:         dataDir,
+		ConfigPath:      pp.ServerConf,
+		TLSCrypt:        pp.TLSCrypt,
+		ServerCert:      pp.ServerCert,
+		ServerKey:       pp.ServerKey,
+		UI:              web.Dist(),
+		DebugLevel:      logLevel,
+		Version:         version,
+		BuildTarget:     buildTarget,
+		OpenVPNVersion:  ovVersion,
+		OpenVPNPath:     ovPath,
+		DnsmasqVersion:  dnsVersion,
+		DnsmasqPath:     dnsPath,
+		CertsHostsPath:  pp.CertsHosts,
+		CustomHostsPath: pp.CustomHosts,
+		DNSGroupGID:     dnsGid,
+		DNS:             dnsSup,
 	}
 	srv.DefaultRemote = adminCertCN(dataDir)
 
@@ -251,11 +266,20 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 
 	// bring the worker up as a reaped foreground child, and expose the control
 	// socket so vpn/status/kill/stats -follow can drive/query us — see ServeControl.
-	ctl, err := controller.ServeControl(ctrl, sup, mgmt, logLevel, tg)
+	ctl, err := controller.ServeControl(ctrl, sup, dnsSup, mgmt, logLevel, tg)
 	die(err)
 	defer ctl.Close()
-	if err := sup.Start(); err != nil {
-		slog.Warn("openvpn start", "err", err)
+	// AUTOSTART only gates the boot-time call below; `ovcp vpn|dns start`
+	// (CLI or web UI) always works regardless, for both workers alike.
+	if os.Getenv("OVCP_OPENVPN_AUTOSTART") != "false" {
+		if err := sup.Start(); err != nil {
+			slog.Warn("openvpn start", "err", err)
+		}
+	}
+	if os.Getenv("OVCP_DNSMASQ_AUTOSTART") != "false" {
+		if err := dnsSup.Start(); err != nil {
+			slog.Warn("dnsmasq start", "err", err)
+		}
 	}
 	if tg.Status().TokenSet {
 		if err := tg.Start(); err != nil {
@@ -264,22 +288,26 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
 	}
 	slog.Info("ovcp started", "version", version, "listen", listen)
 
-	// periodic connected-clients/traffic snapshot for the Stats tab; runs
-	// independently of the UI's own poll so history exists with no browser open.
-	statsStop := make(chan struct{})
-	go srv.RunStatsSampler(statsStop)
+	// periodic connected-clients poll: refreshes certs.hosts (Records tab)
+	// every tick and samples traffic history (Stats tab) every 12th tick —
+	// runs independently of the UI's own poll so both exist with no browser open.
+	samplerStop := make(chan struct{})
+	go srv.RunSampler(samplerStop)
 	tgStop := make(chan struct{})
 	go tg.RunExpirySweeper(tgStop)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	close(statsStop)
+	close(samplerStop)
 	close(tgStop)
 	tg.Stop()
 	ctl.Close()
 	if err := sup.Stop(); err != nil {
 		slog.Warn("openvpn stop", "err", err)
+	}
+	if err := dnsSup.Stop(); err != nil {
+		slog.Warn("dnsmasq stop", "err", err)
 	}
 	hs.Close()
 	slog.Info("ovcp stopped", "uptime", time.Since(controller.ProcessStartedAt).Round(time.Second))
@@ -296,31 +324,157 @@ func mgmtSock() string {
 }
 
 // newSupervisor wires the single openvpn worker controller from data paths.
-func newSupervisor(dataDir string) *controller.Supervisor {
+// bin is the resolved openvpn path (from controller.OpenVPNVersion, so the
+// PATH lookup happens exactly once); empty means "not found on PATH".
+func newSupervisor(dataDir, bin string) *controller.Supervisor {
 	pp := dataPaths(dataDir)
 	return &controller.Supervisor{
-		ConfigPath: pp.ServerConf,
-		LogPath:    pp.OpenVPNLog,
+		Name:    "openvpn",
+		Bin:     bin,
+		Args:    []string{"--config", pp.ServerConf},
+		LogPath: pp.OpenVPNLog,
+	}
+}
+
+// dnsRunAsUser/dnsRunAsGroup: dnsmasq's own drop-to account, independently
+// configurable from openvpn's (OVCP_OPENVPN_USER/GROUP) — same shape,
+// same defaults, but its own knob, not silently shared.
+func dnsRunAsUser() string  { return cmp.Or(os.Getenv("OVCP_DNSMASQ_USER"), "nobody") }
+func dnsRunAsGroup() string { return cmp.Or(os.Getenv("OVCP_DNSMASQ_GROUP"), "nogroup") }
+
+// buildDnsmasqArgs assembles dnsmasq's argv. --hostsdir auto-reloads on
+// change; --bind-dynamic tolerates serverIP not existing yet; --log-facility
+// is required since dnsmasq logs to syslog, not stdout/stderr, by default.
+func buildDnsmasqArgs(user, group string, serverIP net.IP, dnsDir, logPath string, blockInternet bool) []string {
+	args := []string{
+		"-k",
+		"--user=" + user,
+		"--group=" + group,
+		"--bind-dynamic",
+		"--listen-address=" + serverIP.String(),
+		"--hostsdir=" + dnsDir,
+		"--log-queries",
+		"--log-facility=" + logPath,
+	}
+	if blockInternet {
+		// --no-resolv alone leaves zero upstreams configured, so dnsmasq treats
+		// every non-local query as a config error (logs "REFUSED (EDE: not
+		// ready)"); --server=/#/ marks all domains local-only instead, so
+		// unknown names get a clean NXDOMAIN.
+		args = append(args, "--no-resolv", "--server=/#/")
+	}
+	return args
+}
+
+// warnMissingInotify logs once if bin's dnsmasq build lacks inotify — a
+// hard requirement for --hostsdir to auto-reload without a restart.
+func warnMissingInotify(bin string) {
+	if bin == "" {
+		return
+	}
+	out, _ := exec.Command(bin, "--version").Output()
+	if !strings.Contains(string(out), "inotify") {
+		slog.Warn("dnsmasq was built without inotify support; hosts file changes need `ovcp dns restart` to apply")
+	}
+}
+
+// newDNSSupervisor wires the dnsmasq worker. PreStart recomputes Args from
+// the current persisted config on every (re)start, so a Subnet or
+// block-internet change never leaves a running dnsmasq stale.
+func newDNSSupervisor(pp paths, bin string, s *store.Store) *controller.Supervisor {
+	warnMissingInotify(bin)
+	return &controller.Supervisor{
+		Name: "dnsmasq",
+		Bin:  bin,
+		PreStart: func() []string {
+			raw, _ := s.GetSetting("server_config")
+			ip, err := ovpnconf.Load(raw).ServerTunIP()
+			if err != nil {
+				slog.Warn("dnsmasq: server tun IP", "err", err)
+				ip = net.IPv4zero
+			}
+			blockInternet, _ := s.GetSetting("dns_block_internet")
+			return buildDnsmasqArgs(dnsRunAsUser(), dnsRunAsGroup(), ip, pp.DNSDir, pp.DnsmasqLog, blockInternet == "true")
+		},
+		LogPath: pp.DnsmasqLog,
+	}
+}
+
+// dnsGID resolves dnsmasq's drop-to group to a gid, so the hosts files can
+// be chgrp'd to it — group-scoped, tighter than the pki dir's world-traversal
+// precedent. -1 (not found) means "leave the file's group alone".
+func dnsGID(group string) int {
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return -1
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return -1
+	}
+	return gid
+}
+
+// ensureDNSDir creates $dataDir/dns (0750, so --hostsdir can list it) and
+// the two hosts files (0640) if missing. custom.hosts must survive
+// untouched; certs.hosts gets an empty placeholder if it doesn't exist yet.
+func ensureDNSDir(pp paths, gid int) error {
+	if err := os.MkdirAll(pp.DNSDir, 0o750); err != nil {
+		return err
+	}
+	os.Chown(pp.DNSDir, -1, gid)
+	for _, f := range []string{pp.CertsHosts, pp.CustomHosts} {
+		if _, err := os.Stat(f); os.IsNotExist(err) {
+			if err := os.WriteFile(f, nil, 0o640); err != nil {
+				return err
+			}
+		}
+		os.Chown(f, -1, gid)
+	}
+	return nil
+}
+
+// refreshCertsHostsCLI regenerates certs.hosts after a CLI-side cert
+// change (issue, revoke, include, exclude) — the CLI has no running
+// api.Server to do this for it, unlike the same actions via the web UI, so
+// it builds a bare one just to reuse Server.RefreshCertsHosts.
+func refreshCertsHostsCLI(dataDir string, s *store.Store) {
+	live, _ := controller.Clients(ctrlSock())
+	pp := dataPaths(dataDir)
+	gid := dnsGID(dnsRunAsGroup())
+	if err := ensureDNSDir(pp, gid); err != nil {
+		slog.Warn("certs.hosts refresh failed", "err", err)
+		return
+	}
+	srv := &api.Server{Store: s, CertsHostsPath: pp.CertsHosts, DefaultRemote: adminCertCN(dataDir), DNSGroupGID: gid}
+	if err := srv.RefreshCertsHosts(live); err != nil {
+		slog.Warn("certs.hosts refresh failed", "err", err)
 	}
 }
 
 type paths struct {
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, ServerConf string
-	LogsDir, OpenVPNLog, OvcpLog, StatusLog                  string
+	LogsDir, OpenVPNLog, OvcpLog, StatusLog, DnsmasqLog      string
+	DNSDir, CertsHosts, CustomHosts                          string
 }
 
 func dataPaths(dataDir string) paths {
 	pd := filepath.Join(dataDir, "pki")
 	ld := filepath.Join(dataDir, "logs")
+	dd := filepath.Join(dataDir, "dns")
 	return paths{
 		CACert: filepath.Join(pd, "ca.crt"), ServerCert: filepath.Join(pd, "server.crt"),
 		ServerKey: filepath.Join(pd, "server.key"), CRL: filepath.Join(pd, "crl.pem"),
-		TLSCrypt:   filepath.Join(pd, "tls-crypt.key"),
-		ServerConf: filepath.Join(dataDir, "server.conf"),
-		LogsDir:    ld,
-		OpenVPNLog: filepath.Join(ld, "openvpn.log"),
-		OvcpLog:    filepath.Join(ld, "ovcp.log"),
-		StatusLog:  filepath.Join(ld, "status.log"),
+		TLSCrypt:    filepath.Join(pd, "tls-crypt.key"),
+		ServerConf:  filepath.Join(dataDir, "server.conf"),
+		LogsDir:     ld,
+		OpenVPNLog:  filepath.Join(ld, "openvpn.log"),
+		OvcpLog:     filepath.Join(ld, "ovcp.log"),
+		StatusLog:   filepath.Join(ld, "status.log"),
+		DnsmasqLog:  filepath.Join(ld, "dnsmasq.log"),
+		DNSDir:      dd,
+		CertsHosts:  filepath.Join(dd, "certs.hosts"),
+		CustomHosts: filepath.Join(dd, "custom.hosts"),
 	}
 }
 
@@ -358,6 +512,7 @@ func fillPaths(cfg *ovpnconf.Config, dataDir, sock string) {
 	cfg.CRL, cfg.TLSCrypt = pp.CRL, pp.TLSCrypt
 	cfg.MgmtSocket = sock
 	cfg.StatusLog = pp.StatusLog
+	cfg.ServerCN = adminCertCN(dataDir)
 }
 
 // preflight verifies init artifacts exist, with an actionable error.

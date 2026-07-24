@@ -72,6 +72,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User)
 		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote,
 		"version": s.Version, "buildTarget": s.BuildTarget, "platform": runtime.GOOS + "/" + runtime.GOARCH,
 		"openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
+		"dnsmasqVersion": s.DnsmasqVersion, "dnsmasqPath": s.DnsmasqPath,
 		"minSecretLen": auth.MinSecretLen, "minSecretClasses": auth.MinSecretClasses,
 	})
 }
@@ -121,10 +122,11 @@ func (s *Server) handleCertList(w http.ResponseWriter, r *http.Request, u *store
 		IssuedAt         time.Time
 		NotAfter         time.Time
 		Revoked          bool
+		IncludeDNS       bool
 	}
 	out := []row{}
 	for _, c := range certs {
-		out = append(out, row{c.Serial, c.CN, c.Kind, c.IssuedAt, c.NotAfter, c.RevokedAt != nil})
+		out = append(out, row{c.Serial, c.CN, c.Kind, c.IssuedAt, c.NotAfter, c.RevokedAt != nil, c.IncludeDNS})
 	}
 	jsonOK(w, out)
 }
@@ -323,6 +325,7 @@ func mergedConfig(cur ovpnconf.Config, r *http.Request) (ovpnconf.Config, bool) 
 	}
 	in.CACert, in.ServerCert, in.ServerKey = cur.CACert, cur.ServerCert, cur.ServerKey
 	in.CRL, in.TLSCrypt, in.MgmtSocket, in.StatusLog = cur.CRL, cur.TLSCrypt, cur.MgmtSocket, cur.StatusLog
+	in.ServerCN = cur.ServerCN
 	return in, true
 }
 
@@ -366,29 +369,37 @@ func (s *Server) handleConfigPreview(w http.ResponseWriter, r *http.Request, u *
 	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0})
 }
 
-// handleVPN drives the openvpn worker: start|stop|restart|reconnect.
-func (s *Server) handleVPN(w http.ResponseWriter, r *http.Request, u *store.User) {
-	op := r.PathValue("op")
-	var err error
-	switch op {
-	case "start":
-		err = s.VPN.Start()
-	case "stop":
-		err = s.VPN.Stop()
-	case "restart":
-		err = s.VPN.Restart()
-	case "reconnect":
-		err = s.VPN.Reconnect()
-	default:
-		jsonErr(w, 404, "unknown vpn operation")
-		return
+// handleProc drives a supervised worker's lifecycle (start|stop|restart,
+// optionally reconnect) — shared by /api/vpn/{op} and /api/dns/{op}, name
+// prefixes the audit action and unknown-op message per worker.
+func (s *Server) handleProc(name string, target controller.Lifecycle, allowReconnect bool) handler {
+	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
+		op := r.PathValue("op")
+		var err error
+		switch op {
+		case "start":
+			err = target.Start()
+		case "stop":
+			err = target.Stop()
+		case "restart":
+			err = target.Restart()
+		case "reconnect":
+			if !allowReconnect {
+				jsonErr(w, 404, "unknown "+name+" operation")
+				return
+			}
+			err = target.Reconnect()
+		default:
+			jsonErr(w, 404, "unknown "+name+" operation")
+			return
+		}
+		if err != nil {
+			jsonErr(w, 502, err.Error())
+			return
+		}
+		s.Store.Audit(u.Username, name+"_"+op, "")
+		jsonOK(w, map[string]any{"op": op, "pid": target.Pid()})
 	}
-	if err != nil {
-		jsonErr(w, 502, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "vpn_"+op, "")
-	jsonOK(w, map[string]any{"op": op, "pid": s.VPN.Pid()})
 }
 
 func (s *Server) handleTelegramGet(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -431,6 +442,79 @@ func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *sto
 	}
 	s.Store.Audit(u.Username, "telegram_"+op, "")
 	jsonOK(w, s.Telegram.Status())
+}
+
+// handleCertDNS toggles whether a cert's CN gets a certs.hosts line while
+// connected, mirroring handleUserDisabled's shape.
+func (s *Server) handleCertDNS(w http.ResponseWriter, r *http.Request, u *store.User) {
+	serial := r.PathValue("serial")
+	var in struct{ IncludeDNS bool }
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	c, err := s.Store.GetCert(serial)
+	if err != nil {
+		jsonErr(w, 404, "certificate not found")
+		return
+	}
+	if c.IncludeDNS == in.IncludeDNS {
+		jsonOK(w, map[string]bool{"ok": true, "changed": false})
+		return
+	}
+	if err := s.Store.SetCertDNS(serial, in.IncludeDNS); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
+	}
+	action := "cert_dns_exclude"
+	if in.IncludeDNS {
+		action = "cert_dns_include"
+	}
+	s.Store.Audit(u.Username, action, "serial="+serial)
+	jsonOK(w, map[string]bool{"ok": true, "changed": true})
+}
+
+// handleCustomHostsGet/Put/Preview manage custom.hosts — the free-form,
+// user-authored hosts file, edited as one blob (same "whole-file, no
+// per-line CRUD" shape custom-opts already uses for server.conf's Extra).
+func (s *Server) handleCustomHostsGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	data, err := os.ReadFile(s.CustomHostsPath)
+	if err != nil && !os.IsNotExist(err) {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"content": string(data)})
+}
+
+func (s *Server) handleCustomHostsPut(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ Content string }
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	if err := WriteAtomicHosts(s.CustomHostsPath, []byte(in.Content), s.DNSGroupGID); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "dns_custom_change", "")
+	jsonOK(w, map[string]bool{"ok": true})
+}
+
+// handleCustomHostsPreview is handleCustomHostsPut's dry run, same shape as
+// handleConfigPreview: diff against what's on disk, don't write it.
+func (s *Server) handleCustomHostsPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ Content string }
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	cur, err := os.ReadFile(s.CustomHostsPath)
+	if err != nil && !os.IsNotExist(err) {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	diff := ovpnconf.Diff(cur, []byte(in.Content))
+	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0})
 }
 
 // handleCertDownload returns the (public) certificate PEM for any issued cert.
@@ -625,6 +709,32 @@ func (s *Server) handleDebugSet(w http.ResponseWriter, r *http.Request, u *store
 	}
 	s.Store.Audit(u.Username, "debug_"+action, "")
 	jsonOK(w, map[string]bool{"debug": in.Debug})
+}
+
+func (s *Server) handleDNSBlockGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	v, _ := s.Store.GetSetting("dns_block_internet")
+	jsonOK(w, map[string]bool{"blockInternet": v == "true"})
+}
+
+// handleDNSBlockSet toggles whether dnsmasq forwards to upstream resolvers;
+// PreStart picks it up on the next dnsmasq start/restart.
+func (s *Server) handleDNSBlockSet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ BlockInternet bool }
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	action := "off"
+	value := "false"
+	if in.BlockInternet {
+		action, value = "on", "true"
+	}
+	if err := s.Store.SetSetting("dns_block_internet", value); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "dns_block_internet_"+action, "")
+	jsonOK(w, map[string]bool{"blockInternet": in.BlockInternet})
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *store.User) {

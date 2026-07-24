@@ -50,17 +50,22 @@ func setup(t *testing.T) *env {
 	s.AddUser("admin", h, "admin")
 	h2, _ := auth.HashPassword(testUserPW)
 	s.AddUser("viewer", h2, "readonly")
+	os.MkdirAll(filepath.Join(dir, "dns"), 0o750)
 	srv := &Server{Store: s, Auth: a, PKI: p,
-		Mgmt:          controller.NewClient(filepath.Join(dir, "no.sock")),
-		VPN:           &fakeVPN{},
-		Telegram:      telegram.New(s, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"))),
-		DataDir:       dir,
-		ConfigPath:    filepath.Join(dir, "server.conf"),
-		TLSCrypt:      filepath.Join(dir, "pki", "tls-crypt.key"),
-		ServerCert:    filepath.Join(dir, "server.crt"),
-		ServerKey:     filepath.Join(dir, "server.key"),
-		DefaultRemote: "vpn.example.com",
-		DebugLevel:    new(slog.LevelVar),
+		Mgmt:            controller.NewClient(filepath.Join(dir, "no.sock")),
+		VPN:             &fakeVPN{},
+		DNS:             &fakeVPN{},
+		Telegram:        telegram.New(s, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"))),
+		DataDir:         dir,
+		ConfigPath:      filepath.Join(dir, "server.conf"),
+		TLSCrypt:        filepath.Join(dir, "pki", "tls-crypt.key"),
+		ServerCert:      filepath.Join(dir, "server.crt"),
+		ServerKey:       filepath.Join(dir, "server.key"),
+		DefaultRemote:   "vpn.example.com",
+		DebugLevel:      new(slog.LevelVar),
+		CertsHostsPath:  filepath.Join(dir, "dns", "certs.hosts"),
+		CustomHostsPath: filepath.Join(dir, "dns", "custom.hosts"),
+		DNSGroupGID:     -1,
 	}
 	return &env{ts: httptest.NewServer(srv.Handler()), t: t, dir: dir}
 }
@@ -155,6 +160,11 @@ func TestRBAC(t *testing.T) {
 		{"POST", "/api/certs/export"},
 		{"PUT", "/api/config"},
 		{"POST", "/api/vpn/restart"},
+		{"POST", "/api/dns/restart"},
+		{"PATCH", "/api/certs/x/dns"},
+		{"PUT", "/api/dns/custom"},
+		{"POST", "/api/dns/custom/preview"},
+		{"POST", "/api/dns/block-internet"},
 		{"PUT", "/api/telegram"},
 		{"POST", "/api/telegram/start"},
 		{"POST", "/api/debug"},
@@ -294,6 +304,98 @@ func containsLine(lines []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestDNSProc covers /api/dns/{op} — same shape as /api/vpn/{op} (which
+// itself never had a "status" op either; that's GET /api/status), minus reconnect.
+func TestDNSProc(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	for _, op := range []string{"start", "stop", "restart"} {
+		if r := e.req("POST", "/api/dns/"+op, "", true); r.StatusCode != 200 {
+			t.Fatalf("%s: %s", op, r.Status)
+		}
+	}
+	if r := e.req("POST", "/api/dns/reconnect", "", true); r.StatusCode != 404 {
+		t.Fatalf("dns reconnect must not exist, got %s", r.Status)
+	}
+}
+
+// TestCertDNSToggle: default include, toggle exclude/include, unknown serial errors.
+func TestCertDNSToggle(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	r := e.req("POST", "/api/certs", `{"CN":"dnstoggle","Passphrase":"`+pass+`"}`, true)
+	if r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	var out struct{ Serial string }
+	json.NewDecoder(r.Body).Decode(&out)
+
+	certs := e.req("GET", "/api/certs", "", false)
+	var rows []struct {
+		Serial     string
+		IncludeDNS bool
+	}
+	json.NewDecoder(certs.Body).Decode(&rows)
+	found := false
+	for _, row := range rows {
+		if row.Serial == out.Serial {
+			found = true
+			if !row.IncludeDNS {
+				t.Fatal("newly issued cert should default IncludeDNS=true")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("issued cert missing from /api/certs")
+	}
+
+	if r := e.req("PATCH", "/api/certs/"+out.Serial+"/dns", `{"IncludeDNS":false}`, true); r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	// already excluded: must report no-op, not silently re-apply and re-audit.
+	var toggled struct{ Changed bool }
+	r = e.req("PATCH", "/api/certs/"+out.Serial+"/dns", `{"IncludeDNS":false}`, true)
+	json.NewDecoder(r.Body).Decode(&toggled)
+	if r.StatusCode != 200 || toggled.Changed {
+		t.Fatalf("already-excluded PATCH should report changed=false, got status=%d %+v", r.StatusCode, toggled)
+	}
+	if r := e.req("PATCH", "/api/certs/nonexistent/dns", `{"IncludeDNS":true}`, true); r.StatusCode != 404 {
+		t.Fatalf("unknown serial must 404, got %s", r.Status)
+	}
+}
+
+// TestCustomHosts covers get/put/preview for the free-form custom.hosts file.
+func TestCustomHosts(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+
+	r := e.req("GET", "/api/dns/custom", "", false)
+	var got struct{ Content string }
+	json.NewDecoder(r.Body).Decode(&got)
+	if r.StatusCode != 200 || got.Content != "" {
+		t.Fatalf("initial custom.hosts should be empty: status=%d %+v", r.StatusCode, got)
+	}
+
+	r = e.req("POST", "/api/dns/custom/preview", `{"Content":"10.8.0.50 pihole\n"}`, true)
+	var pv struct {
+		Diff    []string
+		Changed bool
+	}
+	json.NewDecoder(r.Body).Decode(&pv)
+	if r.StatusCode != 200 || !pv.Changed || !containsLine(pv.Diff, "+10.8.0.50 pihole") {
+		t.Fatalf("preview: status=%d %+v", r.StatusCode, pv)
+	}
+
+	if r := e.req("PUT", "/api/dns/custom", `{"Content":"10.8.0.50 pihole\n"}`, true); r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	r = e.req("GET", "/api/dns/custom", "", false)
+	json.NewDecoder(r.Body).Decode(&got)
+	if got.Content != "10.8.0.50 pihole\n" {
+		t.Fatalf("custom.hosts not persisted, got %q", got.Content)
+	}
 }
 
 // TestUserEndpoints covers user-management routes, above all the self-lockout
@@ -504,6 +606,32 @@ func TestDebugToggle(t *testing.T) {
 	json.NewDecoder(r.Body).Decode(&out)
 	if r.StatusCode != 200 || out.Debug {
 		t.Fatal("want debug=false after disabling")
+	}
+}
+
+func TestDNSBlockInternetToggle(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+	var out struct{ BlockInternet bool }
+	r := e.req("GET", "/api/dns/block-internet", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || out.BlockInternet {
+		t.Fatalf("want blockInternet=false initially, got status=%d %v", r.StatusCode, out.BlockInternet)
+	}
+	if r := e.req("POST", "/api/dns/block-internet", `{"BlockInternet":true}`, true); r.StatusCode != 403 {
+		t.Fatal("readonly must not toggle it, got", r.Status)
+	}
+
+	e.login("admin")
+	r = e.req("POST", "/api/dns/block-internet", `{"BlockInternet":true}`, true)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || !out.BlockInternet {
+		t.Fatalf("want blockInternet=true after enabling, got status=%d %v", r.StatusCode, out.BlockInternet)
+	}
+	r = e.req("GET", "/api/dns/block-internet", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if !out.BlockInternet {
+		t.Fatal("GET after enable should report blockInternet=true")
 	}
 }
 

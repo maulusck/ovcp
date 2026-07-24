@@ -39,8 +39,10 @@
   const LOGS = [
     { id: 'openvpn', title: 'OpenVPN log', file: 'openvpn.log' },
     { id: 'ovcp', title: 'OVCP log', file: 'ovcp.log' },
+    { id: 'dnsmasq', title: 'Dnsmasq log', file: 'dnsmasq.log' },
   ]
-  let lines = $state({ openvpn: [], ovcp: [] })
+  const PANEL_IDS = ['audit', ...LOGS.map((l) => l.id)] // initial order
+  let lines = $state({ openvpn: [], ovcp: [], dnsmasq: [] })
   let entries = $state([])
   let boxes = $state({}) // id -> scroll container ('audit' included)
   let cards = $state({}) // id -> <details> element, for Maximize
@@ -53,8 +55,18 @@
   let autoscroll = $state(localStorage.getItem(AUTOSCROLL_KEY) !== '0')
   const OPEN_KEY = 'ovcp_logs_open'
   let openState = $state(Object.assign(
-    { audit: true, openvpn: false, ovcp: false },
+    { audit: true, openvpn: false, ovcp: true, dnsmasq: false },
     JSON.parse(localStorage.getItem(OPEN_KEY) || '{}')))
+
+  const ORDER_KEY = 'ovcp_logs_order'
+  // reconcile against PANEL_IDS, not a raw restore: a saved order predating
+  // a newly-added log must still surface it, not hide it forever.
+  const savedOrder = JSON.parse(localStorage.getItem(ORDER_KEY) || 'null') || []
+  let order = $state([
+    ...savedOrder.filter((id) => PANEL_IDS.includes(id)),
+    ...PANEL_IDS.filter((id) => !savedOrder.includes(id)),
+  ])
+  const bumpFront = (id) => (order = [id, ...order.filter((x) => x !== id)])
 
   // clamp a box's height to content: CSS fit-content doesn't work vertically in Firefox,
   // so measure instead (also re-clamps a resize drag on pointerup).
@@ -92,16 +104,26 @@
 
   const setAllOpen = (open) => (openState = { audit: open, ...Object.fromEntries(LOGS.map((l) => [l.id, open])) })
 
+  // odd open count leaves one dangling grid slot (the last row has only a
+  // left item); group collapsed panels there, stacked, instead of each
+  // claiming its own row. Even (incl. zero) has no dangling slot, so
+  // collapsed panels render as ordinary full-width cards like open ones.
+  const openCount = $derived(PANEL_IDS.filter((id) => openState[id]).length)
+  const stackCollapsed = $derived(openCount % 2 === 1 && openCount < PANEL_IDS.length)
+
   // per-panel filter (audit + each log) — one {open, query} per id, same
   // shape/toggle as every other table (see api.js's toggleSearch).
-  let search = $state({ audit: { open: false, query: '' }, openvpn: { open: false, query: '' }, ovcp: { open: false, query: '' } })
+  let search = $state({
+    audit: { open: false, query: '' }, openvpn: { open: false, query: '' },
+    ovcp: { open: false, query: '' }, dnsmasq: { open: false, query: '' },
+  })
   const filteredEntries = $derived(
     entries.filter((e) => matchesQuery(e, search.audit.query, (x) => x.Actor, (x) => x.Action, (x) => x.Detail)))
 
   // level-only filter, openvpn/ovcp panels only (audit has no level) —
   // 'all' skips it entirely so the common case parses each line once, not twice.
   const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 }
-  let levelFilter = $state({ openvpn: 'all', ovcp: 'all' })
+  let levelFilter = $state({ openvpn: 'all', ovcp: 'all', dnsmasq: 'all' })
   const visibleLines = (id) => lines[id]
     .filter((line) => matchesQuery(line, search[id].query, (x) => x))
     .filter((line) => levelFilter[id] === 'all' || LEVEL_RANK[parseLine(line).level] >= LEVEL_RANK[levelFilter[id]])
@@ -151,6 +173,7 @@
   })
   $effect(() => { localStorage.setItem(AUTOSCROLL_KEY, autoscroll ? '1' : '0') })
   $effect(() => { localStorage.setItem(OPEN_KEY, JSON.stringify(openState)) })
+  $effect(() => { localStorage.setItem(ORDER_KEY, JSON.stringify(order)) })
 </script>
 
 {#snippet actions(id, filename, text, hasLevel)}
@@ -206,8 +229,9 @@
     Download audit package</button>
 </div>
 
-<div class="logs-grid">
-  <details class="card" style="order: {openState.audit ? 0 : 1}" bind:open={openState.audit} bind:this={cards.audit}>
+{#snippet auditPanel()}
+  <details class="card" bind:open={openState.audit} bind:this={cards.audit}
+    ontoggle={(e) => e.target.open && bumpFront('audit')}>
     <summary onclick={(e) => maximized === 'audit' && e.preventDefault()}>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
@@ -235,37 +259,52 @@
       {/if}
     {/if}
   </details>
+{/snippet}
 
-  {#each LOGS as l}
-    <details class="card" style="order: {openState[l.id] ? 0 : 1}" bind:open={openState[l.id]} bind:this={cards[l.id]}>
-      <summary onclick={(e) => maximized === l.id && e.preventDefault()}>{l.title}</summary>
-      {#if lines[l.id].length === 0}
-        <p class="muted">No log yet.</p>
+{#snippet logPanel(l)}
+  <details class="card" bind:open={openState[l.id]} bind:this={cards[l.id]}
+    ontoggle={(e) => e.target.open && bumpFront(l.id)}>
+    <summary onclick={(e) => maximized === l.id && e.preventDefault()}>{l.title}</summary>
+    {#if lines[l.id].length === 0}
+      <p class="muted">No log yet.</p>
+    {:else}
+      {@render actions(l.id, l.file, () => visibleLines(l.id).join('\n'), true)}
+      {#if visibleLines(l.id).length === 0}
+        <p class="muted">No log lines match.</p>
       {:else}
-        {@render actions(l.id, l.file, () => visibleLines(l.id).join('\n'), true)}
-        {#if visibleLines(l.id).length === 0}
-          <p class="muted">No log lines match.</p>
-        {:else}
-        <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
-        <div class="scrollbox" bind:this={boxes[l.id]} onpointerup={(e) => fitToContent(e.currentTarget)}>
-          <table class="logtable">
-            <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
-            <tbody>
-              {#each visibleLines(l.id) as line}
-                {@const p = parseLine(line)}
-                <tr>
-                  <td class="muted">{p.time}</td>
-                  <td class="log-{p.level}">{p.level}</td>
-                  <td class="log-{p.level}">{p.msg}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-        {/if}
+      <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
+      <div class="scrollbox" bind:this={boxes[l.id]} onpointerup={(e) => fitToContent(e.currentTarget)}>
+        <table class="logtable">
+          <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
+          <tbody>
+            {#each visibleLines(l.id) as line}
+              {@const p = parseLine(line)}
+              <tr>
+                <td class="muted">{p.time}</td>
+                <td class="log-{p.level}">{p.level}</td>
+                <td class="log-{p.level}">{p.msg}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
       {/if}
-    </details>
+    {/if}
+  </details>
+{/snippet}
+
+<div class="logs-grid">
+  {#each order.filter((id) => openState[id] || !stackCollapsed) as id (id)}
+    {#if id === 'audit'}{@render auditPanel()}{:else}{@render logPanel(LOGS.find((x) => x.id === id))}{/if}
   {/each}
+
+  {#if stackCollapsed}
+    <div class="collapsed-stack">
+      {#each order.filter((id) => !openState[id]) as id (id)}
+        {#if id === 'audit'}{@render auditPanel()}{:else}{@render logPanel(LOGS.find((x) => x.id === id))}{/if}
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -273,7 +312,10 @@
   /* 600px min caps it at 2 columns even on the widened logs main */
   .logs-grid { grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); }
   .logs-grid :global(.card) { padding: 10px 14px; }
+  /* fills the one dangling grid cell; full-width cards stacked top to bottom */
+  .collapsed-stack { display: flex; flex-direction: column; gap: 4px; }
   summary { cursor: pointer; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+  summary:hover { color: var(--amber); }
   details[open] summary { margin-bottom: 14px; }
   /* height clamps to content via fitToContent (CSS fit-content isn't cross-browser);
      the resize handle can grow it, fitToContent snaps back down on release. */

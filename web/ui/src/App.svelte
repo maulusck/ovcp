@@ -6,15 +6,17 @@
   import Dashboard from './Dashboard.svelte'
   import Stats from './Stats.svelte'
   import Certs from './Certs.svelte'
+  import Records from './Records.svelte'
   import Settings from './Settings.svelte'
   import Users from './Users.svelte'
   import Logs from './Logs.svelte'
   import Docs from './Docs.svelte'
 
-  const tabs = [
+  const ALL_TABS = [
     ['dashboard', 'Dashboard'],
     ['stats', 'Stats'],
     ['certs', 'Certificates'],
+    ['records', 'Records'],
     ['settings', 'Settings'],
     ['users', 'Users'],
     ['logs', 'Logs'],
@@ -29,8 +31,13 @@
   const REPO_URL = 'https://goldrake.bot.nu/c/maulusck/ovcp.git'
 
   let user = $state(null)
+  // Records only appears once dnsmasq is confirmed on PATH — same
+  // modular, advisory-only gating openvpn itself gets, per the original ask.
+  const tabs = $derived(ALL_TABS.filter(([id]) => id !== 'records' || user?.dnsmasqVersion))
   let verLong = $state(false) // footer: short "ovcp X" vs long "ovcp X · openvpn Y (path)"
-  let tab = $state(tabs.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
+  // validated against ALL_TABS (not the dnsmasq-filtered tabs, whose value
+  // depends on `user` loading first) so restoring "records" isn't racy.
+  let tab = $state(ALL_TABS.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
   let navOpen = $state(false)
   let themeOpen = $state(false)
   // set by Dashboard's CN click, consumed (and cleared) by Certs to scroll/flash the matching row
@@ -202,6 +209,8 @@
       <Stats />
     {:else if tab === 'certs'}
       <Certs {canOperate} bind:focusCN />
+    {:else if tab === 'records'}
+      <Records {isAdmin} />
     {:else if tab === 'settings'}
       <Settings {isAdmin} />
     {:else if tab === 'users'}
@@ -216,7 +225,7 @@
     <button type="button" class="ver-toggle" onclick={() => (verLong = !verLong)}
       title={verLong ? 'Show less' : 'Show openvpn version'}>
       {#if verLong}
-        ovcp {user.version || 'dev'} · {user.platform || '?'}{user.buildTarget ? ` (${user.buildTarget})` : ''} · openvpn {user.openvpnVersion || 'not found'}{user.openvpnPath ? ` (${user.openvpnPath})` : ''}
+        ovcp {user.version || 'dev'} · {user.platform || '?'}{user.buildTarget ? ` (${user.buildTarget})` : ''} · openvpn {user.openvpnVersion || 'not found'}{user.openvpnPath ? ` (${user.openvpnPath})` : ''}{user.dnsmasqVersion ? ` · dnsmasq ${user.dnsmasqVersion}${user.dnsmasqPath ? ` (${user.dnsmasqPath})` : ''}` : ''}
       {:else}
         ovcp {user.version || 'dev'}
       {/if}
@@ -369,6 +378,11 @@
   }
   :global(.row) { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   :global(.small) { font-size: 12px; margin: 8px 0; }
+  /* config-preview diffs (Settings' server.conf, Records' custom.hosts) */
+  :global(.diff) { font-family: var(--mono); font-size: 12px; white-space: pre; overflow-x: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  :global(.diff .add) { color: var(--ok); }
+  :global(.diff .del) { color: var(--bad); }
 
   .gate { min-height: 100vh; display: grid; place-items: center; }
   .login { width: min(340px, 92vw); }

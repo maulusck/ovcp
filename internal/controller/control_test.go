@@ -42,7 +42,7 @@ func noMgmt(t *testing.T) *Client {
 func TestControlRoundTrip(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
-	l, err := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
+	l, err := ServeControl(sock, lc, &fakeLife{}, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,11 +66,42 @@ func TestControlRoundTrip(t *testing.T) {
 	}
 }
 
+// TestControlDNSRouting: "dns-"-prefixed ops must dispatch to dc, not lc,
+// and "dns-reconnect" must not exist (dnsmasq has no reconnect signal).
+func TestControlDNSRouting(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	lc, dc := &fakeLife{}, &fakeLife{}
+	l, err := ServeControl(sock, lc, dc, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	for _, op := range []string{"dns-start", "dns-stop", "dns-restart", "dns-status"} {
+		if _, err := Control(sock, op); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+	}
+	if dc.started != 1 || dc.stopped != 1 || dc.restarted != 1 {
+		t.Fatalf("dns dispatch off: %+v", dc)
+	}
+	if lc.started != 0 || lc.stopped != 0 || lc.restarted != 0 {
+		t.Fatalf("dns ops leaked to vpn lifecycle: %+v", lc)
+	}
+
+	if _, err := Control(sock, "dns-reconnect"); err == nil {
+		t.Fatal("dns-reconnect must not exist")
+	}
+	if dc.reconnected != 0 || lc.reconnected != 0 {
+		t.Fatalf("dns-reconnect must not touch either lifecycle: dc=%+v lc=%+v", dc, lc)
+	}
+}
+
 func TestControlChangedFlag(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	// pid flips 0 -> 100 across the call: reported as changed
 	lc := &flipLife{before: 0, after: 100}
-	l, _ := ServeControl(sock, lc, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
+	l, _ := ServeControl(sock, lc, &fakeLife{}, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
 	defer l.Close()
 	r, err := Control(sock, "start")
 	if err != nil || r.Pid != 100 || !r.Changed {
@@ -82,7 +113,7 @@ func TestControlDebugToggle(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
 	level := new(slog.LevelVar)
-	l, err := ServeControl(sock, lc, noMgmt(t), level, &fakeTelegram{})
+	l, err := ServeControl(sock, lc, &fakeLife{}, noMgmt(t), level, &fakeTelegram{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +138,7 @@ func TestControlDebugToggle(t *testing.T) {
 func TestControlClientsAndKill(t *testing.T) {
 	mgmtSock, _ := fakeMgmt(t)
 	sock := filepath.Join(t.TempDir(), "control.sock")
-	l, err := ServeControl(sock, &fakeLife{}, NewClient(mgmtSock), new(slog.LevelVar), &fakeTelegram{})
+	l, err := ServeControl(sock, &fakeLife{}, &fakeLife{}, NewClient(mgmtSock), new(slog.LevelVar), &fakeTelegram{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +159,7 @@ func TestControlClientsAndKill(t *testing.T) {
 func TestControlTelegramOps(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	tg := &fakeTelegram{}
-	l, err := ServeControl(sock, &fakeLife{}, noMgmt(t), new(slog.LevelVar), tg)
+	l, err := ServeControl(sock, &fakeLife{}, &fakeLife{}, noMgmt(t), new(slog.LevelVar), tg)
 	if err != nil {
 		t.Fatal(err)
 	}

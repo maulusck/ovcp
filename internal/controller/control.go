@@ -17,7 +17,8 @@ import (
 // near-zero copy and must read it over the wire instead (ControlResult.ServeStartedAt).
 var ProcessStartedAt = time.Now()
 
-// Lifecycle is the openvpn control surface (implemented by *Supervisor).
+// Lifecycle is a supervised worker's control surface (implemented by
+// *Supervisor) — shared by openvpn and dnsmasq.
 type Lifecycle interface {
 	Start() error
 	Stop() error
@@ -54,9 +55,9 @@ type ControlResult struct {
 	ServeStartedAt time.Time
 }
 
-// ServeControl exposes lc, "debug on|off", and mgmt's live client list/kill over a root-only (0600) unix
-// socket for `ovcp vpn`/`debug`/`status`/`kill`/`stats -follow` — mgmt allows only one client, so serve holds it and fans out here.
-func ServeControl(sockPath string, lc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) (net.Listener, error) {
+// ServeControl exposes lc (vpn), dc (dnsmasq), "debug on|off", and mgmt's live client list/kill over a root-only (0600) unix
+// socket for `ovcp vpn`/`dns`/`debug`/`status`/`kill`/`stats -follow` — mgmt allows only one client, so serve holds it and fans out here.
+func ServeControl(sockPath string, lc, dc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o750); err != nil {
 		return nil, err
 	}
@@ -72,13 +73,13 @@ func ServeControl(sockPath string, lc Lifecycle, mgmt *Client, level *slog.Level
 			if err != nil {
 				return // listener closed
 			}
-			go serveControlConn(c, lc, mgmt, level, tc)
+			go serveControlConn(c, lc, dc, mgmt, level, tc)
 		}
 	}()
 	return l, nil
 }
 
-func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) {
+func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(60 * time.Second)) // restart may take a few s
 	line, err := bufio.NewReader(c).ReadString('\n')
@@ -131,18 +132,29 @@ func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelV
 		return
 	}
 
-	before := lc.Pid()
+	// dns- prefixed ops target dnsmasq's own Lifecycle instead of vpn's;
+	// same switch body runs against whichever target, not a parallel copy.
+	target, verb := lc, op
+	if rest, ok := strings.CutPrefix(op, "dns-"); ok {
+		target, verb = dc, rest
+	}
+	if verb == "reconnect" && target == dc {
+		fmt.Fprintln(c, "ERR unknown operation")
+		return
+	}
+
+	before := target.Pid()
 	var opErr error
-	switch op {
+	switch verb {
 	case "status": // read-only
 	case "start":
-		opErr = lc.Start()
+		opErr = target.Start()
 	case "stop":
-		opErr = lc.Stop()
+		opErr = target.Stop()
 	case "restart":
-		opErr = lc.Restart()
+		opErr = target.Restart()
 	case "reconnect":
-		opErr = lc.Reconnect()
+		opErr = target.Reconnect()
 	case "debug on":
 		level.Set(slog.LevelDebug)
 		slog.Info("debug logging enabled")
@@ -157,14 +169,14 @@ func serveControlConn(c net.Conn, lc Lifecycle, mgmt *Client, level *slog.LevelV
 		fmt.Fprintf(c, "ERR %s\n", opErr)
 		return
 	}
-	after := lc.Pid()
+	after := target.Pid()
 	changed := "nochange"
 	if before != after {
 		changed = "changed"
 	}
 	var startedAtUnix int64
 	if after != 0 {
-		startedAtUnix = lc.StartedAt().Unix()
+		startedAtUnix = target.StartedAt().Unix()
 	}
 	fmt.Fprintf(c, "OK %d %s %d %d\n", after, changed, startedAtUnix, ProcessStartedAt.Unix())
 }
@@ -194,8 +206,8 @@ func controlRequest(sockPath, op string) (string, error) {
 	return strings.TrimSpace(payload), nil
 }
 
-// Control sends one vpn-lifecycle op ("status"/"start"/"stop"/"restart"/
-// "reconnect"/"debug on"/"debug off") to a running serve and returns the resulting pid/changed state.
+// Control sends one lifecycle op to a running serve; "dns-" prefix (e.g.
+// "dns-start") targets dnsmasq instead of vpn — "dns-reconnect" doesn't exist.
 func Control(sockPath, op string) (ControlResult, error) {
 	var r ControlResult
 	payload, err := controlRequest(sockPath, op)

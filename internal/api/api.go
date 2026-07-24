@@ -20,24 +20,30 @@ import (
 )
 
 type Server struct {
-	Store          *store.Store
-	Auth           *auth.Service
-	PKI            *pki.PKI
-	Mgmt           *controller.Client
-	VPN            controller.Lifecycle
-	Telegram       *telegram.Poller
-	DataDir        string         // data directory root (backup source)
-	ConfigPath     string         // rendered server.conf
-	TLSCrypt       string         // tls-crypt key path
-	ServerCert     string         // openvpn server cert path (renew-server target)
-	ServerKey      string         // openvpn server key path (renew-server target)
-	DefaultRemote  string         // OVCP_SERVER_CN / server cert CN; default client remote
-	Version        string         // build version, for the status export
-	BuildTarget    string         // Makefile TARGET/Containerfile arch this binary was built for, e.g. "host", "arm64-musl"
-	OpenVPNVersion string         // "" if openvpn isn't on PATH
-	OpenVPNPath    string         // "" if openvpn isn't on PATH
-	UI             fs.FS          // built frontend; nil = API only
-	DebugLevel     *slog.LevelVar // shared with `ovcp debug on|off`'s control-socket handler
+	Store           *store.Store
+	Auth            *auth.Service
+	PKI             *pki.PKI
+	Mgmt            *controller.Client
+	VPN             controller.Lifecycle
+	Telegram        *telegram.Poller
+	DataDir         string               // data directory root (backup source)
+	ConfigPath      string               // rendered server.conf
+	TLSCrypt        string               // tls-crypt key path
+	ServerCert      string               // openvpn server cert path (renew-server target)
+	ServerKey       string               // openvpn server key path (renew-server target)
+	DefaultRemote   string               // OVCP_SERVER_CN / server cert CN; default client remote
+	Version         string               // build version, for the status export
+	BuildTarget     string               // Makefile TARGET/Containerfile arch this binary was built for, e.g. "host", "arm64-musl"
+	OpenVPNVersion  string               // "" if openvpn isn't on PATH
+	OpenVPNPath     string               // "" if openvpn isn't on PATH
+	DNS             controller.Lifecycle // nil until dnsmasq is found on PATH (Records tab gate)
+	DnsmasqVersion  string               // "" if dnsmasq isn't on PATH
+	DnsmasqPath     string               // "" if dnsmasq isn't on PATH
+	CertsHostsPath  string               // Records tab: machine-owned certs.hosts, regenerated wholesale
+	CustomHostsPath string               // Records tab: user-authored custom.hosts, edited as one blob
+	DNSGroupGID     int                  // dnsmasq's resolved drop-to group; both hosts files are chgrp'd to it
+	UI              fs.FS                // built frontend; nil = API only
+	DebugLevel      *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
 }
 
 const (
@@ -61,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))
 	mux.Handle("GET /api/logs/openvpn", s.wrap(auth.RoleReadonly, s.logHandler("openvpn.log")))
 	mux.Handle("GET /api/logs/ovcp", s.wrap(auth.RoleReadonly, s.logHandler("ovcp.log")))
+	mux.Handle("GET /api/logs/dnsmasq", s.wrap(auth.RoleReadonly, s.logHandler("dnsmasq.log")))
 	mux.Handle("GET /api/logs/download", s.wrap(auth.RoleOperator, s.handleLogsDownload))
 	mux.Handle("GET /api/debug", s.wrap(auth.RoleReadonly, s.handleDebugGet))
 	mux.Handle("POST /api/debug", s.wrap(auth.RoleAdmin, s.handleDebugSet))
@@ -72,7 +79,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
 	mux.Handle("PUT /api/config", s.wrap(auth.RoleAdmin, s.handleConfigPut))
 	mux.Handle("POST /api/config/preview", s.wrap(auth.RoleAdmin, s.handleConfigPreview))
-	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleVPN))
+	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleProc("vpn", s.VPN, true)))
+	mux.Handle("POST /api/dns/{op}", s.wrap(auth.RoleAdmin, s.handleProc("dns", s.DNS, false)))
+	mux.Handle("PATCH /api/certs/{serial}/dns", s.wrap(auth.RoleOperator, s.handleCertDNS))
+	mux.Handle("GET /api/dns/custom", s.wrap(auth.RoleReadonly, s.handleCustomHostsGet))
+	mux.Handle("PUT /api/dns/custom", s.wrap(auth.RoleAdmin, s.handleCustomHostsPut))
+	mux.Handle("POST /api/dns/custom/preview", s.wrap(auth.RoleAdmin, s.handleCustomHostsPreview))
+	mux.Handle("GET /api/dns/block-internet", s.wrap(auth.RoleReadonly, s.handleDNSBlockGet))
+	mux.Handle("POST /api/dns/block-internet", s.wrap(auth.RoleAdmin, s.handleDNSBlockSet))
 	mux.Handle("GET /api/telegram", s.wrap(auth.RoleReadonly, s.handleTelegramGet))
 	mux.Handle("PUT /api/telegram", s.wrap(auth.RoleAdmin, s.handleTelegramPut))
 	mux.Handle("POST /api/telegram/{op}", s.wrap(auth.RoleAdmin, s.handleTelegramOp))

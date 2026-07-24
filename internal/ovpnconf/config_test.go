@@ -41,7 +41,7 @@ func TestRender(t *testing.T) {
 	out := string(c.Render())
 	for _, want := range []string{
 		"proto udp", "port 1194", "server 10.8.0.0 255.255.255.0",
-		"topology subnet", "dh none", "disable-dco", "data-ciphers AES-256-GCM", "data-ciphers-fallback AES-256-GCM",
+		"dev tun", "topology subnet", "dh none", "disable-dco", "data-ciphers AES-256-GCM", "data-ciphers-fallback AES-256-GCM",
 		"crl-verify /d/crl.pem", "tls-crypt /d/tc.key",
 		"management /run/ovcp/mgmt.sock unix", "status-version 3",
 		`push "redirect-gateway def1 bypass-dhcp"`,
@@ -72,6 +72,36 @@ func TestRenderExtra(t *testing.T) {
 	out := string(c.Render())
 	if !strings.Contains(out, "custom options") || !strings.Contains(out, "client-to-client") {
 		t.Fatalf("Extra must be appended verbatim\n%s", out)
+	}
+}
+
+func TestServerTunIP(t *testing.T) {
+	c := valid()
+	ip, err := c.ServerTunIP()
+	if err != nil || ip.String() != "10.8.0.1" {
+		t.Fatalf("ServerTunIP() = %v, %v; want 10.8.0.1", ip, err)
+	}
+	c.Subnet = "not-a-cidr"
+	if _, err := c.ServerTunIP(); err == nil {
+		t.Fatal("bad subnet must error")
+	}
+}
+
+func TestDomainSearchPush(t *testing.T) {
+	c := valid()
+	c.ServerCN = "ovcp.example.com"
+	out := string(c.Render())
+	if !strings.Contains(out, `push "dhcp-option DOMAIN example.com"`) {
+		t.Fatalf("expected DOMAIN push for a dotted CN\n%s", out)
+	}
+	if !strings.Contains(out, `push "dhcp-option DOMAIN-SEARCH example.com"`) {
+		t.Fatalf("expected DOMAIN-SEARCH push for a dotted CN\n%s", out)
+	}
+
+	c.ServerCN = "ovcp"
+	out = string(c.Render())
+	if strings.Contains(out, "DOMAIN") {
+		t.Fatalf("bare shortname CN must not push DOMAIN/DOMAIN-SEARCH\n%s", out)
 	}
 }
 

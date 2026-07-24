@@ -11,32 +11,40 @@ import (
 )
 
 const (
+	// dnsRefreshInterval drives the shared ticker; statsSampleInterval must
+	// be a whole multiple of it, since one poll now feeds both.
+	dnsRefreshInterval  = 5 * time.Second
 	statsSampleInterval = time.Minute
 	// bounds DB rows (~1440 samples) and the /api/stats payload; sessions key
 	// by CN not serial, so history survives cert revocation like the audit log does.
 	StatsRetention = 24 * time.Hour
 )
 
-// RunStatsSampler polls VPN status on a fixed interval, persisting an aggregate sample and sessions until stop closes; each tick is recovered so one bad tick can't kill the daemon.
-// ponytail: CN keys a client across polls, so a same-interval reconnect is invisible; CLIENT_DISCONNECT gives exact timing if ever needed.
-func (s *Server) RunStatsSampler(stop <-chan struct{}) {
+// RunSampler polls VPN status on one ticker and fans it out: every tick
+// refreshes certs.hosts, every statsSampleInterval'th tick also samples
+// stats. Panics are recovered so one bad tick can't kill the daemon.
+// ponytail: CN-keyed, so a same-tick reconnect is invisible; fine for now.
+func (s *Server) RunSampler(stop <-chan struct{}) {
 	prev := map[string]controller.VPNClient{}
-	t := time.NewTicker(statsSampleInterval)
+	ticksPerSample := int(statsSampleInterval / dnsRefreshInterval)
+	tick := 0
+	t := time.NewTicker(dnsRefreshInterval)
 	defer t.Stop()
 	for {
 		select {
 		case <-stop:
 			return
 		case <-t.C:
-			prev = s.statsTick(prev)
+			tick++
+			prev = s.samplerTick(tick%ticksPerSample == 0, prev)
 		}
 	}
 }
 
-func (s *Server) statsTick(prev map[string]controller.VPNClient) (next map[string]controller.VPNClient) {
+func (s *Server) samplerTick(sampleStats bool, prev map[string]controller.VPNClient) (next map[string]controller.VPNClient) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("stats sampler tick panicked, skipping", "err", r)
+			slog.Error("sampler tick panicked, skipping", "err", r)
 			next = prev
 		}
 	}()
@@ -44,6 +52,12 @@ func (s *Server) statsTick(prev map[string]controller.VPNClient) (next map[strin
 	cur, err := s.Mgmt.Status()
 	if err != nil {
 		return prev // VPN down/restarting; skip this tick, not an error
+	}
+	if err := s.RefreshCertsHosts(cur); err != nil {
+		slog.Warn("certs.hosts refresh failed", "err", err)
+	}
+	if !sampleStats {
+		return prev
 	}
 	now := time.Now()
 	curByCN := make(map[string]controller.VPNClient, len(cur))

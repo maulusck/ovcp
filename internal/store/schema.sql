@@ -2,13 +2,14 @@ PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS certs (
-  serial     TEXT PRIMARY KEY,          -- hex, no leading zeros
-  cn         TEXT NOT NULL,
-  kind       TEXT NOT NULL CHECK (kind IN ('server','client')),
-  cert_pem   BLOB NOT NULL,
-  issued_at  INTEGER NOT NULL,          -- unix
-  not_after  INTEGER NOT NULL,
-  revoked_at INTEGER                    -- NULL = valid
+  serial      TEXT PRIMARY KEY,          -- hex, no leading zeros
+  cn          TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('server','client')),
+  cert_pem    BLOB NOT NULL,
+  issued_at   INTEGER NOT NULL,          -- unix
+  not_after   INTEGER NOT NULL,
+  revoked_at  INTEGER,                   -- NULL = valid
+  include_dns INTEGER NOT NULL DEFAULT 1 -- Records tab: CN gets a certs.hosts line while connected
 );
 
 CREATE TABLE IF NOT EXISTS users (

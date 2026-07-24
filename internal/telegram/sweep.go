@@ -10,7 +10,7 @@ import (
 )
 
 // RunExpirySweeper checks daily for certs newly inside store.ExpiryWarnDays
-// and notifies once per serial. Same ticker shape as api.RunStatsSampler.
+// and notifies once per serial. Same ticker shape as api.RunSampler.
 func (p *Poller) RunExpirySweeper(stop <-chan struct{}) {
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()

@@ -60,6 +60,8 @@ func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []strin
 
 var (
 	vpnOps      = []string{"start", "stop", "restart", "reconnect", "status"}
+	dnsOps      = []string{"start", "stop", "restart", "status"} // no reconnect: dnsmasq has no such signal
+	recordOps   = []string{"list", "edit", "include", "exclude"}
 	userOps     = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
 	backupOps   = []string{"create", "restore"}
 	debugOps    = []string{"on", "off"}
@@ -79,7 +81,9 @@ var commands = []command{
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N]   traffic history, or a live top-like follow view (-follow ignores -json)", run: cmdStats},
 	{name: "kill", usage: "-cn NAME   disconnect client", run: cmdKill},
-	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: cmdVPN},
+	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: procCmd("vpn", vpnOps, "")},
+	{name: "dns", usage: "start|stop|restart|status   manage/inspect the dnsmasq worker", sub: dnsOps, run: procCmd("dns", dnsOps, "dns-")},
+	{name: "record", usage: "list | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
 	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
@@ -113,6 +117,8 @@ type versionOut struct {
 	BuildTarget    string `json:"buildTarget"` // Makefile TARGET/Containerfile arch, e.g. "host", "arm64-musl"
 	OpenVPNVersion string `json:"openvpnVersion,omitempty"`
 	OpenVPNPath    string `json:"openvpnPath,omitempty"`
+	DnsmasqVersion string `json:"dnsmasqVersion,omitempty"`
+	DnsmasqPath    string `json:"dnsmasqPath,omitempty"`
 }
 
 func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
@@ -121,12 +127,20 @@ func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
 		if v, p, ok := controller.OpenVPNVersion(); ok {
 			out.OpenVPNVersion, out.OpenVPNPath = v, p
 		}
+		if v, p, ok := controller.DnsmasqVersion(); ok {
+			out.DnsmasqVersion, out.DnsmasqPath = v, p
+		}
 		output(out, func(o versionOut) {
 			fmt.Println("ovcp", o.Version, paint(ansiCyan, "("+o.Platform+", "+o.BuildTarget+")"))
 			if o.OpenVPNVersion == "" {
 				fmt.Println("openvpn: not found on PATH")
 			} else {
 				fmt.Printf("openvpn %s (%s)\n", o.OpenVPNVersion, o.OpenVPNPath)
+			}
+			if o.DnsmasqVersion == "" {
+				fmt.Println("dnsmasq: not found on PATH")
+			} else {
+				fmt.Printf("dnsmasq %s (%s)\n", o.DnsmasqVersion, o.DnsmasqPath)
 			}
 		})
 	}
@@ -156,6 +170,7 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		die(s.AddCert(store.CertFrom(ic, *kindS)))
+		refreshCertsHostsCLI(ctx.dataDir, s)
 		s.Audit("cli", "issue", fmt.Sprintf("cn=%s kind=%s serial=%s", *cn, *kindS, ic.SerialHex))
 		o := issueOut{Serial: ic.SerialHex}
 		if *out != "" {
@@ -196,6 +211,7 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		die(s.Revoke(*serial, time.Now()))
+		refreshCertsHostsCLI(ctx.dataDir, s)
 		rev, err := s.RevokedCerts()
 		die(err)
 		entries := make([]pki.RevokedEntry, len(rev))
@@ -405,7 +421,7 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 		switch *customOpts {
 		case "":
 		case "-":
-			extra = editText("")
+			extra, _ = editText("")
 		default:
 			extra = commaOrLines(*customOpts)
 		}
@@ -413,6 +429,7 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 		ic, err := issueCert(ctx.p, pki.KindClient, *cn, 365, pass, *keyPass)
 		die(err)
 		die(s.AddCert(store.CertFrom(ic, "client")))
+		refreshCertsHostsCLI(ctx.dataDir, s)
 		s.Audit("cli", "issue", "cn="+*cn+" (export)")
 		caPEM, err := ctx.p.CACertPEM()
 		die(err)
@@ -648,43 +665,128 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
+// cmdRecord manages the Records tab: list certs.hosts/custom.hosts, edit
+// custom.hosts in $EDITOR, or include/exclude a CN (mirrors `user enable|disable`).
+func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "vpn", vpnOps)
-		ofs := newFlags("vpn " + op)
-		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
-		ofs.Parse(rest)
-		r, err := controller.Control(*ctrl, op)
-		die(err)
-		if op != "status" { // status is read-only, don't audit
-			s := ctx.openStore()
-			s.Audit("cli", "vpn_"+op, fmt.Sprintf("pid=%d", r.Pid))
-			s.Close()
+		op, rest := opArg(fs, "record", recordOps)
+		pp := dataPaths(ctx.dataDir)
+		gid := dnsGID(dnsRunAsGroup())
+		if err := ensureDNSDir(pp, gid); err != nil {
+			die(err)
 		}
-		output(r, func(r controller.ControlResult) { printVPNText(op, r) })
+		switch op {
+		case "list":
+			certsData, _ := os.ReadFile(pp.CertsHosts)
+			customData, _ := os.ReadFile(pp.CustomHosts)
+			output(recordListOut{string(certsData), string(customData)}, func(o recordListOut) {
+				fmt.Println("Certificate records:")
+				fmt.Print(o.Certs)
+				fmt.Println("Custom records:")
+				fmt.Print(o.Custom)
+			})
+
+		case "edit":
+			efs := newFlags("record edit")
+			efs.Parse(rest)
+			cur, _ := os.ReadFile(pp.CustomHosts)
+			out, changed := editText(string(cur))
+			if !changed {
+				output(msg("no change"), printMsg)
+				return
+			}
+			die(api.WriteAtomicHosts(pp.CustomHosts, []byte(out), gid))
+			s := ctx.openStore()
+			s.Audit("cli", "dns_custom_change", "")
+			s.Close()
+			output(msg("saved"), printMsg)
+
+		case "include", "exclude":
+			ifs := newFlags("record " + op)
+			cn := ifs.String("cn", "", "certificate CN (required)")
+			ifs.Parse(rest)
+			if *cn == "" {
+				die(fmt.Errorf("-cn required"))
+			}
+			s := ctx.openStore()
+			defer s.Close()
+			certs, err := s.ListCerts()
+			die(err)
+			c, found := activeCertByCN(certs, *cn)
+			if !found {
+				die(fmt.Errorf("no active certificate for CN %q", *cn))
+			}
+			include := op == "include"
+			if c.IncludeDNS == include {
+				output(msg("%s is already %sd", *cn, op), printMsg)
+				return
+			}
+			die(s.SetCertDNS(c.Serial, include))
+			refreshCertsHostsCLI(ctx.dataDir, s)
+			s.Audit("cli", "cert_dns_"+op, "cn="+*cn+" serial="+c.Serial)
+			output(msg("%sd: %s", op, *cn), printMsg)
+		}
 	}
 }
 
-// printVPNText renders vpn's ControlResult per op — the human phrasing each
-// op already had, now driven off the same struct -json emits.
-func printVPNText(op string, r controller.ControlResult) {
+type recordListOut struct {
+	Certs, Custom string
+}
+
+// activeCertByCN finds cn's currently-active (non-revoked) cert — the store
+// package keeps the equivalent lookup private (activeCertSerial), so this
+// is the CLI's own read-only scan over the already-public ListCerts.
+func activeCertByCN(certs []store.Cert, cn string) (store.Cert, bool) {
+	for _, c := range certs {
+		if c.CN == cn && c.RevokedAt == nil {
+			return c, true
+		}
+	}
+	return store.Cert{}, false
+}
+
+// procCmd drives a supervised worker's lifecycle from the CLI — shared by
+// `ovcp vpn` and `ovcp dns`. wirePrefix distinguishes dns ops on the control
+// socket ("dns-"), matching serveControlConn's routing (control.go); "" for vpn.
+func procCmd(name string, ops []string, wirePrefix string) func(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(fs *flag.FlagSet) func(ctx *cliContext) {
+		return func(ctx *cliContext) {
+			op, rest := opArg(fs, name, ops)
+			ofs := newFlags(name + " " + op)
+			ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+			ofs.Parse(rest)
+			r, err := controller.Control(*ctrl, wirePrefix+op)
+			die(err)
+			if op != "status" { // status is read-only, don't audit
+				s := ctx.openStore()
+				s.Audit("cli", name+"_"+op, fmt.Sprintf("pid=%d", r.Pid))
+				s.Close()
+			}
+			output(r, func(r controller.ControlResult) { printProcText(name, op, r) })
+		}
+	}
+}
+
+// printProcText renders a lifecycle op's ControlResult — the human phrasing
+// vpn's ops already had, generalized to any worker name ("vpn"/"dns").
+func printProcText(name, op string, r controller.ControlResult) {
 	switch {
 	case op == "status" && r.Pid == 0:
-		fmt.Println("vpn stopped")
+		fmt.Println(name, "stopped")
 	case op == "status":
-		fmt.Printf("vpn running (pid %d, up %s)\n", r.Pid, fmtUptime(r.StartedAt))
+		fmt.Printf("%s running (pid %d, up %s)\n", name, r.Pid, fmtUptime(r.StartedAt))
 	case op == "start" && !r.Changed:
-		fmt.Printf("vpn already started (pid %d)\n", r.Pid)
+		fmt.Printf("%s already started (pid %d)\n", name, r.Pid)
 	case op == "start":
-		fmt.Printf("vpn started (pid %d)\n", r.Pid)
+		fmt.Printf("%s started (pid %d)\n", name, r.Pid)
 	case op == "stop" && !r.Changed:
-		fmt.Println("vpn already stopped")
+		fmt.Println(name, "already stopped")
 	case op == "stop":
-		fmt.Println("vpn stopped")
+		fmt.Println(name, "stopped")
 	case op == "restart":
-		fmt.Printf("vpn restarted (pid %d)\n", r.Pid)
+		fmt.Printf("%s restarted (pid %d)\n", name, r.Pid)
 	case op == "reconnect":
-		fmt.Printf("vpn reconnect sent (pid %d)\n", r.Pid)
+		fmt.Printf("%s reconnect sent (pid %d)\n", name, r.Pid)
 	}
 	if op == "status" {
 		if u := fmtUptime(r.ServeStartedAt); u != "" {
@@ -734,9 +836,9 @@ func commaOrLines(s string) string {
 	return strings.Join(parts, "\n")
 }
 
-// editText opens initial in $EDITOR (fallback vi) and returns what was saved
-// — same idiom as `git commit`/`crontab -e`.
-func editText(initial string) string {
+// editText opens initial in $EDITOR (fallback vi), returning what was saved
+// and whether it changed — computed once so every caller gets it for free.
+func editText(initial string) (out string, changed bool) {
 	tmp := filepath.Join(os.TempDir(), "ovcp-edit.conf")
 	die(os.WriteFile(tmp, []byte(initial), 0o600))
 	defer os.Remove(tmp)
@@ -744,9 +846,10 @@ func editText(initial string) string {
 	cmd := exec.Command(editor, tmp)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	die(cmd.Run())
-	out, err := os.ReadFile(tmp)
+	data, err := os.ReadFile(tmp)
 	die(err)
-	return string(out)
+	out = string(data)
+	return out, out != initial
 }
 
 // cmdCustomOpts edits the server config's raw extra directives in $EDITOR.
@@ -756,7 +859,12 @@ func cmdCustomOpts(_ *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		raw, _ := s.GetSetting("server_config")
 		cfg := ovpnconf.Load(raw)
-		cfg.Extra = editText(cfg.Extra)
+		extra, changed := editText(cfg.Extra)
+		if !changed {
+			output(msg("no change"), printMsg)
+			return
+		}
+		cfg.Extra = extra
 		enc, _ := json.Marshal(cfg)
 		die(s.SetSetting("server_config", string(enc)))
 		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))

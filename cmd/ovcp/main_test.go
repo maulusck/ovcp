@@ -6,6 +6,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -832,6 +834,9 @@ func TestUnreachableServe(t *testing.T) {
 	if r := run(t, env, "vpn", "status"); r.code == 0 {
 		t.Fatalf("vpn status with no serve running should fail: %+v", r)
 	}
+	if r := run(t, env, "dns", "status"); r.code == 0 {
+		t.Fatalf("dns status with no serve running should fail: %+v", r)
+	}
 	if r := run(t, env, "debug", "on"); r.code == 0 {
 		t.Fatalf("debug on with no serve running should fail: %+v", r)
 	}
@@ -846,5 +851,278 @@ func TestUnreachableServe(t *testing.T) {
 	kill := withEnv(env, "OVCP_MGMT_SOCK="+filepath.Join(t.TempDir(), "mgmt.sock"))
 	if r := run(t, kill, "kill", "-cn", "nobody"); r.code == 0 {
 		t.Fatalf("kill with no mgmt socket should fail: %+v", r)
+	}
+}
+
+func TestBuildDnsmasqArgs(t *testing.T) {
+	ip := net.ParseIP("10.8.0.1")
+	args := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", "/d/logs/dnsmasq.log", false)
+	want := []string{
+		"-k", "--user=nobody", "--group=nogroup", "--bind-dynamic",
+		"--listen-address=10.8.0.1",
+		"--hostsdir=/d/dns", "--log-queries", "--log-facility=/d/logs/dnsmasq.log",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("args[%d] = %q, want %q (full: %v)", i, args[i], want[i], args)
+		}
+	}
+
+	blocked := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", "/d/logs/dnsmasq.log", true)
+	if !containsArg(blocked, "--no-resolv") || !containsArg(blocked, "--server=/#/") {
+		t.Fatalf("blockInternet=true must append --no-resolv and --server=/#/, got %v", blocked)
+	}
+}
+
+// fakeVersionScript writes a script that prints versionOutput for --version,
+// standing in for dnsmasq's own --version banner.
+func fakeVersionScript(t *testing.T, versionOutput string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fake-dnsmasq.sh")
+	script := "#!/bin/sh\ncat <<'EOF'\n" + versionOutput + "EOF\n"
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func captureWarnings(t *testing.T, fn func()) string {
+	t.Helper()
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	fn()
+	return buf.String()
+}
+
+func TestWarnMissingInotify(t *testing.T) {
+	withInotify := fakeVersionScript(t, "Dnsmasq version 2.91\ncompile time options: inotify dumpfile\n")
+	if out := captureWarnings(t, func() { warnMissingInotify(withInotify) }); strings.Contains(out, "inotify") {
+		t.Fatalf("dnsmasq with inotify support must not warn, got: %s", out)
+	}
+
+	withoutInotify := fakeVersionScript(t, "Dnsmasq version 2.85\ncompile time options: dumpfile\n")
+	if out := captureWarnings(t, func() { warnMissingInotify(withoutInotify) }); !strings.Contains(out, "inotify") {
+		t.Fatalf("dnsmasq without inotify support must warn, got: %s", out)
+	}
+
+	if out := captureWarnings(t, func() { warnMissingInotify("") }); out != "" {
+		t.Fatalf("no binary found must not warn about inotify, got: %s", out)
+	}
+}
+
+// TestDNSSupervisorPreStart: Args must be recomputed on every start, not
+// fixed once — a Subnet change must apply without restarting ovcp itself.
+func TestDNSSupervisorPreStart(t *testing.T) {
+	const (
+		firstSubnet, firstListen   = "10.9.0.0/24", "--listen-address=10.9.0.1"
+		secondSubnet, secondListen = "10.10.0.0/24", "--listen-address=10.10.0.1"
+	)
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	saveSubnet := func(subnet string) {
+		cfg := ovpnconf.Default()
+		cfg.Subnet = subnet
+		raw, _ := json.Marshal(cfg)
+		s.SetSetting("server_config", string(raw))
+	}
+
+	saveSubnet(firstSubnet)
+	pp := dataPaths(dir)
+	sup := newDNSSupervisor(pp, fakeBin(t), s)
+	if err := sup.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sup.Stop()
+	if !containsArg(sup.Args, firstListen) {
+		t.Fatalf("Args = %v, want %s", sup.Args, firstListen)
+	}
+
+	saveSubnet(secondSubnet)
+	if err := sup.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	if !containsArg(sup.Args, secondListen) {
+		t.Fatalf("Args after Subnet change = %v, want %s", sup.Args, secondListen)
+	}
+}
+
+// fakeBin stands in for a real worker binary — ignores args, just sleeps.
+func fakeBin(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "fake-worker.sh")
+	script := "#!/bin/sh\ncase \"$1\" in\n--version) echo 'fake 1.0 inotify';;\n*) exec sleep 300;;\nesac\n"
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDnsGID(t *testing.T) {
+	if gid := dnsGID("root"); gid != 0 {
+		t.Fatalf("dnsGID(root) = %d, want 0", gid)
+	}
+	if gid := dnsGID("this-group-should-not-exist-anywhere"); gid != -1 {
+		t.Fatalf("dnsGID(unknown) = %d, want -1", gid)
+	}
+}
+
+func TestEnsureDNSDir(t *testing.T) {
+	dir := t.TempDir()
+	pp := dataPaths(dir)
+
+	if err := ensureDNSDir(pp, -1); err != nil {
+		t.Fatal(err)
+	}
+	// 0750, not 0710: --hostsdir must list this directory, not just
+	// traverse into it, or dnsmasq can't set up its inotify watch at all.
+	fi, err := os.Stat(pp.DNSDir)
+	if err != nil || fi.Mode().Perm() != 0o750 {
+		t.Fatalf("dns dir mode = %v err=%v, want 0750", fi, err)
+	}
+	for _, f := range []string{pp.CertsHosts, pp.CustomHosts} {
+		fi, err := os.Stat(f)
+		if err != nil || fi.Mode().Perm() != 0o640 {
+			t.Fatalf("%s mode = %v err=%v, want 0640", f, fi, err)
+		}
+	}
+
+	// custom.hosts is user-authored: a second call must not clobber existing content.
+	if err := os.WriteFile(pp.CustomHosts, []byte("10.8.0.99 pihole\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureDNSDir(pp, -1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(pp.CustomHosts)
+	if err != nil || string(got) != "10.8.0.99 pihole\n" {
+		t.Fatalf("custom.hosts clobbered on re-run: got %q err=%v", got, err)
+	}
+}
+
+// TestCustomOptsNoChange is the actual regression test for the bug that
+// started this: `ovcp custom-opts` used to print "saved" (and write to the
+// DB/server.conf) even when $EDITOR made no change at all.
+func TestCustomOptsNoChange(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+
+	noop := filepath.Join(t.TempDir(), "noop-editor.sh")
+	if err := os.WriteFile(noop, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := run(t, withEnv(env, "EDITOR="+noop), "custom-opts"); r.code != 0 || !strings.Contains(r.stdout, "no change") {
+		t.Fatalf("no-op editor should report 'no change': %+v", r)
+	}
+
+	touch := filepath.Join(t.TempDir(), "touch-editor.sh")
+	if err := os.WriteFile(touch, []byte("#!/bin/sh\necho 'client-to-client' >> \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := run(t, withEnv(env, "EDITOR="+touch), "custom-opts"); r.code != 0 || !strings.Contains(r.stdout, "saved") {
+		t.Fatalf("an editor that changed content should report 'saved': %+v", r)
+	}
+}
+
+// TestDNSCommand: "dns reconnect" is rejected by arg validation alone
+// (dnsOps has no such op); wire-level routing is covered by
+// TestControlDNSRouting, "no serve running" by TestUnreachableServe above.
+func TestDNSCommand(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "dns", "reconnect"); r.code == 0 {
+		t.Fatalf("dns reconnect must not exist: %+v", r)
+	}
+}
+
+// TestRefreshCertsHostsCLI: issue/revoke/record must regenerate certs.hosts
+// themselves — the CLI has no running serve to do it for them.
+func TestRefreshCertsHostsCLI(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "ovcp.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	certsHosts := filepath.Join(dataDir(env), "dns", "certs.hosts")
+	if _, err := os.Stat(certsHosts); !os.IsNotExist(err) {
+		t.Fatalf("certs.hosts must not exist before any cert changes, err=%v", err)
+	}
+
+	if r := run(t, env, "issue", "-cn", "alice"); r.code != 0 {
+		t.Fatalf("issue: %+v", r)
+	}
+	got, err := os.ReadFile(certsHosts)
+	if err != nil || !strings.Contains(string(got), "ovcp.example.com") {
+		t.Fatalf("certs.hosts after issue: content=%q err=%v", got, err)
+	}
+}
+
+// TestRecordCommand covers list/include/exclude; edit is exercised by the
+// same $EDITOR-stub technique as TestCustomOptsNoChange.
+func TestRecordCommand(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+
+	// before anything else runs, list must still work (ensureDNSDir creates
+	// empty files on first touch) and report empty content for both sections.
+	r := run(t, env, "record", "list")
+	if r.code != 0 || !strings.Contains(r.stdout, "Certificate records:") || !strings.Contains(r.stdout, "Custom records:") {
+		t.Fatalf("record list: %+v", r)
+	}
+
+	if r := run(t, env, "record", "include", "-cn", "nonexistent"); r.code == 0 {
+		t.Fatal("include on an unknown CN must fail")
+	}
+
+	if r := run(t, env, "issue", "-cn", "recordtest"); r.code != 0 {
+		t.Fatalf("issue: %+v", r)
+	}
+	if r := run(t, env, "record", "exclude", "-cn", "recordtest"); r.code != 0 || !strings.Contains(r.stdout, "excluded") {
+		t.Fatalf("record exclude: %+v", r)
+	}
+	if r := run(t, env, "record", "include", "-cn", "recordtest"); r.code != 0 || !strings.Contains(r.stdout, "included") {
+		t.Fatalf("record include: %+v", r)
+	}
+	// already included: must say so, not silently re-report success.
+	if r := run(t, env, "record", "include", "-cn", "recordtest"); r.code != 0 || !strings.Contains(r.stdout, "already included") {
+		t.Fatalf("record include (already included): %+v", r)
+	}
+
+	noop := filepath.Join(t.TempDir(), "noop-editor.sh")
+	os.WriteFile(noop, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	if r := run(t, withEnv(env, "EDITOR="+noop), "record", "edit"); r.code != 0 || !strings.Contains(r.stdout, "no change") {
+		t.Fatalf("record edit no-op: %+v", r)
+	}
+
+	touch := filepath.Join(t.TempDir(), "touch-editor.sh")
+	os.WriteFile(touch, []byte("#!/bin/sh\necho '10.8.0.50 pihole' >> \"$1\"\n"), 0o755)
+	if r := run(t, withEnv(env, "EDITOR="+touch), "record", "edit"); r.code != 0 || !strings.Contains(r.stdout, "saved") {
+		t.Fatalf("record edit with a change: %+v", r)
+	}
+	r = run(t, env, "record", "list")
+	if !strings.Contains(r.stdout, "10.8.0.50 pihole") {
+		t.Fatalf("record list should show the edited custom entry: %+v", r)
 	}
 }

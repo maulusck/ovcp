@@ -106,6 +106,13 @@ func TestLogEndpoints(t *testing.T) {
 	if len(out.Lines) != 2 || out.Lines[1] != "world" {
 		t.Fatalf("want [hello world], got %v", out.Lines)
 	}
+
+	os.WriteFile(filepath.Join(e.dir, "logs", "dnsmasq.log"), []byte("started\n"), 0o644)
+	r = e.req("GET", "/api/logs/dnsmasq", "", false)
+	json.NewDecoder(r.Body).Decode(&out)
+	if r.StatusCode != 200 || len(out.Lines) != 1 || out.Lines[0] != "started" {
+		t.Fatalf("want [started], got status=%d %v", r.StatusCode, out.Lines)
+	}
 }
 
 func TestLogsDownloadRequiresOperator(t *testing.T) {

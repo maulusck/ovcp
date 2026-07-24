@@ -303,6 +303,38 @@ op prints the resulting openvpn pid, so a repeated
 .B start
 reports \(lqalready started\(rq rather than spawning a second process.
 .TP
+.B dns start|stop|restart|status [\fB\-ctrl\fR \fIPATH\fR]
+Manage or inspect the dnsmasq worker the same way
+.B vpn
+manages openvpn. No
+.B reconnect
+(dnsmasq has no such signal). If dnsmasq isn't installed, every op
+fails with a clear error. Whether dnsmasq also forwards to upstream
+resolvers, or answers only names it knows locally, is a persisted setting
+(\(lqBlock internet DNS\(rq, Records tab \(en no CLI equivalent yet) that
+takes effect on the next
+.B start
+or
+.B restart.
+.TP
+.B record list
+.TQ
+.B record edit
+.TQ
+.B record include|exclude \fB\-cn\fR \fINAME\fR
+Manage internal DNS records (see \fBFILES\fR, \fIcerts.hosts\fR and
+\fIcustom.hosts\fR).
+.B list
+prints both files' current content.
+.B edit
+opens the custom entries in \fB$EDITOR\fR (fallback vi), same as
+\fBcustom\-opts\fR.
+.B include
+and
+.B exclude
+control whether a certificate resolves while connected (default:
+included), mirroring \fBuser enable|disable\fR.
+.TP
 .B user add \fB\-name\fR \fINAME\fR [\fB\-role\fR admin|operator|readonly]
 .TQ
 .B user list [\fB\-sort\fR username|role|created] [\fB\-desc\fR]
@@ -351,9 +383,10 @@ only commands it accepts \(en revoke, user management, CA rotation,
 config, and backup stay CLI/web\-login only.
 .TP
 .B version
-Print \fBovcp\fR's version, and the \fBopenvpn\fR binary's version and path
-if one is found on \fBPATH\fR (advisory only \(en absent, not an error, if
-not).
+Print \fBovcp\fR's version, and the \fBopenvpn\fR and \fBdnsmasq\fR binaries'
+versions and paths if found on \fBPATH\fR (advisory only \(en absent, not an
+error, if not; \fBdnsmasq\fR also gates the \fBdns\fR/\fBrecord\fR commands
+and the Records tab).
 .TP
 .B completion bash|zsh|fish
 Print a shell completion script to stdout. Install once, e.g.
@@ -502,9 +535,9 @@ skipped entirely under \fB\-json\fR.
 array of the same entries as text.
 .TP
 .B version
-\fB{version, platform, buildTarget, openvpnVersion, openvpnPath}\fR \(en
-the latter two omitted if openvpn isn't on \fBPATH\fR (see \fBversion\fR
-in \fBCOMMANDS\fR).
+\fB{version, platform, buildTarget, openvpnVersion, openvpnPath,
+dnsmasqVersion, dnsmasqPath}\fR \(en each pair omitted if that binary isn't
+on \fBPATH\fR (see \fBversion\fR in \fBCOMMANDS\fR).
 .SH ENVIRONMENT
 .TP
 .B OVCP_DATA
@@ -570,6 +603,16 @@ Unprivileged account openvpn drops to after startup (default \fInobody\fR
 / \fInogroup\fR). The container image sets \fBOVCP_OPENVPN_GROUP=nobody\fR
 since Alpine has no \fInogroup\fR.
 .TP
+.B OVCP_DNSMASQ_USER, OVCP_DNSMASQ_GROUP
+Same as \fBOVCP_OPENVPN_USER\fR/\fBGROUP\fR, but dnsmasq's own account \(en
+independently configurable, same defaults.
+.TP
+.B OVCP_OPENVPN_AUTOSTART, OVCP_DNSMASQ_AUTOSTART
+Set to \fBfalse\fR to skip starting that worker automatically when
+\fBserve\fR starts (default: both start). Either can still be started
+manually afterward (\fBovcp vpn start\fR / \fBovcp dns start\fR, or the
+web UI); this only gates the boot\-time launch.
+.TP
 .B NO_COLOR
 Same as \fB\-no\-color\fR: disable ANSI color in \fBlist\fR/\fBstatus\fR/
 \fBuser list\fR's table output and in \fBovcp\fR's own log lines. Color is
@@ -623,6 +666,17 @@ default, or one JSON object per line with \fB\-json\fR (see \fBOPTIONS\fR).
 .TP
 .I $OVCP_DATA/logs/status.log
 openvpn's periodic status dump (connected clients); not the audit log.
+.TP
+.I $OVCP_DATA/logs/dnsmasq.log
+dnsmasq's stdout/stderr, appended across restarts.
+.TP
+.I $OVCP_DATA/dns/certs.hosts
+One line per connected, included certificate: server always, clients
+while they're online. Regenerated automatically; do not edit.
+.TP
+.I $OVCP_DATA/dns/custom.hosts
+Manually added hosts\-file entries, edited via \fBrecord edit\fR or the
+Records tab. Not touched by ovcp otherwise.
 .TP
 \fBGET /api/logs/download\fR
 Not a file, but reads from the ones above: an \fBoperator\fR\-or\-higher
@@ -702,6 +756,11 @@ file inside stays \fI0600\fR regardless.
 In containers, run with \-\-cap\-add NET_ADMIN; the runtime dir
 \fI/run/ovcp\fR (0750) holds the management and control sockets. openvpn
 runs as a foreground child of ovcp and cannot outlive it (Pdeathsig).
+dnsmasq (optional \(en only used if found on \fIPATH\fR) gets the same
+treatment: a foreground child, its own privilege drop
+(\fBOVCP_DNSMASQ_USER\fR/\fBGROUP\fR), and its own \fI$OVCP_DATA/dns\fR
+directory (\fI0750\fR, group\-owned by that account, so \fB\-\-hostsdir\fR
+can list it).
 .PP
 ovcp does not separate the admin UI from the PKI/openvpn\-supervision path
 into a lower\-privilege process; see \fBARCHITECTURE.md\fR for the

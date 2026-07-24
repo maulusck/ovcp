@@ -87,6 +87,14 @@
     } catch (x) { err = x.error }
   }
 
+  async function toggleDNS(serial, include) {
+    err = ''
+    try {
+      await api('PATCH', `/certs/${serial}/dns`, { IncludeDNS: include })
+      refresh()
+    } catch (x) { err = x.error }
+  }
+
   const EXPIRY_WARN_DAYS = 30
 
   function status(c) {
@@ -177,7 +185,7 @@
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'kind')}>Kind{sortMark(sort, 'kind')}</button></th>
         <th>Status</th>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'expiry')}>Expires{sortMark(sort, 'expiry')}</button></th>
-        <th>Serial</th><th></th>
+        <th>Serial</th><th></th><th class="dns-col" title="Resolve via internal DNS while connected">DNS</th>
         {#if canOperate}<th></th>{/if}
       </tr></thead>
       <tbody>
@@ -195,6 +203,12 @@
             </td>
             <td><a class="dl" href={'/api/certs/download?serial=' + c.Serial}
               download={c.CN + '.crt'}>Download</a></td>
+            <td class="dns-col">
+              {#if !c.Revoked}
+                <input type="checkbox" checked={c.IncludeDNS} disabled={!canOperate}
+                  onchange={() => toggleDNS(c.Serial, !c.IncludeDNS)} />
+              {/if}
+            </td>
             {#if canOperate}
               <td>{#if !c.Revoked}
                 {#if c.Kind === 'client' && status(c).cls !== ''}
@@ -220,6 +234,8 @@
   }
   .serial:hover { color: var(--text); text-decoration: underline dotted; }
   .dl { color: var(--amber); font-size: 12px; font-family: system-ui, sans-serif; }
+  .dns-col { text-align: center; }
+  .dns-col input { margin: 0; } /* browser UA default offsets checkboxes right of th text */
   :global(tr.flash) { animation: flash 1.5s ease-out; }
   @keyframes flash { 0% { background: var(--amber); } 100% { background: transparent; } }
 </style>
