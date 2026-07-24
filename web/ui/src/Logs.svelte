@@ -3,12 +3,17 @@
   import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus } from './api.js'
   let { isAdmin, canOperate } = $props()
 
-  // one shared format for every timestamp in this file (audit + both log
-  // tables) — 24h, no AM/PM, no date/time comma, browser locale otherwise.
-  const fmtTime = (d) => d.toLocaleString(undefined, { hour12: false }).replace(',', '')
+  // one shared format for every timestamp in this file (audit + both log tables) —
+  // 24h, no AM/PM, date order from the browser's own locale (en-US if it has none).
+  const locale = navigator.language || 'en-US'
+  const fmtTime = (d) => d.toLocaleString(locale, { hour12: false }).replace(',', '')
+  // dnsmasq's syslog line has no year — same shape, just without one.
+  const fmtTimeNoYear = (d) => d.toLocaleString(locale,
+    { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(',', '')
 
   // Splits a line into time/level/msg: ovcp's "time=... level=X ..." text, its -log-json
-  // form, or openvpn's "YYYY-MM-DD HH:MM:SS ..." — fmtTime normalizes the timestamp either way.
+  // form, openvpn's "YYYY-MM-DD HH:MM:SS ...", or dnsmasq's yearless syslog
+  // style "Mon D HH:MM:SS proc[pid]: ...".
   function parseLine(line) {
     let raw = '', msg = line, level
     if (line[0] === '{') {
@@ -24,6 +29,13 @@
     let m = line.match(/^time=(\S+)\s+level=(\w+)\s+(.*)$/)
     if (m) {
       raw = m[1]; level = m[2].toLowerCase(); msg = m[3]
+    } else if ((m = line.match(/^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+\S+:\s*(.*)$/))) {
+      msg = m[2]
+      level = /\b(error|fatal|fail(ed|ure)?)\b/i.test(msg) ? 'error'
+        : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
+      // year is a parsing scratch value only — never shown (fmtTimeNoYear omits it)
+      const d = new Date(m[1] + ' 2000')
+      return { time: isNaN(d) ? '' : fmtTimeNoYear(d), level, msg }
     } else {
       m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(.*)$/)
       if (m) { raw = m[1]; msg = m[2] }
@@ -58,16 +70,16 @@
     { audit: true, openvpn: false, ovcp: true, dnsmasq: false },
     JSON.parse(localStorage.getItem(OPEN_KEY) || '{}')))
 
+  // MRU order for expanded panels only: opening one moves it to front.
+  // Collapsed panels always sort after, in fixed PANEL_IDS order — no
+  // tracking needed for those.
   const ORDER_KEY = 'ovcp_logs_order'
-  // reconcile against PANEL_IDS, not a raw restore: a saved order predating
-  // a newly-added log must still surface it, not hide it forever.
   const savedOrder = JSON.parse(localStorage.getItem(ORDER_KEY) || 'null') || []
   let order = $state([
     ...savedOrder.filter((id) => PANEL_IDS.includes(id)),
     ...PANEL_IDS.filter((id) => !savedOrder.includes(id)),
   ])
   const bumpFront = (id) => (order = [id, ...order.filter((x) => x !== id)])
-  const bumpBack = (id) => (order = [...order.filter((x) => x !== id), id])
 
   // clamp a box's height to content: CSS fit-content doesn't work vertically in Firefox,
   // so measure instead (also re-clamps a resize drag on pointerup).
@@ -94,6 +106,8 @@
   async function loadDebug() {
     try { debugOn = (await api('GET', '/debug')).debug } catch (x) { err = x.error }
   }
+  // per-panel refresh (maximized view's own button) — every id already has a loader.
+  const refreshOne = (id) => (id === 'audit' ? loadAudit() : loadLog(id))
   let refreshing = $state(false)
   async function refresh() {
     if (refreshing) return
@@ -105,12 +119,10 @@
 
   const setAllOpen = (open) => (openState = { audit: open, ...Object.fromEntries(LOGS.map((l) => [l.id, open])) })
 
-  // odd open count leaves one dangling grid slot (the last row has only a
-  // left item); group collapsed panels there, stacked, instead of each
-  // claiming its own row. Even (incl. zero) has no dangling slot, so
-  // collapsed panels render as ordinary full-width cards like open ones.
-  const openCount = $derived(PANEL_IDS.filter((id) => openState[id]).length)
-  const stackCollapsed = $derived(openCount % 2 === 1 && openCount < PANEL_IDS.length)
+  // odd expanded count leaves one dangling grid cell — stack collapsed panels into it.
+  const openIds = $derived(order.filter((id) => openState[id]))
+  const collapsedIds = $derived(PANEL_IDS.filter((id) => !openState[id]))
+  const stackCollapsed = $derived(openIds.length % 2 === 1 && collapsedIds.length > 0)
 
   // per-panel filter (audit + each log) — one {open, query} per id, same
   // shape/toggle as every other table (see api.js's toggleSearch).
@@ -199,6 +211,13 @@
     <button type="button" class="ghost" onclick={() => toggleMaximize(id)}>
       {maximized === id ? 'Restore' : 'Maximize'}
     </button>
+    {#if maximized === id}
+      <button type="button" class="ghost icon-btn" title="Refresh log" onclick={() => refreshOne(id)}>
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-3-6.7" /><polyline points="21 3 21 9 15 9" />
+        </svg>
+      </button>
+    {/if}
   </div>
 {/snippet}
 
@@ -232,7 +251,7 @@
 
 {#snippet auditPanel()}
   <details class="card" bind:open={openState.audit} bind:this={cards.audit}
-    ontoggle={(e) => (e.target.open ? bumpFront('audit') : bumpBack('audit'))}>
+    ontoggle={(e) => e.target.open && bumpFront('audit')}>
     <summary onclick={(e) => maximized === 'audit' && e.preventDefault()}>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
@@ -264,7 +283,7 @@
 
 {#snippet logPanel(l)}
   <details class="card" bind:open={openState[l.id]} bind:this={cards[l.id]}
-    ontoggle={(e) => (e.target.open ? bumpFront(l.id) : bumpBack(l.id))}>
+    ontoggle={(e) => e.target.open && bumpFront(l.id)}>
     <summary onclick={(e) => maximized === l.id && e.preventDefault()}>{l.title}</summary>
     {#if lines[l.id].length === 0}
       <p class="muted">No log yet.</p>
@@ -294,24 +313,28 @@
   </details>
 {/snippet}
 
-<div class="logs-grid">
-  {#each order.filter((id) => openState[id] || !stackCollapsed) as id (id)}
-    {#if id === 'audit'}{@render auditPanel()}{:else}{@render logPanel(LOGS.find((x) => x.id === id))}{/if}
-  {/each}
+{#snippet panel(id)}
+  {#if id === 'audit'}{@render auditPanel()}{:else}{@render logPanel(LOGS.find((l) => l.id === id))}{/if}
+{/snippet}
 
+<div class="logs-grid">
+  {#each openIds as id (id)}{@render panel(id)}{/each}
   {#if stackCollapsed}
     <div class="collapsed-stack">
-      {#each order.filter((id) => !openState[id]) as id (id)}
-        {#if id === 'audit'}{@render auditPanel()}{:else}{@render logPanel(LOGS.find((x) => x.id === id))}{/if}
-      {/each}
+      {#each collapsedIds as id (id)}{@render panel(id)}{/each}
     </div>
+  {:else}
+    {#each collapsedIds as id (id)}{@render panel(id)}{/each}
   {/if}
 </div>
 
 <style>
   .panel-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
-  /* 600px min caps it at 2 columns even on the widened logs main */
-  .logs-grid { grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); }
+  /* same size/shape as sibling .ghost buttons, just square instead of wide */
+  .panel-actions :global(button.icon-btn) { padding: 3px; aspect-ratio: 1; display: grid; place-items: center; }
+  /* 600px min caps it at 2 columns even on the widened logs main;
+     dense backfills gaps left by a resized/collapsed neighbor */
+  .logs-grid { grid-template-columns: repeat(auto-fit, minmax(min(600px, 100%), 1fr)); grid-auto-flow: dense; }
   .logs-grid :global(.card) { padding: 10px 14px; }
   /* fills the one dangling grid cell; full-width cards stacked top to bottom */
   .collapsed-stack { display: flex; flex-direction: column; gap: 4px; }
