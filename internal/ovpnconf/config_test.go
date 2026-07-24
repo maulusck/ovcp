@@ -146,3 +146,54 @@ func TestLoadCorrupt(t *testing.T) {
 		t.Fatalf("corrupt JSON must fall back to defaults, got %+v", c)
 	}
 }
+
+// TestDefaultEnvOverrides: OVCP_OPENVPN_* seeds every setting Default()
+// returns — the one-shot container/non-attended init path.
+func TestDefaultEnvOverrides(t *testing.T) {
+	for k, v := range map[string]string{
+		"OVCP_OPENVPN_PROTO":       "tcp",
+		"OVCP_OPENVPN_PORT":        "51820",
+		"OVCP_OPENVPN_SUBNET":      "10.9.0.0/24",
+		"OVCP_OPENVPN_CIPHER":      "CHACHA20-POLY1305",
+		"OVCP_OPENVPN_DNS":         "1.1.1.1, 9.9.9.9",
+		"OVCP_OPENVPN_ROUTES":      "192.168.1.0/24",
+		"OVCP_OPENVPN_REDIRECT_GW": "false",
+		"OVCP_OPENVPN_EXTRA":       "client-to-client",
+	} {
+		t.Setenv(k, v)
+	}
+	c := Default()
+	if c.Proto != "tcp" || c.Port != 51820 || c.Subnet != "10.9.0.0/24" || c.Cipher != "CHACHA20-POLY1305" {
+		t.Fatalf("scalar env overrides not applied: %+v", c)
+	}
+	if len(c.DNS) != 2 || c.DNS[0] != "1.1.1.1" || c.DNS[1] != "9.9.9.9" {
+		t.Fatalf("DNS env override not applied: %+v", c.DNS)
+	}
+	if len(c.Routes) != 1 || c.Routes[0] != "192.168.1.0/24" {
+		t.Fatalf("Routes env override not applied: %+v", c.Routes)
+	}
+	if c.RedirectGW {
+		t.Fatal("OVCP_OPENVPN_REDIRECT_GW=false must disable RedirectGW")
+	}
+	if c.Extra != "client-to-client" {
+		t.Fatalf("Extra env override not applied: %q", c.Extra)
+	}
+}
+
+// TestDefaultPortEnvInvalid: an unparseable port must fall back to the
+// hardcoded default, not zero it out or crash.
+func TestDefaultPortEnvInvalid(t *testing.T) {
+	t.Setenv("OVCP_OPENVPN_PORT", "not-a-number")
+	if c := Default(); c.Port != 1194 {
+		t.Fatalf("invalid OVCP_OPENVPN_PORT should fall back to 1194, got %d", c.Port)
+	}
+}
+
+func TestSplitCSV(t *testing.T) {
+	if got := SplitCSV(""); got != nil {
+		t.Fatalf("empty string should split to nil, got %v", got)
+	}
+	if got := SplitCSV("1.1.1.1, 9.9.9.9 ,  "); len(got) != 2 || got[0] != "1.1.1.1" || got[1] != "9.9.9.9" {
+		t.Fatalf("want [1.1.1.1 9.9.9.9] with whitespace/empties trimmed, got %v", got)
+	}
+}

@@ -92,7 +92,7 @@ the fix.
 Issue a client and hand them a ready-to-import profile:
 
 ```sh
-ovcp export -cn alice -remote vpn.example.com > alice.ovpn
+ovcp certificate export -cn alice -remote vpn.example.com > alice.ovpn
 ```
 
 **Production**, via an installed package:
@@ -129,7 +129,7 @@ on stdout — same fields, both directions, including errors
 result to encode.
 
 ```sh
-ovcp -json list | jq -r '.[] | select(.status == "expired") | .cn'
+ovcp -json certificate list | jq -r '.[] | select(.status == "expired") | .cn'
 ```
 
 ## Documentation

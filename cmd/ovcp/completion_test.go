@@ -23,11 +23,11 @@ func TestCompletionScript(t *testing.T) {
 
 func TestCompleteArgs(t *testing.T) {
 	if r := run(t, nil, "__complete", "ovcp"); r.code != 0 ||
-		!strings.Contains(r.stdout, "vpn") || !strings.Contains(r.stdout, "issue") {
+		!strings.Contains(r.stdout, "vpn") || !strings.Contains(r.stdout, "certificate") {
 		t.Fatalf("__complete top-level: %+v", r)
 	}
 	if r := run(t, nil, "__complete", "ovcp", "vpn"); r.code != 0 ||
-		!strings.Contains(r.stdout, "restart") || strings.Contains(r.stdout, "issue") {
+		!strings.Contains(r.stdout, "restart") || strings.Contains(r.stdout, "certificate") {
 		t.Fatalf("__complete vpn subcommands: %+v", r)
 	}
 	if r := run(t, nil, "__complete", "ovcp", "bogus"); r.code != 0 || strings.TrimSpace(r.stdout) != "" {
@@ -36,11 +36,20 @@ func TestCompleteArgs(t *testing.T) {
 }
 
 // TestCompleteFlags: commands with no fixed sub list complete their flag
-// names; commands with one complete the sub list instead, at every position.
+// names; commands with one complete the sub list instead, at every position
+// (including nested ones like certificate/config — flags one level below an
+// op, e.g. `certificate issue -cn`, are out of scope, same as `vpn start -ctrl`).
 func TestCompleteFlags(t *testing.T) {
-	if r := run(t, nil, "__complete", "ovcp", "issue"); r.code != 0 ||
-		!strings.Contains(r.stdout, "-cn") || !strings.Contains(r.stdout, "-key-pass") {
-		t.Fatalf("__complete issue flags: %+v", r)
+	if r := run(t, nil, "__complete", "ovcp", "stats"); r.code != 0 ||
+		!strings.Contains(r.stdout, "-cn") || !strings.Contains(r.stdout, "-follow") {
+		t.Fatalf("__complete stats flags: %+v", r)
+	}
+	if r := run(t, nil, "__complete", "ovcp", "certificate"); r.code != 0 ||
+		!strings.Contains(r.stdout, "issue") || strings.Contains(r.stdout, "-cn") {
+		t.Fatalf("__complete certificate: subcommands, not flags: %+v", r)
+	}
+	if r := run(t, nil, "__complete", "ovcp", "certificate", "issue"); r.code != 0 || strings.TrimSpace(r.stdout) != "" {
+		t.Fatalf("__complete certificate issue: out of scope, expected no candidates: %+v", r)
 	}
 	if r := run(t, nil, "__complete", "ovcp", "vpn"); r.code != 0 ||
 		strings.Contains(r.stdout, "-ctrl") || !strings.Contains(r.stdout, "start") {

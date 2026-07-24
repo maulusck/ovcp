@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -53,13 +54,48 @@ func (c Config) ServerTunIP() (net.IP, error) {
 	return server, nil
 }
 
+// Default seeds every server setting from its OVCP_OPENVPN_* env var
+// (container/non-attended init), falling back to the hardcoded default.
+// Only consulted while no config is persisted yet (see Load) — after the
+// first save, `ovcp config set` is the override path, not the environment.
 func Default() Config {
 	return Config{
-		Proto: "udp", Port: 1194, Subnet: "10.8.0.0/24",
-		Cipher: "AES-256-GCM", RedirectGW: true,
+		Proto:      cmp.Or(os.Getenv("OVCP_OPENVPN_PROTO"), "udp"),
+		Port:       envInt("OVCP_OPENVPN_PORT", 1194),
+		Subnet:     cmp.Or(os.Getenv("OVCP_OPENVPN_SUBNET"), "10.8.0.0/24"),
+		Cipher:     cmp.Or(os.Getenv("OVCP_OPENVPN_CIPHER"), "AES-256-GCM"),
+		DNS:        SplitCSV(os.Getenv("OVCP_OPENVPN_DNS")),
+		Routes:     SplitCSV(os.Getenv("OVCP_OPENVPN_ROUTES")),
+		RedirectGW: os.Getenv("OVCP_OPENVPN_REDIRECT_GW") != "false",
+		Extra:      os.Getenv("OVCP_OPENVPN_EXTRA"),
 		RunAsUser:  cmp.Or(os.Getenv("OVCP_OPENVPN_USER"), "nobody"),
 		RunAsGroup: cmp.Or(os.Getenv("OVCP_OPENVPN_GROUP"), "nogroup"),
 	}
+}
+
+// envInt reads key as an int, falling back to def if unset or unparseable.
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// SplitCSV splits a comma-separated list, trimming whitespace and dropping
+// empty entries — shared by env-var and CLI flag parsing (DNS, Routes).
+func SplitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Load parses a persisted config JSON blob, falling back to defaults for

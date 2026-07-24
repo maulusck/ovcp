@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -59,8 +60,10 @@ func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []strin
 }
 
 var (
-	vpnOps      = []string{"start", "stop", "restart", "reconnect", "status"}
+	vpnOps      = []string{"start", "stop", "restart", "reconnect", "status", "kill"}
 	dnsOps      = []string{"start", "stop", "restart", "status"} // no reconnect: dnsmasq has no such signal
+	certOps     = []string{"issue", "list", "revoke", "export", "renew-server"}
+	configOps   = []string{"get", "set", "preview", "edit"}
 	recordOps   = []string{"list", "edit", "include", "exclude"}
 	userOps     = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
 	backupOps   = []string{"create", "restore"}
@@ -70,18 +73,13 @@ var (
 
 var commands = []command{
 	{name: "init", usage: "-server-cn HOST [-admin NAME]   one-shot setup: CA, server cert, tls-crypt, config, admin user", run: cmdInit},
-	{name: "issue", usage: "-cn NAME [-kind client|server] [-days N] [-out PREFIX] [-key-pass PW]", run: cmdIssue},
-	{name: "revoke", usage: "-serial HEX   revoke + regenerate CRL", run: cmdRevoke},
+	{name: "certificate", usage: "issue|list|revoke|export|renew-server   manage certificates", sub: certOps, run: cmdCertificate},
+	{name: "config", usage: "get|set|preview|edit   view/change openvpn server settings", sub: configOps, run: cmdConfig},
 	{name: "rotate-ca", usage: "re-encrypt the CA key under a new passphrase", run: cmdRotateCA},
-	{name: "renew-server", usage: "[-days N] [-server-cn CN]   reissue the openvpn server cert (needs vpn restart)", run: cmdRenewServer},
-	{name: "custom-opts", usage: "edit raw server.conf directives in $EDITOR (fallback vi)", run: cmdCustomOpts},
 	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
-	{name: "list", usage: "[-status all|active|revoked] [-kind all|client|server] [-sort cn|kind|expiry|serial] [-desc]   list certificates", run: cmdList},
-	{name: "export", usage: "-cn NAME [-remote HOST] [-port N] [-proto udp|tcp] [-server-cn CN] [-out PREFIX] [-key-pass PW] [-split-tunnel] [-custom-opts OPTS|-]", run: cmdExport},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N]   traffic history, or a live top-like follow view (-follow ignores -json)", run: cmdStats},
-	{name: "kill", usage: "-cn NAME   disconnect client", run: cmdKill},
-	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: procCmd("vpn", vpnOps, "")},
+	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill   manage/inspect the openvpn worker (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
 	{name: "dns", usage: "start|stop|restart|status   manage/inspect the dnsmasq worker", sub: dnsOps, run: procCmd("dns", dnsOps, "dns-")},
 	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
@@ -91,6 +89,41 @@ var commands = []command{
 	{name: "serve", usage: "[-listen ADDR] [-mgmt PATH] [-ctrl PATH]   run admin UI + API", run: cmdServe},
 	{name: "version", usage: "print version", run: cmdVersion},
 	{name: "completion", usage: "bash|zsh|fish   print a shell completion script", sub: []string{"bash", "zsh", "fish"}, run: cmdCompletion},
+}
+
+// subUsage sets fs.Usage to ovcp's standard "usage: ovcp <path> ..." line, so
+// -h looks the same at any nesting depth (top-level command or op below it).
+func subUsage(fs *flag.FlagSet, path string) {
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: ovcp %s\n", path)
+		fs.PrintDefaults()
+	}
+}
+
+// cmdCertificate wraps the certificate lifecycle ops. Each op's body is the
+// same cmdIssue/cmdList/cmdRevoke/cmdExport/cmdRenewServer function that used
+// to be its own top-level command — only how it's reached changed.
+func cmdCertificate(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		op, rest := opArg(fs, "certificate", certOps)
+		cfs := newFlags("certificate " + op)
+		subUsage(cfs, "certificate "+op)
+		var body func(ctx *cliContext)
+		switch op {
+		case "issue":
+			body = cmdIssue(cfs)
+		case "list":
+			body = cmdList(cfs)
+		case "revoke":
+			body = cmdRevoke(cfs)
+		case "export":
+			body = cmdExport(cfs)
+		case "renew-server":
+			body = cmdRenewServer(cfs)
+		}
+		cfs.Parse(rest)
+		body(ctx)
+	}
 }
 
 // helpText renders the commands table as the -h/usage screen.
@@ -106,7 +139,7 @@ func helpText() string {
 	b.WriteString("the command, e.g. ovcp -data /tmp/ovcp init ...\n")
 	b.WriteString("-no-color disables ANSI colors; -debug turns on debug-level logging.\n")
 	b.WriteString("-json switches every command to JSON output (JSON log lines for serve);\n")
-	b.WriteString("all three go before the command, e.g. ovcp -json list.\n")
+	b.WriteString("all three go before the command, e.g. ovcp -json certificate list.\n")
 	b.WriteString("Full guide: ovcp(8).")
 	return b.String()
 }
@@ -793,25 +826,50 @@ func activeCertByCN(certs []store.Cert, cn string) (store.Cert, bool) {
 	return store.Cert{}, false
 }
 
-// procCmd drives a supervised worker's lifecycle from the CLI — shared by
-// `ovcp vpn` and `ovcp dns`. wirePrefix distinguishes dns ops on the control
-// socket ("dns-"), matching serveControlConn's routing (control.go); "" for vpn.
+// runProcOp executes one already-resolved lifecycle op (start/stop/restart/
+// reconnect/status) against the control socket — shared by procCmd (dns) and
+// cmdVPN (vpn, which special-cases kill before falling through to this).
+func runProcOp(ctx *cliContext, name, op string, rest []string, wirePrefix string) {
+	ofs := newFlags(name + " " + op)
+	ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+	ofs.Parse(rest)
+	r, err := controller.Control(*ctrl, wirePrefix+op)
+	die(err)
+	if op != "status" { // status is read-only, don't audit
+		s := ctx.openStore()
+		s.Audit("cli", name+"_"+op, fmt.Sprintf("pid=%d", r.Pid))
+		s.Close()
+	}
+	output(r, func(r controller.ControlResult) { printProcText(name, op, r) })
+}
+
+// procCmd drives a supervised worker's lifecycle from the CLI — used by
+// `ovcp dns`. wirePrefix distinguishes dns ops on the control socket
+// ("dns-"), matching serveControlConn's routing (control.go).
 func procCmd(name string, ops []string, wirePrefix string) func(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(fs *flag.FlagSet) func(ctx *cliContext) {
 		return func(ctx *cliContext) {
 			op, rest := opArg(fs, name, ops)
-			ofs := newFlags(name + " " + op)
-			ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
-			ofs.Parse(rest)
-			r, err := controller.Control(*ctrl, wirePrefix+op)
-			die(err)
-			if op != "status" { // status is read-only, don't audit
-				s := ctx.openStore()
-				s.Audit("cli", name+"_"+op, fmt.Sprintf("pid=%d", r.Pid))
-				s.Close()
-			}
-			output(r, func(r controller.ControlResult) { printProcText(name, op, r) })
+			runProcOp(ctx, name, op, rest, wirePrefix)
 		}
+	}
+}
+
+// cmdVPN drives the openvpn worker's lifecycle, plus `kill` (disconnect one
+// client) — the one vpn op that isn't a plain lifecycle transition, so it
+// keeps its own flags (-cn) via the unchanged cmdKill body.
+func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		op, rest := opArg(fs, "vpn", vpnOps)
+		if op == "kill" {
+			kfs := newFlags("vpn kill")
+			subUsage(kfs, "vpn kill")
+			body := cmdKill(kfs)
+			kfs.Parse(rest)
+			body(ctx)
+			return
+		}
+		runProcOp(ctx, "vpn", op, rest, "")
 	}
 }
 
@@ -900,8 +958,160 @@ func editText(initial string) (out string, changed bool) {
 	return out, out != initial
 }
 
-// cmdCustomOpts edits the server config's raw extra directives in $EDITOR.
-func cmdCustomOpts(_ *flag.FlagSet) func(ctx *cliContext) {
+// cmdConfig wraps the server-config ops: get/set/preview mirror the web UI's
+// GET/PUT/POST-preview /api/config exactly (same ovpnconf.Config, same wire
+// shape), so a script can drive either equally; edit is the raw-directives
+// $EDITOR flow that used to be the standalone `custom-opts` command.
+func cmdConfig(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		op, rest := opArg(fs, "config", configOps)
+		cfs := newFlags("config " + op)
+		subUsage(cfs, "config "+op)
+		var body func(ctx *cliContext)
+		switch op {
+		case "get":
+			body = cmdConfigGet(cfs)
+		case "set":
+			body = cmdConfigSet(cfs)
+		case "preview":
+			body = cmdConfigPreview(cfs)
+		case "edit":
+			body = cmdConfigEdit(cfs)
+		}
+		cfs.Parse(rest)
+		body(ctx)
+	}
+}
+
+// cmdConfigGet prints the persisted server config — GET /api/config's CLI twin.
+func cmdConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		raw, _ := s.GetSetting("server_config")
+		output(ovpnconf.Load(raw), printConfigText)
+	}
+}
+
+// printConfigText is config get/set's shared text rendering of a full config.
+func printConfigText(c ovpnconf.Config) {
+	fmt.Println("proto:      ", c.Proto)
+	fmt.Println("port:       ", c.Port)
+	fmt.Println("subnet:     ", c.Subnet)
+	fmt.Println("cipher:     ", c.Cipher)
+	fmt.Println("dns:        ", strings.Join(c.DNS, ", "))
+	fmt.Println("routes:     ", strings.Join(c.Routes, ", "))
+	fmt.Println("redirect-gw:", c.RedirectGW)
+	if c.Extra != "" {
+		fmt.Println("extra:")
+		fmt.Println(c.Extra)
+	}
+}
+
+// configFlags registers config set/preview's shared flags — zero value means
+// "leave unchanged", same idiom `certificate export`'s -port/-proto already
+// use — and returns a closure applying whichever were set onto a base config.
+func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, error) {
+	proto := fs.String("proto", "", "udp|tcp (unchanged if omitted)")
+	port := fs.Int("port", 0, "1-65535 (unchanged if omitted)")
+	subnet := fs.String("subnet", "", "VPN subnet CIDR (unchanged if omitted)")
+	cipher := fs.String("cipher", "", "AES-256-GCM|AES-128-GCM|CHACHA20-POLY1305 (unchanged if omitted)")
+	dns := fs.String("dns", "", "comma-separated pushed DNS resolvers (unchanged if omitted)")
+	routes := fs.String("routes", "", "comma-separated pushed routes, CIDR (unchanged if omitted)")
+	redirectGW := fs.String("redirect-gw", "", "true|false: route all client traffic through the VPN (unchanged if omitted)")
+	extra := fs.String("extra", "", "custom directives: comma-separated, a file via $(cat FILE), or - for $EDITOR (unchanged if omitted)")
+	return func(cfg ovpnconf.Config) (ovpnconf.Config, error) {
+		if *proto != "" {
+			cfg.Proto = *proto
+		}
+		if *port != 0 {
+			cfg.Port = *port
+		}
+		if *subnet != "" {
+			cfg.Subnet = *subnet
+		}
+		if *cipher != "" {
+			cfg.Cipher = *cipher
+		}
+		if *dns != "" {
+			cfg.DNS = ovpnconf.SplitCSV(*dns)
+		}
+		if *routes != "" {
+			cfg.Routes = ovpnconf.SplitCSV(*routes)
+		}
+		if *redirectGW != "" {
+			b, err := strconv.ParseBool(*redirectGW)
+			if err != nil {
+				return cfg, fmt.Errorf("-redirect-gw must be true or false")
+			}
+			cfg.RedirectGW = b
+		}
+		switch *extra {
+		case "":
+		case "-":
+			cfg.Extra, _ = editText(cfg.Extra)
+		default:
+			cfg.Extra = commaOrLines(*extra)
+		}
+		return cfg, nil
+	}
+}
+
+// cmdConfigSet applies flag overrides and persists — PUT /api/config's CLI twin.
+func cmdConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
+	apply := configFlags(fs)
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		raw, _ := s.GetSetting("server_config")
+		cfg, err := apply(ovpnconf.Load(raw))
+		die(err)
+		die(cfg.Validate())
+		enc, _ := json.Marshal(cfg)
+		die(s.SetSetting("server_config", string(enc)))
+		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
+		s.Audit("cli", "config_change", "")
+		output(cfg, func(c ovpnconf.Config) { fmt.Println("saved; run `ovcp vpn restart` to apply") })
+	}
+}
+
+// cmdConfigPreview applies flag overrides without persisting, showing the
+// server.conf diff — POST /api/config/preview's CLI twin.
+func cmdConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
+	apply := configFlags(fs)
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		raw, _ := s.GetSetting("server_config")
+		cur := ovpnconf.Load(raw)
+		cfg, err := apply(cur)
+		die(err)
+		die(cfg.Validate())
+		diff := ovpnconf.Diff(cur.Render(), cfg.Render())
+		output(previewOut{diff, len(diff) > 0}, func(o previewOut) {
+			if !o.Changed {
+				fmt.Println("no changes vs. the saved server.conf")
+				return
+			}
+			for _, l := range o.Diff {
+				if strings.HasPrefix(l, "+") {
+					fmt.Println(green(l))
+				} else {
+					fmt.Println(red(l))
+				}
+			}
+		})
+	}
+}
+
+type previewOut struct {
+	Diff    []string `json:"diff"`
+	Changed bool     `json:"changed"`
+}
+
+// cmdConfigEdit edits the server config's raw extra directives in $EDITOR —
+// unchanged behavior from the old standalone `custom-opts` command.
+func cmdConfigEdit(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()

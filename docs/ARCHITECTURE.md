@@ -48,10 +48,10 @@ different purpose:
   connected client for its entire lifetime; `serve` holds that connection
   for as long as the OpenVPN worker runs.
 - The **control socket** (`OVCP_CTRL_SOCK`) is ovcp's own protocol,
-  root-only, used by a separate `ovcp` invocation (`vpn`, `status`, `kill`,
-  `debug`, `stats -follow`) to reach a running `serve`. `serve` proxies
-  these requests to its own management-socket connection; nothing else
-  dials the management socket directly.
+  root-only, used by a separate `ovcp` invocation (`vpn` — including
+  `kill` — `status`, `debug`, `stats -follow`) to reach a running `serve`.
+  `serve` proxies these requests to its own management-socket connection;
+  nothing else dials the management socket directly.
 
 Exact defaults, flags, and environment variables for both sockets are
 documented in `man ovcp`, `ENVIRONMENT`.

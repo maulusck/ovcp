@@ -139,7 +139,7 @@ func TestVersionJSON(t *testing.T) {
 // TestJSONErrors guards die()'s -json branch: a fatal error must land as
 // {"error":"..."} on stdout, not stderr's plain text, so scripts get a consistent shape on failure too.
 func TestJSONErrors(t *testing.T) {
-	r := run(t, nil, "-json", "revoke")
+	r := run(t, nil, "-json", "certificate", "revoke")
 	if r.code == 0 {
 		t.Fatalf("revoke without -serial should fail: %+v", r)
 	}
@@ -170,10 +170,10 @@ func TestJSONFullAutomation(t *testing.T) {
 	}
 
 	assertCleanJSON(t, run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", "admin"), &initOut{})
-	assertCleanJSON(t, run(t, env, "issue", "-cn", "alice"), &issueOut{})
+	assertCleanJSON(t, run(t, env, "certificate", "issue", "-cn", "alice"), &issueOut{})
 
 	var rows []certOut
-	assertCleanJSON(t, run(t, env, "list"), &rows)
+	assertCleanJSON(t, run(t, env, "certificate", "list"), &rows)
 	var serial string
 	for _, c := range rows {
 		if c.CN == "alice" {
@@ -183,8 +183,8 @@ func TestJSONFullAutomation(t *testing.T) {
 	if serial == "" {
 		t.Fatalf("alice not found in list output: %+v", rows)
 	}
-	assertCleanJSON(t, run(t, env, "revoke", "-serial", serial), &revokeOut{})
-	assertCleanJSON(t, run(t, env, "renew-server"), &renewOut{})
+	assertCleanJSON(t, run(t, env, "certificate", "revoke", "-serial", serial), &revokeOut{})
+	assertCleanJSON(t, run(t, env, "certificate", "renew-server"), &renewOut{})
 
 	rotate := withEnv(env, "OVCP_CA_NEW_PASSPHRASE=a totally different passphrase")
 	assertCleanJSON(t, run(t, rotate, "rotate-ca"), &outcome{})
@@ -207,8 +207,8 @@ func TestJSONMissingSecretNoTTY(t *testing.T) {
 	noSecrets := []string{"OVCP_DATA=" + dataDir(env), "OVCP_JSON=1"}
 
 	for _, args := range [][]string{
-		{"issue", "-cn", "alice"}, // confirm=false: one prompt
-		{"rotate-ca"},             // confirm=true: prompt + confirm
+		{"certificate", "issue", "-cn", "alice"}, // confirm=false: one prompt
+		{"rotate-ca"},                            // confirm=true: prompt + confirm
 	} {
 		r := run(t, noSecrets, args...)
 		if r.code == 0 {
@@ -256,7 +256,7 @@ func TestDataFlagPosition(t *testing.T) {
 	if r := run(t, env, "-data", dir, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init with -data flag: %+v", r)
 	}
-	if r := run(t, env, "-data", dir, "list"); r.code != 0 || len(certLines(r.stdout, "server")) != 1 {
+	if r := run(t, env, "-data", dir, "certificate", "list"); r.code != 0 || len(certLines(r.stdout, "server")) != 1 {
 		t.Fatalf("-data flag before the subcommand should target dir: %+v", r)
 	}
 }
@@ -293,26 +293,26 @@ func TestLifecycle(t *testing.T) {
 		t.Fatalf("init: %+v", r)
 	}
 
-	if r := run(t, env, "issue", "-cn", "alice"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "alice"); r.code != 0 {
 		t.Fatalf("issue: %+v", r)
 	}
 
-	list := run(t, env, "list")
+	list := run(t, env, "certificate", "list")
 	rows := certLines(list.stdout, "alice")
 	if list.code != 0 || len(rows) != 1 {
 		t.Fatalf("list after issue: %+v", list)
 	}
 	serial := serialOf(t, rows[0])
 
-	if r := run(t, env, "export", "-cn", "bob", "-remote", "vpn.example.com"); r.code != 0 ||
+	if r := run(t, env, "certificate", "export", "-cn", "bob", "-remote", "vpn.example.com"); r.code != 0 ||
 		!strings.Contains(r.stdout, "BEGIN CERTIFICATE") || !strings.Contains(r.stdout, "BEGIN PRIVATE KEY") {
 		t.Fatalf("export: %+v", r)
 	}
 
-	if r := run(t, env, "revoke", "-serial", serial); r.code != 0 {
+	if r := run(t, env, "certificate", "revoke", "-serial", serial); r.code != 0 {
 		t.Fatalf("revoke: %+v", r)
 	}
-	list = run(t, env, "list")
+	list = run(t, env, "certificate", "list")
 	if rows := certLines(list.stdout, "alice"); len(rows) != 1 || !strings.Contains(rows[0], "REVOKED") {
 		t.Fatalf("expected alice REVOKED: %+v", list)
 	}
@@ -374,33 +374,33 @@ func TestListFilterSort(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "bob"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "bob"); r.code != 0 {
 		t.Fatalf("issue bob: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "alice"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "alice"); r.code != 0 {
 		t.Fatalf("issue alice: %+v", r)
 	}
-	serial := serialOf(t, certLines(run(t, env, "list").stdout, "bob")[0])
-	if r := run(t, env, "revoke", "-serial", serial); r.code != 0 {
+	serial := serialOf(t, certLines(run(t, env, "certificate", "list").stdout, "bob")[0])
+	if r := run(t, env, "certificate", "revoke", "-serial", serial); r.code != 0 {
 		t.Fatalf("revoke: %+v", r)
 	}
 
-	if r := run(t, env, "list", "-status", "revoked"); len(certLines(r.stdout, "bob")) != 1 || len(certLines(r.stdout, "alice")) != 0 {
+	if r := run(t, env, "certificate", "list", "-status", "revoked"); len(certLines(r.stdout, "bob")) != 1 || len(certLines(r.stdout, "alice")) != 0 {
 		t.Fatalf("-status revoked should show only bob: %+v", r)
 	}
-	if r := run(t, env, "list", "-status", "active"); len(certLines(r.stdout, "alice")) != 1 || len(certLines(r.stdout, "bob")) != 0 {
+	if r := run(t, env, "certificate", "list", "-status", "active"); len(certLines(r.stdout, "alice")) != 1 || len(certLines(r.stdout, "bob")) != 0 {
 		t.Fatalf("-status active should exclude revoked bob: %+v", r)
 	}
-	if r := run(t, env, "list", "-kind", "server"); len(certLines(r.stdout, "vpn.example.com")) != 1 || len(certLines(r.stdout, "alice")) != 0 {
+	if r := run(t, env, "certificate", "list", "-kind", "server"); len(certLines(r.stdout, "vpn.example.com")) != 1 || len(certLines(r.stdout, "alice")) != 0 {
 		t.Fatalf("-kind server should show only the server cert: %+v", r)
 	}
 
-	r := run(t, env, "list", "-status", "all", "-sort", "cn")
+	r := run(t, env, "certificate", "list", "-status", "all", "-sort", "cn")
 	rows := strings.Split(strings.TrimSpace(r.stdout), "\n")
 	if len(rows) != 3 || !strings.Contains(rows[0], "alice") {
 		t.Fatalf("-sort cn should put alice first: %+v", r)
 	}
-	r = run(t, env, "list", "-status", "all", "-sort", "cn", "-desc")
+	r = run(t, env, "certificate", "list", "-status", "all", "-sort", "cn", "-desc")
 	rows = strings.Split(strings.TrimSpace(r.stdout), "\n")
 	if len(rows) != 3 || !strings.Contains(rows[0], "vpn.example.com") {
 		t.Fatalf("-sort cn -desc should put vpn.example.com first: %+v", r)
@@ -408,7 +408,7 @@ func TestListFilterSort(t *testing.T) {
 
 	// an unrecognized -sort value must error, not silently fall back to
 	// unsorted output that looks like it worked.
-	if r := run(t, env, "list", "-sort", "name"); r.code == 0 {
+	if r := run(t, env, "certificate", "list", "-sort", "name"); r.code == 0 {
 		t.Fatalf("-sort name (not a real field) should fail, not silently no-op: %+v", r)
 	}
 }
@@ -420,14 +420,14 @@ func TestListExpiring(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "soon", "-days", "10"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "soon", "-days", "10"); r.code != 0 {
 		t.Fatalf("issue soon: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "fine", "-days", "400"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "fine", "-days", "400"); r.code != 0 {
 		t.Fatalf("issue fine: %+v", r)
 	}
 
-	r := run(t, env, "list")
+	r := run(t, env, "certificate", "list")
 	if rows := certLines(r.stdout, "soon"); len(rows) != 1 || !strings.Contains(rows[0], "expiring") {
 		t.Fatalf("expected soon expiring: %+v", r)
 	}
@@ -435,7 +435,7 @@ func TestListExpiring(t *testing.T) {
 		t.Fatalf("expected fine valid: %+v", r)
 	}
 
-	r = run(t, env, "-json", "list")
+	r = run(t, env, "-json", "certificate", "list")
 	if r.code != 0 {
 		t.Fatalf("-json list: %+v", r)
 	}
@@ -483,17 +483,17 @@ func TestIssueValidation(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "vpn.example.com", "-kind", "server", "-key-pass", "hunter2"); r.code == 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "vpn.example.com", "-kind", "server", "-key-pass", "hunter2"); r.code == 0 {
 		t.Fatalf("server cert with -key-pass should be rejected: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "alice", "-days", "0"); r.code == 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "alice", "-days", "0"); r.code == 0 {
 		t.Fatalf("-days 0 should be rejected: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "alice", "-days", "-5"); r.code == 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "alice", "-days", "-5"); r.code == 0 {
 		t.Fatalf("-days -5 should be rejected: %+v", r)
 	}
 	// the client-cert / positive-days path itself must still work
-	if r := run(t, env, "issue", "-cn", "alice", "-key-pass", "hunter2"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "alice", "-key-pass", "hunter2"); r.code != 0 {
 		t.Fatalf("client cert with -key-pass should still work: %+v", r)
 	}
 }
@@ -503,7 +503,7 @@ func TestRenewServerValidation(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	if r := run(t, env, "renew-server", "-days", "0"); r.code == 0 {
+	if r := run(t, env, "certificate", "renew-server", "-days", "0"); r.code == 0 {
 		t.Fatalf("-days 0 should be rejected: %+v", r)
 	}
 }
@@ -537,7 +537,7 @@ func TestExportFollowsConfig(t *testing.T) {
 	}
 	s.Close()
 
-	r := run(t, env, "export", "-cn", "alice", "-remote", "vpn.example.com")
+	r := run(t, env, "certificate", "export", "-cn", "alice", "-remote", "vpn.example.com")
 	if r.code != 0 {
 		t.Fatalf("export: %+v", r)
 	}
@@ -548,7 +548,7 @@ func TestExportFollowsConfig(t *testing.T) {
 	}
 
 	// an explicit flag still overrides the configured default
-	r2 := run(t, env, "export", "-cn", "bob", "-remote", "vpn.example.com", "-port", "1234", "-proto", "udp")
+	r2 := run(t, env, "certificate", "export", "-cn", "bob", "-remote", "vpn.example.com", "-port", "1234", "-proto", "udp")
 	if r2.code != 0 || !strings.Contains(r2.stdout, "remote vpn.example.com 1234") || !strings.Contains(r2.stdout, "proto udp") {
 		t.Fatalf("explicit -port/-proto should override the configured default: %+v", r2)
 	}
@@ -560,7 +560,7 @@ func TestExportSplitTunnel(t *testing.T) {
 		t.Fatalf("init: %+v", r)
 	}
 	// RedirectGW defaults to true — split-tunnel should apply out of the box.
-	r := run(t, env, "export", "-cn", "alice", "-remote", "vpn.example.com", "-split-tunnel")
+	r := run(t, env, "certificate", "export", "-cn", "alice", "-remote", "vpn.example.com", "-split-tunnel")
 	if r.code != 0 || !strings.Contains(r.stdout, `pull-filter ignore "redirect-gateway"`) {
 		t.Fatalf("split-tunnel should apply when the server redirects: %+v", r)
 	}
@@ -577,7 +577,7 @@ func TestExportSplitTunnel(t *testing.T) {
 	}
 	s.Close()
 
-	r2 := run(t, env, "export", "-cn", "bob", "-remote", "vpn.example.com", "-split-tunnel")
+	r2 := run(t, env, "certificate", "export", "-cn", "bob", "-remote", "vpn.example.com", "-split-tunnel")
 	if r2.code == 0 {
 		t.Fatalf("split-tunnel should be rejected when the server doesn't redirect: %+v", r2)
 	}
@@ -600,7 +600,7 @@ func TestExportCustomOpts(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	r := run(t, env, "export", "-cn", "alice", "-remote", "vpn.example.com", "-custom-opts", "keepalive 5 30,verb 4")
+	r := run(t, env, "certificate", "export", "-cn", "alice", "-remote", "vpn.example.com", "-custom-opts", "keepalive 5 30,verb 4")
 	if r.code != 0 {
 		t.Fatalf("export: %+v", r)
 	}
@@ -622,7 +622,7 @@ func TestRotateCA(t *testing.T) {
 	if r := run(t, env, "rotate-ca", "-h"); r.code != 0 {
 		t.Fatalf("rotate-ca -h: %+v", r)
 	}
-	if r := run(t, env, "issue", "-cn", "presanity"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "presanity"); r.code != 0 {
 		t.Fatalf("rotate-ca -h must not have rotated the CA: %+v", r)
 	}
 
@@ -631,12 +631,12 @@ func TestRotateCA(t *testing.T) {
 		t.Fatalf("rotate-ca: %+v", r)
 	}
 
-	if r := run(t, env, "issue", "-cn", "carol"); r.code == 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "carol"); r.code == 0 {
 		t.Fatalf("issue with the old CA passphrase should now fail: %+v", r)
 	}
 
 	newPass := []string{"OVCP_DATA=" + dataDir(env), "OVCP_CA_PASSPHRASE=a totally different passphrase"}
-	if r := run(t, newPass, "issue", "-cn", "carol"); r.code != 0 {
+	if r := run(t, newPass, "certificate", "issue", "-cn", "carol"); r.code != 0 {
 		t.Fatalf("issue with the new CA passphrase should work: %+v", r)
 	}
 }
@@ -648,12 +648,12 @@ func TestNoFlagCommandsAcceptHelp(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	for _, args := range [][]string{{"version", "-h"}, {"list", "-h"}, {"audit", "-h"}, {"user", "list", "-h"}} {
+	for _, args := range [][]string{{"version", "-h"}, {"certificate", "list", "-h"}, {"audit", "-h"}, {"user", "list", "-h"}} {
 		if r := run(t, env, args...); r.code != 0 {
 			t.Fatalf("%v should exit 0 on -h: %+v", args, r)
 		}
 	}
-	if r := run(t, env, "list", "-bogus"); r.code == 0 {
+	if r := run(t, env, "certificate", "list", "-bogus"); r.code == 0 {
 		t.Fatalf("unknown flag on a no-flag command should still fail: %+v", r)
 	}
 }
@@ -663,13 +663,13 @@ func TestRenewServer(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	before := len(certLines(run(t, env, "list").stdout, "server"))
+	before := len(certLines(run(t, env, "certificate", "list").stdout, "server"))
 
-	if r := run(t, env, "renew-server"); r.code != 0 {
+	if r := run(t, env, "certificate", "renew-server"); r.code != 0 {
 		t.Fatalf("renew-server: %+v", r)
 	}
 
-	after := len(certLines(run(t, env, "list").stdout, "server"))
+	after := len(certLines(run(t, env, "certificate", "list").stdout, "server"))
 	if after != before+1 {
 		t.Fatalf("expected one more server cert row: before=%d after=%d", before, after)
 	}
@@ -685,7 +685,7 @@ func TestBackupRestore(t *testing.T) {
 	if r := run(t, src, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	if r := run(t, src, "issue", "-cn", "alice"); r.code != 0 {
+	if r := run(t, src, "certificate", "issue", "-cn", "alice"); r.code != 0 {
 		t.Fatalf("issue: %+v", r)
 	}
 
@@ -711,10 +711,10 @@ func TestBackupRestore(t *testing.T) {
 
 	renew := []string{"OVCP_DATA=" + dstDir, "OVCP_SERVER_CN=vpn.example.com",
 		"OVCP_CA_PASSPHRASE=correct horse battery staple"}
-	if r := run(t, renew, "renew-server"); r.code != 0 {
+	if r := run(t, renew, "certificate", "renew-server"); r.code != 0 {
 		t.Fatalf("renew-server after restore: %+v", r)
 	}
-	if r := run(t, renew, "list"); r.code != 0 || len(certLines(r.stdout, "alice")) != 1 {
+	if r := run(t, renew, "certificate", "list"); r.code != 0 || len(certLines(r.stdout, "alice")) != 1 {
 		t.Fatalf("restored db should still have alice: %+v", r)
 	}
 
@@ -849,7 +849,7 @@ func TestUnreachableServe(t *testing.T) {
 	}
 
 	kill := withEnv(env, "OVCP_MGMT_SOCK="+filepath.Join(t.TempDir(), "mgmt.sock"))
-	if r := run(t, kill, "kill", "-cn", "nobody"); r.code == 0 {
+	if r := run(t, kill, "vpn", "kill", "-cn", "nobody"); r.code == 0 {
 		t.Fatalf("kill with no mgmt socket should fail: %+v", r)
 	}
 }
@@ -1046,7 +1046,7 @@ func TestCustomOptsNoChange(t *testing.T) {
 	if err := os.WriteFile(noop, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if r := run(t, withEnv(env, "EDITOR="+noop), "custom-opts"); r.code != 0 || !strings.Contains(r.stdout, "no change") {
+	if r := run(t, withEnv(env, "EDITOR="+noop), "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "no change") {
 		t.Fatalf("no-op editor should report 'no change': %+v", r)
 	}
 
@@ -1054,8 +1054,64 @@ func TestCustomOptsNoChange(t *testing.T) {
 	if err := os.WriteFile(touch, []byte("#!/bin/sh\necho 'client-to-client' >> \"$1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if r := run(t, withEnv(env, "EDITOR="+touch), "custom-opts"); r.code != 0 || !strings.Contains(r.stdout, "saved") {
+	if r := run(t, withEnv(env, "EDITOR="+touch), "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "saved") {
 		t.Fatalf("an editor that changed content should report 'saved': %+v", r)
+	}
+}
+
+// TestConfigGetSetPreview is the CLI/web-UI-parity guard for issue #1: every
+// server setting the web UI can PUT to /api/config must be reachable from
+// the CLI too, with matching zero-value-means-unchanged flag semantics.
+func TestConfigGetSetPreview(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+
+	// defaults, unmodified
+	get := run(t, env, "config", "get")
+	if get.code != 0 || !strings.Contains(get.stdout, "proto:       udp") || !strings.Contains(get.stdout, "port:        1194") {
+		t.Fatalf("config get (defaults): %+v", get)
+	}
+
+	// preview must show the diff without persisting anything
+	pv := run(t, env, "config", "preview", "-proto", "tcp", "-port", "51820")
+	if pv.code != 0 || !strings.Contains(pv.stdout, "-proto udp") || !strings.Contains(pv.stdout, "+proto tcp") {
+		t.Fatalf("config preview: %+v", pv)
+	}
+	if get2 := run(t, env, "config", "get"); !strings.Contains(get2.stdout, "proto:       udp") {
+		t.Fatalf("config preview must not persist: %+v", get2)
+	}
+
+	// set persists; flags left at zero value must leave those fields untouched
+	set := run(t, env, "config", "set", "-proto", "tcp", "-port", "51820",
+		"-dns", "1.1.1.1, 9.9.9.9", "-routes", "192.168.5.0/24", "-redirect-gw", "false")
+	if set.code != 0 || !strings.Contains(set.stdout, "saved") {
+		t.Fatalf("config set: %+v", set)
+	}
+	got := run(t, withEnv(env, "OVCP_JSON=1"), "config", "get")
+	var cfg ovpnconf.Config
+	if err := json.Unmarshal([]byte(got.stdout), &cfg); err != nil {
+		t.Fatalf("config get -json: %v: %+v", err, got)
+	}
+	if cfg.Proto != "tcp" || cfg.Port != 51820 || cfg.Cipher != "AES-256-GCM" {
+		t.Fatalf("config set should change only the given flags: %+v", cfg)
+	}
+	if len(cfg.DNS) != 2 || cfg.DNS[0] != "1.1.1.1" || len(cfg.Routes) != 1 || cfg.RedirectGW {
+		t.Fatalf("config set DNS/Routes/redirect-gw not applied: %+v", cfg)
+	}
+
+	// server.conf on disk must reflect the persisted change
+	conf, err := os.ReadFile(filepath.Join(dataDir(env), "server.conf"))
+	if err != nil || !strings.Contains(string(conf), "proto tcp") || !strings.Contains(string(conf), "port 51820") {
+		t.Fatalf("server.conf not updated by config set: %v\n%s", err, conf)
+	}
+
+	if r := run(t, env, "config", "set", "-redirect-gw", "bogus"); r.code == 0 {
+		t.Fatalf("-redirect-gw must reject anything but true/false: %+v", r)
+	}
+	if r := run(t, env, "config", "set", "-cipher", "DES"); r.code == 0 {
+		t.Fatalf("config set must validate, not persist a bogus cipher: %+v", r)
 	}
 }
 
@@ -1086,7 +1142,7 @@ func TestRefreshCertsHostsCLI(t *testing.T) {
 		t.Fatalf("certs.hosts before any cert changes: content=%q err=%v, want empty", got, err)
 	}
 
-	if r := run(t, env, "issue", "-cn", "alice"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "alice"); r.code != 0 {
 		t.Fatalf("issue: %+v", r)
 	}
 	got, err := os.ReadFile(certsHosts)
@@ -1114,7 +1170,7 @@ func TestRecordCommand(t *testing.T) {
 		t.Fatal("include on an unknown CN must fail")
 	}
 
-	if r := run(t, env, "issue", "-cn", "recordtest"); r.code != 0 {
+	if r := run(t, env, "certificate", "issue", "-cn", "recordtest"); r.code != 0 {
 		t.Fatalf("issue: %+v", r)
 	}
 	if r := run(t, env, "record", "exclude", "-cn", "recordtest"); r.code != 0 || !strings.Contains(r.stdout, "excluded") {
