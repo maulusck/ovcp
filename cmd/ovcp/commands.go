@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -59,9 +58,21 @@ func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []strin
 	return args[0], args[1:]
 }
 
+// parseBoolArg: the CLI's shared on/off vocabulary for any boolean setting —
+// on|true|1 and off|false|0, case-insensitive.
+func parseBoolArg(s string) (bool, error) {
+	switch strings.ToLower(s) {
+	case "on", "true", "1":
+		return true, nil
+	case "off", "false", "0":
+		return false, nil
+	}
+	return false, fmt.Errorf("want on|off (or true|false, 1|0), got %q", s)
+}
+
 var (
 	vpnOps      = []string{"start", "stop", "restart", "reconnect", "status", "kill"}
-	dnsOps      = []string{"start", "stop", "restart", "status"} // no reconnect: dnsmasq has no such signal
+	dnsOps      = []string{"start", "stop", "restart", "status", "block-internet"} // no reconnect: dnsmasq has no such signal
 	certOps     = []string{"issue", "list", "revoke", "export", "renew-server"}
 	configOps   = []string{"get", "set", "preview", "edit"}
 	recordOps   = []string{"list", "edit", "include", "exclude"}
@@ -80,7 +91,7 @@ var commands = []command{
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N]   traffic history, or a live top-like follow view (-follow ignores -json)", run: cmdStats},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill   manage/inspect the openvpn worker (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
-	{name: "dns", usage: "start|stop|restart|status   manage/inspect the dnsmasq worker", sub: dnsOps, run: procCmd("dns", dnsOps, "dns-")},
+	{name: "dns", usage: "start|stop|restart|status|block-internet [on|off|status]   manage/inspect the dnsmasq worker", sub: dnsOps, run: cmdDNS},
 	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
 	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
@@ -843,16 +854,43 @@ func runProcOp(ctx *cliContext, name, op string, rest []string, wirePrefix strin
 	output(r, func(r controller.ControlResult) { printProcText(name, op, r) })
 }
 
-// procCmd drives a supervised worker's lifecycle from the CLI — used by
-// `ovcp dns`. wirePrefix distinguishes dns ops on the control socket
-// ("dns-"), matching serveControlConn's routing (control.go).
-func procCmd(name string, ops []string, wirePrefix string) func(fs *flag.FlagSet) func(ctx *cliContext) {
-	return func(fs *flag.FlagSet) func(ctx *cliContext) {
-		return func(ctx *cliContext) {
-			op, rest := opArg(fs, name, ops)
-			runProcOp(ctx, name, op, rest, wirePrefix)
+// cmdDNS drives the dnsmasq worker's lifecycle, plus block-internet — a
+// stored setting dnsmasq picks up on its next start/restart, not a live
+// control-socket op — mirrors cmdVPN's kill special-case.
+func cmdDNS(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		op, rest := opArg(fs, "dns", dnsOps)
+		if op == "block-internet" {
+			bfs := newFlags("dns block-internet")
+			subUsage(bfs, "dns block-internet [on|off|status]")
+			bfs.Parse(rest)
+			cmdDNSBlockInternet(ctx, bfs.Args())
+			return
 		}
+		runProcOp(ctx, "dns", op, rest, "dns-")
 	}
+}
+
+// cmdDNSBlockInternet prints the current setting (no args, or "status"),
+// otherwise sets it — same GET/POST /api/dns/block-internet the web UI's
+// Records tab uses.
+func cmdDNSBlockInternet(ctx *cliContext, args []string) {
+	s := ctx.openStore()
+	defer s.Close()
+	if len(args) == 0 || args[0] == "status" {
+		v, _ := s.GetSetting("dns_block_internet")
+		output(msg("block-internet: %v", v == "true"), printMsg)
+		return
+	}
+	on, err := parseBoolArg(args[0])
+	die(err)
+	label, value := "off", "false"
+	if on {
+		label, value = "on", "true"
+	}
+	die(s.SetSetting("dns_block_internet", value))
+	s.Audit("cli", "dns_block_internet_"+label, "")
+	output(msg("block-internet: %s (restart dns to apply)", label), printMsg)
 }
 
 // cmdVPN drives the openvpn worker's lifecycle, plus `kill` (disconnect one
@@ -1018,7 +1056,7 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 	cipher := fs.String("cipher", "", "AES-256-GCM|AES-128-GCM|CHACHA20-POLY1305 (unchanged if omitted)")
 	dns := fs.String("dns", "", "comma-separated pushed DNS resolvers (unchanged if omitted)")
 	routes := fs.String("routes", "", "comma-separated pushed routes, CIDR (unchanged if omitted)")
-	redirectGW := fs.String("redirect-gw", "", "true|false: route all client traffic through the VPN (unchanged if omitted)")
+	redirectGW := fs.String("redirect-gw", "", "on|off: route all client traffic through the VPN (unchanged if omitted)")
 	extra := fs.String("extra", "", "custom directives: comma-separated, a file via $(cat FILE), or - for $EDITOR (unchanged if omitted)")
 	return func(cfg ovpnconf.Config) (ovpnconf.Config, error) {
 		if *proto != "" {
@@ -1040,9 +1078,9 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 			cfg.Routes = ovpnconf.SplitCSV(*routes)
 		}
 		if *redirectGW != "" {
-			b, err := strconv.ParseBool(*redirectGW)
+			b, err := parseBoolArg(*redirectGW)
 			if err != nil {
-				return cfg, fmt.Errorf("-redirect-gw must be true or false")
+				return cfg, fmt.Errorf("-redirect-gw: %w", err)
 			}
 			cfg.RedirectGW = b
 		}
