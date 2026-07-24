@@ -2,6 +2,7 @@
 import { api } from './api.js'
 
 export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', ovcpUptime: '' }) // ok | down | reloading
+export const dns = $state({ up: false, uptime: '' }) // dnsmasq is optional — absent fields just mean "not configured"
 
 let deadline = 0
 
@@ -31,11 +32,14 @@ export async function pollOnce() {
     } else {
       vpn.phase = 'down'
     }
+    dns.up = !!d.dns_up
+    dns.uptime = fmtUptime(d.dns_uptime_seconds)
     return d
   } catch {
     if (!(vpn.phase === 'reloading' && Date.now() < deadline)) {
       vpn.phase = 'down'; vpn.up = false; vpn.clientList = []; vpn.uptime = ''; vpn.ovcpUptime = ''
     }
+    dns.up = false; dns.uptime = ''
     return { vpn_up: false, clients: [] }
   }
 }

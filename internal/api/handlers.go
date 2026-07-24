@@ -80,21 +80,31 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User)
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {
 	// ovcp's own uptime is always known here — this handler only runs
 	// inside a live serve process.
-	ovcpUptime := int64(time.Since(controller.ProcessStartedAt).Seconds())
-	clients, err := s.Mgmt.Status()
-	if err != nil {
+	out := map[string]any{"ovcp_uptime_seconds": int64(time.Since(controller.ProcessStartedAt).Seconds())}
+
+	if clients, err := s.Mgmt.Status(); err != nil {
 		// VPN down/restarting is a normal state for the panel, not a 500.
-		jsonOK(w, map[string]any{"vpn_up": false, "clients": []any{}, "ovcp_uptime_seconds": ovcpUptime})
-		return
+		out["vpn_up"], out["clients"] = false, []any{}
+	} else {
+		if clients == nil {
+			clients = []controller.VPNClient{}
+		}
+		out["vpn_up"], out["clients"] = true, clients
+		out["vpn_uptime_seconds"] = int64(time.Since(s.VPN.StartedAt()).Seconds())
 	}
-	if clients == nil {
-		clients = []controller.VPNClient{}
+
+	// s.DNS is nil in a bare/test Server; dnsmasq itself being merely
+	// unconfigured still leaves a real Supervisor with Pid()==0 (not running).
+	if s.DNS != nil {
+		if pid := s.DNS.Pid(); pid != 0 {
+			out["dns_up"] = true
+			out["dns_uptime_seconds"] = int64(time.Since(s.DNS.StartedAt()).Seconds())
+		} else {
+			out["dns_up"] = false
+		}
 	}
-	jsonOK(w, map[string]any{
-		"vpn_up": true, "clients": clients,
-		"vpn_uptime_seconds":  int64(time.Since(s.VPN.StartedAt()).Seconds()),
-		"ovcp_uptime_seconds": ovcpUptime,
-	})
+
+	jsonOK(w, out)
 }
 
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request, u *store.User) {

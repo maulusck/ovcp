@@ -1,6 +1,6 @@
 <script>
   import { api } from './api.js'
-  import { vpn, pollOnce } from './status.svelte.js'
+  import { vpn, dns, pollOnce } from './status.svelte.js'
   import { theme, setTheme, THEMES } from './theme.svelte.js'
   import Logo from './Logo.svelte'
   import Dashboard from './Dashboard.svelte'
@@ -124,6 +124,12 @@
     vpn.phase === 'ok' ? `VPN running · up ${vpn.uptime} · ${vpn.clients} client${vpn.clients === 1 ? '' : 's'} connected` +
       (vpn.ovcpUptime ? ` · ovcp up ${vpn.ovcpUptime}` : '') :
     vpn.phase === 'reloading' ? 'VPN restarting…' : 'VPN unreachable')
+  // second blinker on the same pill — passive/dim (not red) when dnsmasq
+  // was never installed, that's a normal deployment, not an alarm.
+  const dnsState = $derived(!user?.dnsmasqVersion ? 'na' : dns.up ? 'ok' : 'down')
+  const dnsText = $derived(
+    dnsState === 'na' ? 'DNS: not installed' :
+    dnsState === 'ok' ? `DNS running · up ${dns.uptime}` : 'DNS unreachable')
 </script>
 
 {#if !user}
@@ -161,6 +167,9 @@
       </a>
       <span class="pill {vpn.phase}" title={phaseText} role="status">
         <i></i><span class="pill-text">{vpn.phase === 'ok' ? 'vpn up' : vpn.phase === 'reloading' ? 'restarting' : 'vpn down'}</span>
+      </span>
+      <span class="pill {dnsState}" title={dnsText} role="status">
+        <i></i><span class="pill-text">{dnsState === 'ok' ? 'dns up' : dnsState === 'down' ? 'dns down' : 'dns —'}</span>
       </span>
     </div>
     <nav>
@@ -416,6 +425,7 @@
   .pill i { width: 8px; height: 8px; border-radius: 50%; }
   .pill.ok i { background: var(--ok); box-shadow: 0 0 6px 1px var(--ok); }
   .pill.down i { background: var(--bad); box-shadow: 0 0 6px 1px var(--bad); }
+  .pill.na i { background: var(--dim); opacity: .45; } /* dnsmasq never installed — same "inactive" look as :disabled, not an alarm */
   .pill.reloading i {
     background: var(--amber); box-shadow: 0 0 6px 1px var(--amber);
     animation: pulse 1s ease-in-out infinite;
