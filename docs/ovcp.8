@@ -99,6 +99,10 @@ log line. The bot's own command surface is deliberately narrow
 (\fB/status\fR, and \fB/menu\fR's Start/Stop/Restart/Reconnect, Stop and
 Restart behind a confirm step) \(en revoke, user management, CA rotation,
 config, and backup are unreachable from Telegram at any privilege.
+\fB/menu\fR's buttons call the same openvpn lifecycle methods
+.B vpn
+itself does, so mashing Restart in the chat hits the same overlap guard
+described there \(en no more disruptive than doing it from the CLI.
 .SH QUICK START
 .nf
 .RS
@@ -240,7 +244,7 @@ cipher, pushed DNS/routes, redirect\-gateway, and the raw extra
 directives \(en the same values \fBGET /api/config\fR (web UI Settings
 tab) reads.
 .TP
-.B config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR true|false] [\fB\-extra\fR \fIOPTS\fR|\fB\-\fR]
+.B config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR on|off] [\fB\-extra\fR \fIOPTS\fR|\fB\-\fR]
 Change one or more server settings and persist them \(en the CLI/env\-var
 equivalent of the web UI's Settings tab \fBPUT /api/config\fR, for
 containers and non\-attended initialization where there is no browser to
@@ -253,10 +257,12 @@ list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
 appending to it. \fB\-extra\fR takes the same three forms as
 \fBcertificate export\fR's \fB\-custom\-opts\fR (comma list, \fB$(cat
 FILE)\fR, or a bare \fB\-\fR for \fB$EDITOR\fR) \(en equivalent to
-\fBconfig edit\fR below, just scriptable inline. Rejects an invalid
-combination (bad CIDR, disallowed cipher, port out of range, anything
-other than \fBtrue\fR/\fBfalse\fR for \fB\-redirect\-gw\fR) without
-writing anything. Takes effect on the next
+\fBconfig edit\fR below, just scriptable inline. \fB\-redirect\-gw\fR
+accepts \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR, or \fB1\fR/\fB0\fR,
+case\-insensitive \(en the same boolean vocabulary as \fBdns
+block\-internet\fR below. Rejects an invalid combination (bad CIDR,
+disallowed cipher, port out of range, an unrecognized \fB\-redirect\-gw\fR
+value) without writing anything. Takes effect on the next
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload its configuration.
 .TP
@@ -348,6 +354,16 @@ supported: a fresh restart re\-reads every root\-owned file, which SIGHUP
 cannot. Each lifecycle op prints the resulting openvpn pid, so a repeated
 .B start
 reports \(lqalready started\(rq rather than spawning a second process.
+.BR start / stop / restart / reconnect
+reject instead of queuing behind one already in flight for the same
+worker (\(lqoperation already in progress\(rq) \(en a second call has to
+wait for the first to actually finish, not just get delayed behind it;
+a scripted loop calling
+.B restart
+faster than openvpn itself restarts gets mostly rejections, not a stack
+of real restarts. \fBdns\fR's lifecycle ops and \fBtelegram\fR's
+\fBstart\fR/\fBstop\fR/\fBrestart\fR share the same guard, independently
+per worker.
 .TP
 .B dns start|stop|restart|status [\fB\-ctrl\fR \fIPATH\fR]
 Manage or inspect the dnsmasq worker the same way
@@ -355,13 +371,25 @@ Manage or inspect the dnsmasq worker the same way
 manages openvpn. No
 .B reconnect
 (dnsmasq has no such signal). If dnsmasq isn't installed, every op
-fails with a clear error. Whether dnsmasq also forwards to upstream
-resolvers, or answers only names it knows locally, is a persisted setting
-(\(lqBlock internet DNS\(rq, Records tab \(en no CLI equivalent yet) that
-takes effect on the next
+fails with a clear error.
+.TP
+.B dns block\-internet [on|off|status]
+Whether dnsmasq also forwards to upstream resolvers, or answers only
+names it knows locally \(en the same persisted setting as the Records
+tab's \(lqBlock internet DNS\(rq toggle
+(\fBGET\fR/\fBPOST /api/dns/block\-internet\fR). Unlike
+.BR start / stop / restart / status
+above, this is a stored setting, not a live control\-socket op \(en it
+works without a running
+.B serve
+and takes effect on dnsmasq's next
 .B start
 or
-.B restart.
+.BR restart .
+With no argument, or \fBstatus\fR, prints the current value; \fBon\fR/
+\fBoff\fR sets it, same boolean vocabulary as \fBconfig set
+\-redirect\-gw\fR (\fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR, \fB1\fR/
+\fB0\fR, case\-insensitive).
 .TP
 .B record list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
 .TQ
@@ -536,7 +564,8 @@ raw bytes on stdout, or the paths they were written to.
 \fB{serial, crlPath}\fR.
 .TP
 .B rotate\-ca, config edit, backup restore, telegram token, user del,
-.B user passwd, user totp \-off, record edit|include|exclude, init \-skeleton
+.B user passwd, user totp \-off, record edit|include|exclude, init \-skeleton,
+.B dns block\-internet
 \fB{message}\fR \(en a confirmation string, nothing structured beyond it.
 .TP
 .B certificate renew\-server
@@ -571,10 +600,11 @@ above).
 .B vpn kill
 \fB{message}\fR.
 .TP
-.B vpn (other ops), dns, debug
+.B vpn (other ops), dns (excl. block\-internet), debug
 \fBvpn\fR/\fBdns\fR lifecycle ops (\fBstart|stop|restart|reconnect|status\fR):
 \fB{pid, changed, startedAt, serveStartedAt}\fR for every op including
-\fBstatus\fR. \fBdebug on\fR/\fBoff\fR: \fB{debug}\fR.
+\fBstatus\fR \(en \fBdns block\-internet\fR is \fB{message}\fR instead, see
+above. \fBdebug on\fR/\fBoff\fR: \fB{debug}\fR.
 .TP
 .B record list
 \fB{certs, custom}\fR: \fBcerts\fR an array of \fB{status, kind, cn,
@@ -628,12 +658,16 @@ exactly one connected client, ever, and \fBserve\fR holds that connection
 for its whole life. Nothing else dials this socket directly.
 .TP
 .B OVCP_CTRL_SOCK
-ovcp control socket for \fBvpn\fR (including \fBkill\fR)/\fBstatus\fR/
-\fBdebug\fR/\fBstats \-follow\fR (default \fI/run/ovcp/control.sock\fR); same path
-\fBserve \-ctrl\fR sets for a single invocation, no env var needed. The CLI
-talks to a running \fBserve\fR here for anything needing live openvpn state
-\(en \fBserve\fR itself proxies that from its own \fBOVCP_MGMT_SOCK\fR
-connection, per above. This is a \fIseparate\fR socket from
+ovcp control socket for \fBvpn\fR (including \fBkill\fR), \fBdns\fR,
+\fBtelegram\fR, \fBdebug\fR, and \fBstats \-follow\fR (default
+\fI/run/ovcp/control.sock\fR); same path \fBserve \-ctrl\fR sets for a
+single invocation, no env var needed. The CLI talks to a running
+\fBserve\fR here for anything that needs its in\-process state \(en only
+\fBvpn\fR's \fBstatus\fR/\fBkill\fR/\fBreconnect\fR and \fBstats \-follow\fR
+actually proxy through to \fBserve\fR's own \fBOVCP_MGMT_SOCK\fR
+connection, per above; \fBdns\fR/\fBtelegram\fR lifecycle ops and
+\fBdebug\fR answer from \fBserve\fR's own state directly, never touching
+the management socket. This is a \fIseparate\fR socket from
 \fBOVCP_MGMT_SOCK\fR/\fB\-mgmt\fR above \(en overriding one does not move
 the other; pass both flags (or set both env vars) to run \fBserve\fR
 entirely out of a non\-root\-writable directory.
@@ -778,8 +812,9 @@ logrotate and log\-shipper discovery.
 .TP
 .I $OVCP_MGMT_SOCK, $OVCP_CTRL_SOCK
 OpenVPN management socket (unix only, never TCP) and ovcp's root\-only
-(0600) control socket for \fBvpn\fR lifecycle ops. Default to
-\fI/run/ovcp/mgmt.sock\fR and \fI/run/ovcp/control.sock\fR.
+(0600) control socket for \fBvpn\fR/\fBdns\fR/\fBtelegram\fR lifecycle ops,
+\fBdebug\fR, and \fBstats \-follow\fR. Default to \fI/run/ovcp/mgmt.sock\fR
+and \fI/run/ovcp/control.sock\fR.
 .SH EXAMPLES
 Issue and download a profile for a phone, valid two years:
 .nf
@@ -823,8 +858,8 @@ the VPN, previewing the \fIserver.conf\fR change first (no CLI equivalent
 before \fBconfig\fR existed \(en this used to require the web UI):
 .nf
 .RS
-ovcp config preview \-proto tcp \-port 443 \-redirect\-gw false
-ovcp config set \-proto tcp \-port 443 \-redirect\-gw false
+ovcp config preview \-proto tcp \-port 443 \-redirect\-gw off
+ovcp config set \-proto tcp \-port 443 \-redirect\-gw off
 ovcp vpn restart
 .RE
 .fi

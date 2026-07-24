@@ -48,10 +48,17 @@ different purpose:
   connected client for its entire lifetime; `serve` holds that connection
   for as long as the OpenVPN worker runs.
 - The **control socket** (`OVCP_CTRL_SOCK`) is ovcp's own protocol,
-  root-only, used by a separate `ovcp` invocation (`vpn` — including
-  `kill` — `status`, `debug`, `stats -follow`) to reach a running `serve`.
-  `serve` proxies these requests to its own management-socket connection;
-  nothing else dials the management socket directly.
+  root-only, used by a separate `ovcp` invocation (`vpn`, `dns`,
+  `telegram`, `debug`, `stats -follow`) to reach a running `serve`. Only
+  `vpn`'s `status`/`kill`/`reconnect` and `stats -follow` actually proxy
+  through to the management-socket connection above. Everything else
+  answers from in-process state instead: `vpn`/`dns start|stop|restart`
+  and `telegram start|stop|restart|status` drive their own `Supervisor`/
+  `Poller` (see Supervisor design, below); `debug on`/`off` flips an
+  in-process log-level variable. Nothing dials the management socket
+  except `serve` itself. `dns block-internet` is not a control-socket op
+  at all — it reads/writes a stored setting directly and works without
+  `serve` running.
 
 Exact defaults, flags, and environment variables for both sockets are
 documented in `man ovcp`, `ENVIRONMENT`.
@@ -76,6 +83,21 @@ fresh restart re-reads every root-owned file (certificates, CRL,
 available for a soft session reset that does not replace the process.
 Command-level behavior for `vpn start|stop|restart|reconnect|status` is
 documented in `man ovcp`, `COMMANDS`.
+
+`Supervisor`'s lifecycle methods (`Start`/`Stop`/`Restart`/`Reconnect`)
+`TryLock` a single per-worker mutex instead of blocking on it: a call that
+overlaps one already in flight is rejected (`ErrBusy`, surfaced as HTTP 409)
+rather than queued behind it. Queuing would still be memory-safe — the
+mutex was already held for each op's whole real duration — but it would
+let a rapid-fire caller (a stuck client retrying, a scripted loop) stack up
+a run of genuinely executed restarts, one after another, each disrupting
+the service again. There is deliberately no cooldown timer on top of this:
+the mutex is already held for exactly as long as the real stop+start cycle
+takes, so pacing falls out of the worker's own actual speed instead of a
+guessed constant. `internal/telegram`'s `Poller` mirrors the identical
+`TryLock`/reject pattern for its own `Start`/`Stop`/`Restart`, independent
+of `Supervisor` (different type, same shape) since its lifecycle is driven
+through the same control socket.
 
 dnsmasq (Records tab, optional — only if found on `PATH`) is a second
 worker under the same `Supervisor`/`Lifecycle` type, reachable over the

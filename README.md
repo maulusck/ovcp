@@ -1,44 +1,46 @@
 <h1 style="display:flex; align-items:center; gap:10px; margin:0">
   <img src="web/ui/public/favicon.svg" width="34" height="34" alt="">
-  OVCP — self-hosted OpenVPN control plane
+  OVCP — OpenVPN Control Plane
 </h1>
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
 
-**OVCP (OpenVPN Control Plane)** runs and manages one [OpenVPN](https://openvpn.net/)
-server without `easy-rsa`, a multi-container compose stack, or a separate
-PKI toolchain. It's a single static Go binary: a built-in certificate
-authority, a web admin UI, a scriptable CLI, and OpenVPN process
-supervision, all in one process, all on one host.
+One [OpenVPN](https://openvpn.net/) server, one static binary, one data
+directory. No `easy-rsa`, no compose stack, no separate PKI toolchain
+bolted on after the fact. `ovcp` owns the CA, the server config, and the
+openvpn process itself, the same way on bare metal, under systemd, or in
+a container. A CLI for scripts, a web UI for humans; neither is the
+second-class citizen.
 
 ## Features
 
-- **Native PKI** — issue, revoke, and renew client/server certificates; no
-  `easy-rsa`, no shell scripts. The CA private key is stored encrypted
-  (argon2id + AES-256-GCM); every sign/revoke needs the passphrase in memory,
-  never on disk.
-- **One binary** — the Svelte web UI is embedded in the Go binary. No
-  Node.js, reverse proxy, or separate frontend deploy in production.
-- **Full CLI** — every UI action has a CLI equivalent. `-json` (or
-  `$OVCP_JSON`) switches *every* command to machine-readable output — same
-  fields either way, just JSON instead of text — for Ansible, scripts, or
-  anything else that isn't a human. Shell completion for bash/zsh/fish.
-- **Client export** — generate ready-to-import `.ovpn` profiles (optionally
-  key-encrypted) or a scannable QR code, from the CLI or the UI.
-- **Live stats & audit log** — per-client traffic/connection history, a
-  live top-like `stats -follow`, and an audit trail of every admin action.
-- **Optional Telegram bot** — push notifications for revokes, user changes,
-  and cert-expiry warnings, plus a narrow Start/Stop/Restart menu gated to
-  one linked admin chat. Off by default; nothing else depends on it.
-- **Encrypted backup/restore** — one command exports the CA, CRL, tls-crypt
-  key, config, and database into a single encrypted archive.
-- **Access control** — role-based access (admin/operator/readonly), optional
-  TOTP 2FA, rate-limited logins, and CSRF-protected, HTTPS-only sessions.
-- **Prod-ready packaging** — a systemd unit, `.deb`/`.rpm`/`.apk`/Arch/Void
-  packages (amd64, ARM — Raspberry Pi and similar SBCs, and RISC-V; glibc or
-  musl), an all-in-one multi-arch container image, and a SELinux policy, all
-  included.
+- **Native PKI** — issue, revoke, renew. No `easy-rsa`, no shell scripts
+  wrapping `openssl`. CA private key encrypted at rest, passphrase never
+  persisted.
+- **One binary** — the web UI is embedded in it. No separate frontend to
+  deploy, no reverse proxy required.
+- **Full CLI** — every UI action has a CLI equivalent, not a subset.
+  `-json` switches every command to machine-readable output, same fields
+  either way. Shell completion for bash/zsh/fish.
+- **Client export** — a complete, ready-to-import `.ovpn` profile on
+  stdout or as a QR code, optionally key-encrypted, from the CLI or the UI.
+- **Internal DNS** (optional) — dnsmasq resolves the server and each
+  connected client by hostname over the tunnel, plus custom hosts-file
+  entries. Switch it to answer only local names, no upstream forwarding.
+- **Live stats & audit log** — per-client traffic history, a top-like
+  `stats -follow`, and an audit trail of every admin action.
+- **Telegram bot** (optional) — notifications for revokes, user changes,
+  CA rotation, and cert expiry, plus a narrow Start/Stop/Restart/Reconnect
+  menu gated to one linked chat. Off by default; nothing else depends on it.
+- **Encrypted backup/restore** — one command, one encrypted archive:
+  everything needed to restore the server, nothing that needs the
+  original host.
+- **Access control** — role-based (admin/operator/readonly), optional
+  TOTP 2FA, rate-limited logins, CSRF-protected HTTPS-only sessions.
+- **Packaging** — systemd unit, `.deb`/`.rpm`/`.apk`/Arch/Void packages
+  (amd64, ARM, RISC-V; glibc or musl), a multi-arch container image, and a
+  SELinux policy. All included, none bolted on later.
 
 ## Requirements
 
