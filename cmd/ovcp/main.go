@@ -118,9 +118,17 @@ func newLogHandler(w io.Writer) slog.Handler {
 // once in main() after flag.Parse and passed explicitly (not closed over),
 // so commands stays a plain package-level var usable before Parse runs (flag.Usage needs it during Parse, for -h).
 type cliContext struct {
-	dataDir   string
-	p         *pki.PKI
-	openStore func() *store.Store
+	dataDir string
+	p       *pki.PKI
+}
+
+// openStore is the one gateway every stateful command passes through — the
+// one place ensureSkeleton needs to be called from.
+func (ctx *cliContext) openStore() *store.Store {
+	die(ensureSkeleton(ctx.dataDir))
+	s, err := store.Open(filepath.Join(ctx.dataDir, "ovcp.db"))
+	die(err)
+	return s
 }
 
 // globalFlags registers ovcp's flags that precede the command name — used by
@@ -155,12 +163,7 @@ func main() {
 		return
 	}
 
-	ctx := &cliContext{dataDir: *dataDir, p: pki.New(filepath.Join(*dataDir, "pki"))}
-	ctx.openStore = func() *store.Store {
-		s, err := store.Open(filepath.Join(ctx.dataDir, "ovcp.db"))
-		die(err)
-		return s
-	}
+	ctx := &cliContext{dataDir: *dataDir, p: pki.New(dataPaths(*dataDir).PKIDir)}
 
 	for _, c := range commands {
 		if c.name == args[0] {
@@ -180,28 +183,21 @@ func main() {
 	usage()
 }
 
-func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI) {
+func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	pp := dataPaths(dataDir)
 	// tee ovcp's own log to a file (alongside stderr/journal) so the UI can
 	// tail it; unbounded growth, same as openvpn.log — no rotation here either.
-	os.MkdirAll(pp.LogsDir, 0o750)
 	if lf, err := os.OpenFile(pp.OvcpLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); err == nil {
 		slog.SetDefault(slog.New(newLogHandler(io.MultiWriter(logWriter(), lf))))
 	}
 	if os.Geteuid() != 0 {
 		slog.Warn("not root; ovcp owns the PKI and starts openvpn, both need root")
 	}
-	s, err := store.Open(filepath.Join(dataDir, "ovcp.db"))
-	die(err)
-	defer s.Close()
 
 	ovVersion, ovPath, _ := controller.OpenVPNVersion() // both "" if not found — advisory only
 	sup := newSupervisor(dataDir, ovPath)
 	dnsVersion, dnsPath, _ := controller.DnsmasqVersion() // same advisory-only treatment
 	dnsGid := dnsGID(dnsRunAsGroup())
-	if err := ensureDNSDir(pp, dnsGid); err != nil {
-		slog.Warn("dns dir setup failed", "err", err)
-	}
 	dnsSup := newDNSSupervisor(pp, dnsPath, s)
 	mgmt := controller.NewClient(sock)
 	tg := telegram.New(s, sup, mgmt)
@@ -415,37 +411,15 @@ func dnsGID(group string) int {
 	return gid
 }
 
-// ensureDNSDir creates $dataDir/dns (0750, so --hostsdir can list it) and
-// the two hosts files (0640) if missing. custom.hosts must survive
-// untouched; certs.hosts gets an empty placeholder if it doesn't exist yet.
-func ensureDNSDir(pp paths, gid int) error {
-	if err := os.MkdirAll(pp.DNSDir, 0o750); err != nil {
-		return err
-	}
-	os.Chown(pp.DNSDir, -1, gid)
-	for _, f := range []string{pp.CertsHosts, pp.CustomHosts} {
-		if _, err := os.Stat(f); os.IsNotExist(err) {
-			if err := os.WriteFile(f, nil, 0o640); err != nil {
-				return err
-			}
-		}
-		os.Chown(f, -1, gid)
-	}
-	return nil
-}
-
 // refreshCertsHostsCLI regenerates certs.hosts after a CLI-side cert
 // change (issue, revoke, include, exclude) — the CLI has no running
 // api.Server to do this for it, unlike the same actions via the web UI, so
-// it builds a bare one just to reuse Server.RefreshCertsHosts.
+// it builds a bare one just to reuse Server.RefreshCertsHosts. Callers all
+// reach this via ctx.openStore() first, so the skeleton already exists.
 func refreshCertsHostsCLI(dataDir string, s *store.Store) {
 	live, _ := controller.Clients(ctrlSock())
 	pp := dataPaths(dataDir)
 	gid := dnsGID(dnsRunAsGroup())
-	if err := ensureDNSDir(pp, gid); err != nil {
-		slog.Warn("certs.hosts refresh failed", "err", err)
-		return
-	}
 	srv := &api.Server{Store: s, CertsHostsPath: pp.CertsHosts, DefaultRemote: adminCertCN(dataDir), DNSGroupGID: gid}
 	if err := srv.RefreshCertsHosts(live); err != nil {
 		slog.Warn("certs.hosts refresh failed", "err", err)
@@ -453,6 +427,7 @@ func refreshCertsHostsCLI(dataDir string, s *store.Store) {
 }
 
 type paths struct {
+	PKIDir                                                   string
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, ServerConf string
 	LogsDir, OpenVPNLog, OvcpLog, StatusLog, DnsmasqLog      string
 	DNSDir, CertsHosts, CustomHosts                          string
@@ -463,6 +438,7 @@ func dataPaths(dataDir string) paths {
 	ld := filepath.Join(dataDir, "logs")
 	dd := filepath.Join(dataDir, "dns")
 	return paths{
+		PKIDir: pd,
 		CACert: filepath.Join(pd, "ca.crt"), ServerCert: filepath.Join(pd, "server.crt"),
 		ServerKey: filepath.Join(pd, "server.key"), CRL: filepath.Join(pd, "crl.pem"),
 		TLSCrypt:    filepath.Join(pd, "tls-crypt.key"),
@@ -476,6 +452,47 @@ func dataPaths(dataDir string) paths {
 		CertsHosts:  filepath.Join(dd, "certs.hosts"),
 		CustomHosts: filepath.Join(dd, "custom.hosts"),
 	}
+}
+
+// Every $OVCP_DATA permission ovcp sets — ensureSkeleton below is the only place they're applied.
+const (
+	modeDataDir = 0o751 // root:root — world-traverse only, nothing listable/readable without a file's own grant
+	modePKIDir  = 0o701 // root:root — same trick; ca.crt/crl.pem (0644) are the public bits behind it
+	modeLogsDir = 0o750 // root:root — no unprivileged process opens into it directly (fds inherited pre-exec)
+	modeDNSDir  = 0o750 // root:dnsGID — group-scoped, confidential hosts content, not world-readable
+	modeDNSFile = 0o640 // root:dnsGID
+)
+
+// ensureSkeleton creates/repairs the whole tree above. Idempotent; called by
+// every command that touches the data dir, via cliContext.openStore.
+func ensureSkeleton(dataDir string) error {
+	pp := dataPaths(dataDir)
+	if err := os.MkdirAll(dataDir, modeDataDir); err != nil {
+		return err
+	}
+	if err := os.Chmod(dataDir, modeDataDir); err != nil { // MkdirAll no-ops the mode if dataDir already exists
+		return err
+	}
+	if err := os.MkdirAll(pp.PKIDir, modePKIDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(pp.LogsDir, modeLogsDir); err != nil {
+		return err
+	}
+	gid := dnsGID(dnsRunAsGroup())
+	if err := os.MkdirAll(pp.DNSDir, modeDNSDir); err != nil {
+		return err
+	}
+	os.Chown(pp.DNSDir, -1, gid)
+	for _, f := range []string{pp.CertsHosts, pp.CustomHosts} {
+		if _, err := os.Stat(f); os.IsNotExist(err) {
+			if err := os.WriteFile(f, nil, modeDNSFile); err != nil {
+				return err
+			}
+		}
+		os.Chown(f, -1, gid)
+	}
+	return nil
 }
 
 // issueCert issues a cert under the CA, optionally password-protecting the
@@ -493,16 +510,12 @@ func issueCert(p *pki.PKI, kind pki.CertKind, cn string, days int, pass []byte, 
 	return ic, nil
 }
 
-// writeServerCert persists a freshly issued server cert+key to the paths
-// `serve` reads and records it in the store; shared by init and renew-server, takes effect on next `vpn restart`.
+// writeServerCert persists a freshly issued server cert+key; shared by init
+// and renew-server (CLI), takes effect on next `vpn restart`. Delegates to
+// api.Server.WriteServerCert — the same code the web UI's renew-server uses
+// — via a bare, HTTP-less instance, so the actual writes live in one place.
 func writeServerCert(pp paths, s *store.Store, ic *pki.IssuedCert) error {
-	if err := os.WriteFile(pp.ServerCert, ic.CertPEM, 0o644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(pp.ServerKey, ic.KeyPEM, 0o600); err != nil {
-		return err
-	}
-	return s.ReplaceCert(store.CertFrom(ic, "server"))
+	return (&api.Server{ServerCert: pp.ServerCert, ServerKey: pp.ServerKey, Store: s}).WriteServerCert(ic)
 }
 
 // fillPaths sets the server-owned path fields on a config.

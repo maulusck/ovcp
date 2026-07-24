@@ -38,6 +38,7 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
+	os.MkdirAll(filepath.Join(dir, "pki"), 0o701) // InitCA trusts the caller for this, same as ensureSkeleton in production
 	p := pki.New(filepath.Join(dir, "pki"))
 	if err := p.InitCA("T", 1, []byte(pass)); err != nil {
 		t.Fatal(err)

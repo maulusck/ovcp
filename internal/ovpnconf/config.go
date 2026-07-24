@@ -205,7 +205,7 @@ func (c *Config) WriteAtomic(path string) error {
 		return err
 	}
 	tmp := filepath.Join(filepath.Dir(path), ".server.conf.tmp")
-	if err := os.WriteFile(tmp, c.Render(), 0o644); err != nil {
+	if err := os.WriteFile(tmp, c.Render(), 0o640); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

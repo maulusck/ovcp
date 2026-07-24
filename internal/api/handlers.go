@@ -171,6 +171,20 @@ func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int)
 	return ic, nil
 }
 
+// WriteServerCert persists a freshly issued server cert+key to the paths
+// `serve` reads and records it in the store — the one place that writes
+// them, shared by handleRenewServer below and the CLI (init, renew-server)
+// via cmd/ovcp's writeServerCert, which wraps this in a bare *Server.
+func (s *Server) WriteServerCert(ic *pki.IssuedCert) error {
+	if err := os.WriteFile(s.ServerCert, ic.CertPEM, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(s.ServerKey, ic.KeyPEM, 0o600); err != nil {
+		return err
+	}
+	return s.Store.ReplaceCert(store.CertFrom(ic, "server"))
+}
+
 // handleRenewServer reissues the server cert in place (same CN, new serial)
 // at the paths `serve` reads. Admin-only; needs a `vpn restart` to take effect.
 func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -194,15 +208,7 @@ func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *st
 		s.pkiErr(w, err)
 		return
 	}
-	if err := os.WriteFile(s.ServerCert, ic.CertPEM, 0o644); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	if err := os.WriteFile(s.ServerKey, ic.KeyPEM, 0o600); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	if err := s.Store.ReplaceCert(store.CertFrom(ic, "server")); err != nil {
+	if err := s.WriteServerCert(ic); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}

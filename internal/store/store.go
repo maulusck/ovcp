@@ -64,15 +64,9 @@ type AuditEntry struct {
 	Detail string
 }
 
+// Open assumes path's directory already exists with the right permissions —
+// ensureSkeleton (cmd/ovcp) is the one place that owns creating it.
 func Open(path string) (*Store, error) {
-	// 0751 not 0750: openvpn re-stats pki/crl.pem as an unprivileged user,
-	// so every ancestor dir needs traversal (see pki.InitCA). DB file below
-	// stays 0600, so this doesn't newly expose it.
-	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o751); err != nil {
-			return nil, err
-		}
-	}
 	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_fk=1")
 	if err != nil {
 		return nil, err

@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -163,10 +162,7 @@ func (s *Supervisor) supervise(launched chan<- error) {
 		launched <- fmt.Errorf("controller: %s not found on PATH", s.Name)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(s.LogPath), 0o750); err != nil {
-		launched <- err
-		return
-	}
+	// LogPath's directory is assumed to exist — cmd/ovcp's ensureSkeleton owns creating it.
 	lf, err := os.OpenFile(s.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		launched <- err

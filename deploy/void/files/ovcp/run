@@ -5,7 +5,5 @@
 [ -r conf ] && . ./conf
 : "${OVCP_DATA:=/var/lib/ovcp}"
 export OVCP_DATA
-mkdir -p "$OVCP_DATA/logs"
-chown root:root "$OVCP_DATA" "$OVCP_DATA/logs"
-chmod 700 "$OVCP_DATA" "$OVCP_DATA/logs"
+/usr/bin/ovcp init -skeleton
 exec /usr/bin/ovcp serve

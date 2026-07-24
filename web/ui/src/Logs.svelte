@@ -67,6 +67,7 @@
     ...PANEL_IDS.filter((id) => !savedOrder.includes(id)),
   ])
   const bumpFront = (id) => (order = [id, ...order.filter((x) => x !== id)])
+  const bumpBack = (id) => (order = [...order.filter((x) => x !== id), id])
 
   // clamp a box's height to content: CSS fit-content doesn't work vertically in Firefox,
   // so measure instead (also re-clamps a resize drag on pointerup).
@@ -231,7 +232,7 @@
 
 {#snippet auditPanel()}
   <details class="card" bind:open={openState.audit} bind:this={cards.audit}
-    ontoggle={(e) => e.target.open && bumpFront('audit')}>
+    ontoggle={(e) => (e.target.open ? bumpFront('audit') : bumpBack('audit'))}>
     <summary onclick={(e) => maximized === 'audit' && e.preventDefault()}>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
@@ -263,7 +264,7 @@
 
 {#snippet logPanel(l)}
   <details class="card" bind:open={openState[l.id]} bind:this={cards[l.id]}
-    ontoggle={(e) => e.target.open && bumpFront(l.id)}>
+    ontoggle={(e) => (e.target.open ? bumpFront(l.id) : bumpBack(l.id))}>
     <summary onclick={(e) => maximized === l.id && e.preventDefault()}>{l.title}</summary>
     {#if lines[l.id].length === 0}
       <p class="muted">No log yet.</p>

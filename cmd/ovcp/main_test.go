@@ -923,6 +923,9 @@ func TestDNSSupervisorPreStart(t *testing.T) {
 		secondSubnet, secondListen = "10.10.0.0/24", "--listen-address=10.10.0.1"
 	)
 	dir := t.TempDir()
+	if err := ensureSkeleton(dir); err != nil { // supervise() trusts logs/ already exists
+		t.Fatal(err)
+	}
 	s, err := store.Open(filepath.Join(dir, "ovcp.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -984,23 +987,24 @@ func TestDnsGID(t *testing.T) {
 	}
 }
 
-func TestEnsureDNSDir(t *testing.T) {
+func TestEnsureSkeleton(t *testing.T) {
 	dir := t.TempDir()
 	pp := dataPaths(dir)
 
-	if err := ensureDNSDir(pp, -1); err != nil {
+	if err := ensureSkeleton(dir); err != nil {
 		t.Fatal(err)
 	}
-	// 0750, not 0710: --hostsdir must list this directory, not just
-	// traverse into it, or dnsmasq can't set up its inotify watch at all.
-	fi, err := os.Stat(pp.DNSDir)
-	if err != nil || fi.Mode().Perm() != 0o750 {
-		t.Fatalf("dns dir mode = %v err=%v, want 0750", fi, err)
-	}
-	for _, f := range []string{pp.CertsHosts, pp.CustomHosts} {
-		fi, err := os.Stat(f)
-		if err != nil || fi.Mode().Perm() != 0o640 {
-			t.Fatalf("%s mode = %v err=%v, want 0640", f, fi, err)
+	for path, want := range map[string]os.FileMode{
+		dir:            modeDataDir,
+		pp.PKIDir:      modePKIDir,
+		pp.LogsDir:     modeLogsDir,
+		pp.DNSDir:      modeDNSDir,
+		pp.CertsHosts:  modeDNSFile,
+		pp.CustomHosts: modeDNSFile,
+	} {
+		fi, err := os.Stat(path)
+		if err != nil || fi.Mode().Perm() != want {
+			t.Fatalf("%s mode = %v err=%v, want %o", path, fi, err, want)
 		}
 	}
 
@@ -1008,12 +1012,24 @@ func TestEnsureDNSDir(t *testing.T) {
 	if err := os.WriteFile(pp.CustomHosts, []byte("10.8.0.99 pihole\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureDNSDir(pp, -1); err != nil {
+	if err := ensureSkeleton(dir); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(pp.CustomHosts)
 	if err != nil || string(got) != "10.8.0.99 pihole\n" {
 		t.Fatalf("custom.hosts clobbered on re-run: got %q err=%v", got, err)
+	}
+
+	// a pre-existing dataDir at the wrong mode must still be repaired —
+	// MkdirAll alone is a no-op here, only the explicit Chmod fixes it.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSkeleton(dir); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != modeDataDir {
+		t.Fatalf("dataDir mode after repair = %v err=%v, want %o", fi, err, modeDataDir)
 	}
 }
 
@@ -1063,9 +1079,11 @@ func TestRefreshCertsHostsCLI(t *testing.T) {
 	if r := run(t, env, "init", "-server-cn", "ovcp.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
+	// init already lays out the whole skeleton, so certs.hosts exists —
+	// empty — before any cert changes, not just at the first `issue`.
 	certsHosts := filepath.Join(dataDir(env), "dns", "certs.hosts")
-	if _, err := os.Stat(certsHosts); !os.IsNotExist(err) {
-		t.Fatalf("certs.hosts must not exist before any cert changes, err=%v", err)
+	if got, err := os.ReadFile(certsHosts); err != nil || len(got) != 0 {
+		t.Fatalf("certs.hosts before any cert changes: content=%q err=%v, want empty", got, err)
 	}
 
 	if r := run(t, env, "issue", "-cn", "alice"); r.code != 0 {
@@ -1085,7 +1103,7 @@ func TestRecordCommand(t *testing.T) {
 		t.Fatalf("init: %+v", r)
 	}
 
-	// before anything else runs, list must still work (ensureDNSDir creates
+	// before anything else runs, list must still work (ensureSkeleton creates
 	// empty files on first touch) and report empty content for both sections.
 	r := run(t, env, "record", "list")
 	if r.code != 0 || !strings.Contains(r.stdout, "Certificate records:") || !strings.Contains(r.stdout, "Custom records:") {
@@ -1124,5 +1142,28 @@ func TestRecordCommand(t *testing.T) {
 	r = run(t, env, "record", "list")
 	if !strings.Contains(r.stdout, "10.8.0.50 pihole") {
 		t.Fatalf("record list should show the edited custom entry: %+v", r)
+	}
+	// list must show every cert (not just currently-connected ones), with
+	// its DNS status — the whole point of this command over a raw dump.
+	if !strings.Contains(r.stdout, "recordtest") || !strings.Contains(r.stdout, "included") {
+		t.Fatalf("record list should show recordtest as included: %+v", r)
+	}
+
+	rj := run(t, withEnv(env, "OVCP_JSON=1"), "record", "list")
+	var out recordListOut
+	if err := json.Unmarshal([]byte(rj.stdout), &out); err != nil {
+		t.Fatalf("record list -json: %v (%+v)", err, rj)
+	}
+	var found bool
+	for _, c := range out.Certs {
+		if c.CN == "recordtest" {
+			found = c.IncludeDNS
+		}
+	}
+	if !found {
+		t.Fatalf("record list -json certs = %+v, want recordtest included", out.Certs)
+	}
+	if !strings.Contains(out.Custom, "10.8.0.50 pihole") {
+		t.Fatalf("record list -json custom = %q, want the edited entry", out.Custom)
 	}
 }

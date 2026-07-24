@@ -83,7 +83,7 @@ var commands = []command{
 	{name: "kill", usage: "-cn NAME   disconnect client", run: cmdKill},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status   manage/inspect the openvpn worker", sub: vpnOps, run: procCmd("vpn", vpnOps, "")},
 	{name: "dns", usage: "start|stop|restart|status   manage/inspect the dnsmasq worker", sub: dnsOps, run: procCmd("dns", dnsOps, "dns-")},
-	{name: "record", usage: "list | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
+	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
 	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
@@ -338,6 +338,39 @@ type certOut struct {
 	NotAfter time.Time `json:"expires"`
 }
 
+// coloredStatus is `list`/`record list`'s shared "STATUS  " text cell.
+func coloredStatus(status string) string {
+	st := fmt.Sprintf("%-8s", status) // pad first: color codes must not count toward width
+	switch status {
+	case "REVOKED", "expired":
+		return red(st)
+	case "expiring":
+		return yellow(st)
+	case "valid":
+		return green(st)
+	}
+	return st
+}
+
+// filterSortCerts applies `list`/`record list`'s shared -status/-kind
+// filters and -sort/-desc ordering.
+func filterSortCerts(certs []store.Cert, status, kind, sortBy string, desc bool) ([]store.Cert, error) {
+	var out []store.Cert
+	for _, c := range certs {
+		if status == "active" && c.RevokedAt != nil {
+			continue
+		}
+		if status == "revoked" && c.RevokedAt == nil {
+			continue
+		}
+		if kind != "all" && c.Kind != kind {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, sortByFlag(out, certSortGetters, sortBy, desc)
+}
+
 func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 	status := fs.String("status", "all", "all|active|revoked")
 	kind := fs.String("kind", "all", "all|client|server")
@@ -348,37 +381,16 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		certs, err := s.ListCerts()
 		die(err)
-		var out []store.Cert
-		for _, c := range certs {
-			if *status == "active" && c.RevokedAt != nil {
-				continue
-			}
-			if *status == "revoked" && c.RevokedAt == nil {
-				continue
-			}
-			if *kind != "all" && c.Kind != *kind {
-				continue
-			}
-			out = append(out, c)
-		}
-		die(sortByFlag(out, certSortGetters, *sortBy, *desc))
+		out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
+		die(err)
 		rows := []certOut{}
 		for _, c := range out {
 			rows = append(rows, certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter})
 		}
 		output(rows, func(rows []certOut) {
 			for _, c := range rows {
-				st := fmt.Sprintf("%-8s", c.Status) // pad first: color codes must not count toward width
-				switch c.Status {
-				case "REVOKED", "expired":
-					st = red(st)
-				case "expiring":
-					st = yellow(st)
-				case "valid":
-					st = green(st)
-				}
 				fmt.Printf("%s %-10s %-24s expires %s  %s\n",
-					st, c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
+					coloredStatus(c.Status), c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
 			}
 		})
 	}
@@ -468,6 +480,8 @@ type exportOut struct {
 }
 
 func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
+	skeleton := fs.Bool("skeleton", false,
+		"create/repair the data directory and permissions only; skip CA/admin/server-cert setup. Safe to re-run anytime.")
 	caCN := fs.String("ca-cn", "OVCP CA", "CA common name")
 	serverCN := fs.String("server-cn", "", "server cert CN / public hostname (required)")
 	years := fs.Int("ca-years", 10, "CA validity")
@@ -475,6 +489,11 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 	admin := fs.String("admin", "admin", "initial admin username ('' to skip)")
 	mgmt := fs.String("mgmt", mgmtSock(), "mgmt socket")
 	return func(ctx *cliContext) {
+		if *skeleton {
+			die(ensureSkeleton(ctx.dataDir))
+			output(msg("data directory ready: %s", ctx.dataDir), printMsg)
+			return
+		}
 		if *serverCN == "" {
 			die(fmt.Errorf("-server-cn required (public hostname clients connect to)"))
 		}
@@ -571,7 +590,9 @@ func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
 	mgmt := fs.String("mgmt", mgmtSock(), "mgmt socket")
 	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
 	return func(ctx *cliContext) {
-		runServe(ctx.dataDir, *listen, *mgmt, *ctrl, ctx.p)
+		s := ctx.openStore()
+		defer s.Close()
+		runServe(ctx.dataDir, *listen, *mgmt, *ctrl, ctx.p, s)
 	}
 }
 
@@ -672,16 +693,36 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 		op, rest := opArg(fs, "record", recordOps)
 		pp := dataPaths(ctx.dataDir)
 		gid := dnsGID(dnsRunAsGroup())
-		if err := ensureDNSDir(pp, gid); err != nil {
-			die(err)
-		}
+		ctx.openStore().Close() // guarantees dns/ (and everything else) exists before any op below touches it
 		switch op {
 		case "list":
-			certsData, _ := os.ReadFile(pp.CertsHosts)
+			lfs := newFlags("record list")
+			status := lfs.String("status", "all", "all|active|revoked")
+			kind := lfs.String("kind", "all", "all|client|server")
+			sortBy := lfs.String("sort", "", "cn|kind|expiry|serial (default: issued order)")
+			desc := lfs.Bool("desc", false, "reverse sort order")
+			lfs.Parse(rest)
+			s := ctx.openStore()
+			certs, err := s.ListCerts()
+			s.Close()
+			die(err)
+			out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
+			die(err)
 			customData, _ := os.ReadFile(pp.CustomHosts)
-			output(recordListOut{string(certsData), string(customData)}, func(o recordListOut) {
+			rows := []recordOut{}
+			for _, c := range out {
+				rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS})
+			}
+			output(recordListOut{rows, string(customData)}, func(o recordListOut) {
 				fmt.Println("Certificate records:")
-				fmt.Print(o.Certs)
+				for _, r := range o.Certs {
+					dns := "excluded"
+					if r.IncludeDNS {
+						dns = green("included")
+					}
+					fmt.Printf("%s %-10s %-24s expires %s  %-8s  %s\n",
+						coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial)
+				}
 				fmt.Println("Custom records:")
 				fmt.Print(o.Custom)
 			})
@@ -729,8 +770,15 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// recordOut is certOut plus the one field `list -json` needs beyond it.
+type recordOut struct {
+	certOut
+	IncludeDNS bool `json:"includeDNS"`
+}
+
 type recordListOut struct {
-	Certs, Custom string
+	Certs  []recordOut `json:"certs"`
+	Custom string      `json:"custom"`
 }
 
 // activeCertByCN finds cn's currently-active (non-revoked) cert — the store

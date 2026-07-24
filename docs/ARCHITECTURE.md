@@ -106,6 +106,15 @@ sandboxes the whole process (`ProtectSystem=strict`, `NoNewPrivileges`,
 File modes, capability requirements, and container privilege flags are
 documented in `man ovcp`, `PRIVILEGES`.
 
+`$OVCP_DATA`'s own directory tree (the root, `pki/`, `logs/`, `dns/`) has
+exactly one owner: `cmd/ovcp`'s `ensureSkeleton`. `internal/store`,
+`internal/pki`, and `internal/controller` no longer create or `chmod` their
+own directories — they trust the tree already exists, because every
+stateful entry point (`cliContext.openStore`, `runServe`) calls
+`ensureSkeleton` first. It's idempotent and cheap, so it runs on every
+invocation rather than once at install time; `ovcp init -skeleton` exposes
+it directly, for packaging scripts and as a permissions-repair command.
+
 ## Data boundaries
 
 Three storage locations, three different exposure levels:

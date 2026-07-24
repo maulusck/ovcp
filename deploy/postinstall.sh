@@ -1,12 +1,9 @@
 #!/bin/sh
-# ovcp runs as root and owns the data dir outright (PKI keys are 0600 root:root).
-# Honors OVCP_DATA if the installer set it; matches selinux.sh's fallback.
+# ovcp owns the data dir outright; `init -skeleton` is the one place that
+# knows its layout/permissions. Honors OVCP_DATA if the installer set it.
 set -e
 DATA="${OVCP_DATA:-/var/lib/ovcp}"
-mkdir -p "$DATA/logs"
-chown root:root "$DATA"
-chmod 700 "$DATA"
-chmod 700 "$DATA/logs"
+OVCP_DATA="$DATA" ovcp init -skeleton
 # logrotate/log-shippers expect /var/log; symlink instead of duplicating files.
 ln -sfn "$DATA/logs" /var/log/ovcp
 # apk package is shared with Alpine (OpenRC) but OpenWrt runs procd — swap

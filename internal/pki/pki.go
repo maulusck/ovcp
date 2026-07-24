@@ -52,10 +52,6 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 	if _, err := os.Stat(p.caCertPath()); err == nil {
 		return ErrCAExists
 	}
-	// 0701 not 0700: openvpn drops privileges and needs traversal to re-stat crl.pem.
-	if err := os.MkdirAll(p.Dir, 0o701); err != nil {
-		return err
-	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err

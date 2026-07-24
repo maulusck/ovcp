@@ -9,9 +9,7 @@ USE_PROCD=1
 OVCP_DATA="${OVCP_DATA:-/var/lib/ovcp}"
 
 start_service() {
-	mkdir -p "$OVCP_DATA/logs"
-	chown root:root "$OVCP_DATA" "$OVCP_DATA/logs"
-	chmod 700 "$OVCP_DATA" "$OVCP_DATA/logs"
+	/usr/bin/ovcp init -skeleton
 
 	procd_open_instance
 	procd_set_param command /usr/bin/ovcp serve

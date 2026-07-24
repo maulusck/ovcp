@@ -17,6 +17,7 @@ const pass = "correct horse battery staple"
 func newInstall(t *testing.T) (dir string, s *store.Store) {
 	t.Helper()
 	dir = t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "pki"), 0o701) // InitCA trusts the caller for this, same as ensureSkeleton in production
 	p := pki.New(filepath.Join(dir, "pki"))
 	if err := p.InitCA("Test CA", 1, []byte(pass)); err != nil {
 		t.Fatal(err)
