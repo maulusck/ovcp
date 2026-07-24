@@ -229,10 +229,17 @@ podman builder prune    # or: docker builder prune
 ## Packages
 
 ```sh
-make deb                     # native host arch
-make deb TARGET=arm64        # cross-compile the binary first, then package it (glibc: Debian/Fedora/Arch bases)
-make apk TARGET=riscv64-musl # musl: Alpine/OpenWrt bases
+make deb                # native host arch
+make deb TARGET=arm64   # cross-compile the binary first, then package it (glibc: Debian/Fedora/Arch bases)
+make apk                # Alpine/OpenWrt are musl-only; apk forces TARGET to <hostarch>-musl on its own
+make apk TARGET=riscv64-musl # cross-build for a different musl arch instead
 ```
+
+`apk` always builds a musl binary, even bare with no `TARGET` at all and even
+alongside other formats in one call (`make deb rpm apk`) — Alpine/OpenWrt
+never get a glibc binary just because `TARGET` defaulted to `host` for the
+others. An explicit `TARGET` is still honored as given, musl or not (with a
+warning if it isn't musl).
 
 `nfpm` builds `.deb`, `.rpm`, `.apk`, and Arch packages from a single
 manifest ([`deploy/nfpm.yaml`](../deploy/nfpm.yaml)): the binary, man page,

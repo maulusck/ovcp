@@ -40,6 +40,16 @@ LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.buildTarget=$(TARGET)
 # builds need binfmt/QEMU registered on this host, like any buildx cross build.
 PLATFORM := linux/$(or $(GOARCH),$(HOSTARCH))$(if $(GOARM),/v$(GOARM))
 
+# apk (Alpine/OpenWrt) is musl-only: force it unless TARGET was actually
+# named on the command line - so `make deb rpm apk` in one call doesn't
+# silently ship a glibc .apk just because TARGET defaulted to host for the
+# other formats. An explicit TARGET (even a non-musl one) is still honored.
+ifeq ($(origin TARGET),command line)
+APK_TARGET := $(TARGET)
+else
+APK_TARGET := $(HOSTARCH)-musl
+endif
+
 .PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
 
 release: build completions ## UI + binary + shell completions
@@ -68,7 +78,15 @@ image: check-image ## build all-in-one container image for TARGET's arch (defaul
 check-nfpm:
 	@$(call require,nfpm,nfpm (packaging))
 
-deb rpm archlinux apk: check-nfpm release ## build package (needs nfpm; TARGET= to cross-build first, see build)
+deb rpm archlinux: check-nfpm release ## build package (needs nfpm; TARGET= to cross-build first, see build)
+	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
+
+apk: check-nfpm ## build Alpine/OpenWrt package (needs nfpm; forces TARGET to musl unless you set one yourself)
+	@case "$(APK_TARGET)" in \
+	  *-musl) test "$(APK_TARGET)" = "$(TARGET)" || echo "building apk for TARGET=$(APK_TARGET)" ;; \
+	  *) echo "warning: TARGET=$(APK_TARGET) is not -musl; Alpine/OpenWrt are musl-only, this .apk likely won't run there" >&2 ;; \
+	esac
+	$(MAKE) TARGET=$(APK_TARGET) release
 	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
 
 help: ## show targets and variables
