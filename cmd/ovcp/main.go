@@ -305,8 +305,8 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	// runs independently of the UI's own poll so both exist with no browser open.
 	samplerStop := make(chan struct{})
 	go srv.RunSampler(samplerStop)
-	tgStop := make(chan struct{})
-	go tg.RunExpirySweeper(tgStop)
+	expiryStop := make(chan struct{})
+	go runExpirySweepTicker(s, p, tg, expiryStop)
 	logRotateStop := make(chan struct{})
 	go runLogRotateTicker(s, dataDir, logRotateStop)
 
@@ -314,7 +314,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	close(samplerStop)
-	close(tgStop)
+	close(expiryStop)
 	close(logRotateStop)
 	tg.Stop()
 	ctl.Close()

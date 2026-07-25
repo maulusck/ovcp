@@ -14,10 +14,9 @@ import (
 )
 
 const (
-	keyToken  = "telegram_bot_token"
-	keyAdmin  = "telegram_admin"
-	keyChat   = "telegram_chat_id" // learned from the first authorized message
-	keyWarned = "telegram_warned_serials"
+	keyToken = "telegram_bot_token"
+	keyAdmin = "telegram_admin"
+	keyChat  = "telegram_chat_id" // learned from the first authorized message
 )
 
 // sensitive audit actions worth a push notification.
@@ -86,7 +85,21 @@ func SetAdmin(s *store.Store, admin string) error {
 	if admin == old {
 		return nil
 	}
+	warnOldAdmin(s, old)
 	return s.SetSetting(keyChat, "")
+}
+
+// warnOldAdmin best-effort notifies the chat being replaced, before it's
+// unlinked — the one line of defense against a hijacked admin reassignment.
+func warnOldAdmin(s *store.Store, old string) {
+	token, _ := s.GetSetting(keyToken)
+	chatID, err := chatIDFor(s, old)
+	if old == "" || token == "" || err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	newBot(token).sendMessage(ctx, chatID, "🚨 admin identity changed — if this wasn't you, investigate now.", nil)
 }
 
 // ConfigStatus reads token/admin presence directly from the store — no
@@ -439,7 +452,7 @@ func (p *Poller) Notify(text string) {
 		slog.Debug("telegram: notify skipped, not configured")
 		return
 	}
-	chatID, err := p.chatID(admin)
+	chatID, err := chatIDFor(p.s, admin)
 	if err != nil {
 		// admin is a @username and hasn't messaged the bot yet — visible at
 		// Warn, not Debug, since this silently swallows every push otherwise.
@@ -451,11 +464,13 @@ func (p *Poller) Notify(text string) {
 	newBot(token).sendMessage(ctx, chatID, text, nil)
 }
 
-func (p *Poller) chatID(admin string) (int64, error) {
+// chatIDFor is a free function, not a Poller method — SetAdmin needs it too,
+// with no Poller instance necessarily around at that call site.
+func chatIDFor(s *store.Store, admin string) (int64, error) {
 	if id, err := strconv.ParseInt(admin, 10, 64); err == nil {
 		return id, nil
 	}
-	cached, _ := p.s.GetSetting(keyChat)
+	cached, _ := s.GetSetting(keyChat)
 	if cached == "" {
 		return 0, fmt.Errorf("telegram: no chat linked yet")
 	}

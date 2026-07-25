@@ -545,13 +545,19 @@ messages the bot gets a 403 reply and nothing else.
 and whether the chat is linked yet (a \fB@username\fR admin only links once
 they've messaged the bot; re\-saving the same token or admin never unlinks
 it) \(en never the token itself \(en same values as \fBGET\fR/\fBPUT
-/api/telegram/config\fR (web UI).
+/api/telegram/config\fR (web UI). Changing \fB\-admin\fR to a different
+identity best\-effort warns the chat being replaced first, before it's
+unlinked \(en the one defense against a hijacked reassignment; changing
+\fB\-token\fR has no equivalent, an already\-leaked token grants that access
+regardless.
 \fBstart\fR/\fBstop\fR/\fBrestart\fR/\fBstatus\fR drive the poller inside a
 running \fBserve\fR over the control socket (see \fBOVCP_CTRL_SOCK\fR),
 same as \fBvpn\fR; the poller also auto\-starts with \fBserve\fR if a token
 is already set. Once linked, the bot pushes notifications for revoke,
-user add/del, CA rotate, a cert entering its 30\-day expiry window (once
-per cert), and openvpn/dnsmasq giving up auto\-restart after crash\-looping;
+user add/del, CA rotate, a cert (client, server, or the CA itself) entering
+its 30\-day expiry window (once per cert; also logged at Warn in
+\fIovcp.log\fR regardless of Telegram config), and openvpn/dnsmasq giving up
+auto\-restart after crash\-looping;
 \fB/status\fR, \fB/menu\fR (openvpn Start/Stop/Restart/Reconnect), and
 \fB/dns\fR (dnsmasq Start/Stop/Restart, same confirm step on Stop/Restart)
 are the only commands it accepts \(en revoke, user management, CA

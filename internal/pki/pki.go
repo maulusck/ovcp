@@ -92,6 +92,15 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 // CACertPEM returns the CA certificate (public; no passphrase needed).
 func (p *PKI) CACertPEM() ([]byte, error) { return os.ReadFile(p.caCertPath()) }
 
+// CACert parses it — public, no passphrase needed, unlike loadCA.
+func (p *PKI) CACert() (*x509.Certificate, error) {
+	certPEM, err := p.CACertPEM()
+	if err != nil {
+		return nil, err
+	}
+	return parseCertPEM(certPEM)
+}
+
 func (p *PKI) loadCA(passphrase []byte) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	certPEM, err := p.CACertPEM()
 	if err != nil {
