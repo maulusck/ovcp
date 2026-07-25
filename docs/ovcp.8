@@ -15,8 +15,9 @@ is a single static binary that manages one OpenVPN server: a built\-in
 certificate authority (no easy\-rsa), client profile export, server
 configuration, and a web admin UI. It talks to the running
 .BR openvpn (8)
-process over its management \fIunix socket\fR (status and disconnects) and
-owns everything else through files in its data directory.
+process over its management \fIunix socket\fR (disconnects only \(en
+connected\-client status is read from its periodic status file instead, see
+\fBFILES\fR) and owns everything else through files in its data directory.
 .B ovcp
 runs as root, is the sole owner of the PKI and configuration, and starts
 openvpn itself as a reaped foreground child \(en the same on the host, under
@@ -411,6 +412,35 @@ and
 control whether a certificate resolves while connected (default:
 included), mirroring \fBuser enable|disable\fR.
 .TP
+.B logs config get
+.TQ
+.B logs config set [\fB\-enabled\fR on|off] [\fB\-retention\-days\fR \fIN\fR] [\fB\-keep\-uncompressed\fR \fIN\fR]
+.TQ
+.B logs rotate
+.TQ
+.B logs status
+Manage rotation of \fIopenvpn.log\fR/\fIovcp.log\fR/\fIdnsmasq.log\fR (see
+\fBFILES\fR): internal copytruncate, safe with the worker's already\-open
+handle, no reopen or restart needed. Runs once a day by default while
+\fBserve\fR is up.
+.B config set \-enabled\fR
+(default on) toggles that daily pass \(en turn it off to hand rotation to
+an external \fBlogrotate\fR instead (see \fI/var/log/ovcp\fR in
+\fBFILES\fR).
+.B \-retention\-days
+(default 14, \fB0\fR keeps forever) deletes rotated generations older than
+that;
+.B \-keep\-uncompressed
+(default 2) gzips anything older than the newest N. Stored, like
+\fBdns block\-internet\fR, not an env var.
+.B rotate
+runs one pass immediately \(en point an external cron at this if
+\fB\-enabled\fR is off \(en and works whether or not \fBserve\fR is
+running, same as \fBrecord\fR's CLI\-side refresh.
+.B status
+prints each source's current size, generation count, and oldest/newest
+rotation timestamp.
+.TP
 .B user add \fB\-name\fR \fINAME\fR [\fB\-role\fR admin|operator|readonly]
 .TQ
 .B user list [\fB\-sort\fR username|role|created] [\fB\-desc\fR]
@@ -672,6 +702,11 @@ the management socket. This is a \fIseparate\fR socket from
 the other; pass both flags (or set both env vars) to run \fBserve\fR
 entirely out of a non\-root\-writable directory.
 .TP
+.B OVCP_STATUS_INTERVAL
+Seconds between openvpn rewriting \fI/run/ovcp/status\fR (see \fBFILES\fR)
+and how often the web UI polls it (default \fB3\fR, clamped to 1\-60).
+Invalid values fall back to the default with a logged warning.
+.TP
 .B OVCP_SERVER_CN
 Default client \fBremote\fR for \fBcertificate export\fR and CN for the
 admin UI certificate (falls back to the VPN server certificate's CN).
@@ -779,17 +814,20 @@ stored in the database.
 Self\-signed certificate for the admin UI.
 .TP
 .I $OVCP_DATA/logs/openvpn.log
-openvpn's stdout/stderr, appended across restarts.
+openvpn's stdout/stderr, appended across restarts. Rotated internally by
+default \(en see \fBlogs\fR in \fBCOMMANDS\fR.
 .TP
 .I $OVCP_DATA/logs/ovcp.log
 ovcp's own log, mirrored to stderr/journal. \fBkey=value\fR text by
 default, or one JSON object per line with \fB\-json\fR (see \fBOPTIONS\fR).
-.TP
-.I $OVCP_DATA/logs/status.log
-openvpn's periodic status dump (connected clients); not the audit log.
+Rotated the same way as \fIopenvpn.log\fR.
 .TP
 .I $OVCP_DATA/logs/dnsmasq.log
-dnsmasq's stdout/stderr, appended across restarts.
+dnsmasq's stdout/stderr, appended across restarts. Rotated the same way.
+.TP
+.I $OVCP_DATA/logs/*.log\-\fIYYYYMMDDThhmmssZ\fR[.gz]
+Rotated generations (see \fBlogs\fR): plain text for the newest few, gzip
+beyond that, deleted past the configured retention.
 .TP
 .I $OVCP_DATA/dns/certs.hosts
 One line per connected, included certificate: server always, clients
@@ -807,14 +845,20 @@ audit trail and a \fIstatus.json\fR snapshot, unencrypted (unlike
 not this button.
 .TP
 .I /var/log/ovcp
-Symlink to \fI$OVCP_DATA/logs\fR (package/container installs), for
-logrotate and log\-shipper discovery.
+Symlink to \fI$OVCP_DATA/logs\fR (package/container installs), for a
+log\-shipper or an external \fBlogrotate\fR used instead of the internal one.
 .TP
 .I $OVCP_MGMT_SOCK, $OVCP_CTRL_SOCK
 OpenVPN management socket (unix only, never TCP) and ovcp's root\-only
 (0600) control socket for \fBvpn\fR/\fBdns\fR/\fBtelegram\fR lifecycle ops,
 \fBdebug\fR, and \fBstats \-follow\fR. Default to \fI/run/ovcp/mgmt.sock\fR
 and \fI/run/ovcp/control.sock\fR.
+.TP
+.I /run/ovcp/status
+openvpn's periodic connected\-clients snapshot, read by \fBstatus\fR/
+\fBstats \-follow\fR/the web UI instead of polling the mgmt socket (which
+would log a line per poll). Live state, not a log: excluded from
+\fBbackup\fR and from log rotation.
 .SH EXAMPLES
 Issue and download a profile for a phone, valid two years:
 .nf
