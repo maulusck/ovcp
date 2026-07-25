@@ -296,7 +296,6 @@
     --amber: #e619e6; --ok: #33ff66; --bad: #ff3333;
   }
   :global(*) { box-sizing: border-box; }
-  :global(p) { margin: 6px 0; } /* browser default is ~1em; too loose after a form grid */
   :global(body) {
     margin: 0; background: var(--ink); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, sans-serif;
@@ -374,7 +373,10 @@
   /* shared by Certs.svelte and Users.svelte's forms/tables */
   /* fixed-ish column width, not 1fr: a 2-field card (Stats config) shouldn't
      stretch its inputs across the whole row just because there's room. */
-  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 260px)); gap: 0 14px; }
+  /* -10px cancels the last row's label margin-bottom, which grid item
+     margins don't collapse away on their own — without this, whatever
+     follows (an error/ok line) stacks its own margin on top of it too. */
+  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 260px)); gap: 0 14px; margin-bottom: -10px; }
   :global(.req) { color: var(--bad); }
   :global(.ok) { color: var(--ok); font-size: 13px; }
   :global(.rv) { color: var(--bad); }
