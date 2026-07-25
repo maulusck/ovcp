@@ -66,12 +66,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/certs", s.wrap(auth.RoleReadonly, s.handleCertList))
 	mux.Handle("GET /api/vpn/config", s.wrap(auth.RoleReadonly, s.handleVPNConfigGet))
 	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))
-	mux.Handle("GET /api/logs/openvpn", s.wrap(auth.RoleReadonly, s.logHandler("openvpn.log")))
-	mux.Handle("GET /api/logs/ovcp", s.wrap(auth.RoleReadonly, s.logHandler("ovcp.log")))
-	mux.Handle("GET /api/logs/dnsmasq", s.wrap(auth.RoleReadonly, s.logHandler("dnsmasq.log")))
+	for _, name := range controller.LogNames {
+		mux.Handle("GET /api/logs/"+name, s.wrap(auth.RoleReadonly, s.logHandler(name+".log")))
+	}
 	mux.Handle("GET /api/logs/download", s.wrap(auth.RoleOperator, s.handleLogsDownload))
 	mux.Handle("GET /api/logs/config", s.wrap(auth.RoleReadonly, s.handleLogsConfigGet))
 	mux.Handle("PUT /api/logs/config", s.wrap(auth.RoleAdmin, s.handleLogsConfigSet))
+	mux.Handle("POST /api/logs/rotate", s.wrap(auth.RoleAdmin, s.handleLogsRotate))
 	mux.Handle("GET /api/stats/config", s.wrap(auth.RoleReadonly, s.handleStatsConfigGet))
 	mux.Handle("PUT /api/stats/config", s.wrap(auth.RoleAdmin, s.handleStatsConfigSet))
 	mux.Handle("GET /api/debug", s.wrap(auth.RoleReadonly, s.handleDebugGet))

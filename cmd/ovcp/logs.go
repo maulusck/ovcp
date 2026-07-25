@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
@@ -19,16 +20,16 @@ var (
 // (not a map) so `logs status`'s rows print in the same order every time.
 type logSource struct{ name, path string }
 
-// logSources lists the 3 flat log files rotation applies to. status (the
-// live client-list file, /run/ovcp/status) is excluded — it's rewritten in
-// place already, never grows, and isn't a log.
+// logSources builds one entry per controller.LogNames. status (the live
+// client-list file, /run/ovcp/status) is excluded — rewritten in place
+// already, never grows, and isn't a log.
 func logSources(dataDir string) []logSource {
-	pp := dataPaths(dataDir)
-	return []logSource{
-		{"openvpn", pp.OpenVPNLog},
-		{"ovcp", pp.OvcpLog},
-		{"dnsmasq", pp.DnsmasqLog},
+	ld := dataPaths(dataDir).LogsDir
+	out := make([]logSource, len(controller.LogNames))
+	for i, name := range controller.LogNames {
+		out[i] = logSource{name, filepath.Join(ld, name+".log")}
 	}
+	return out
 }
 
 // logPaths is logSources' paths alone — what RotateLogs takes.

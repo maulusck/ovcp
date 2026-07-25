@@ -168,6 +168,7 @@ func TestRBAC(t *testing.T) {
 		{"POST", "/api/dns/custom/preview"},
 		{"PUT", "/api/dns/config"},
 		{"PUT", "/api/logs/config"},
+		{"POST", "/api/logs/rotate"},
 		{"PUT", "/api/stats/config"},
 		{"PUT", "/api/telegram/config"},
 		{"POST", "/api/telegram/start"},

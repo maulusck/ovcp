@@ -14,9 +14,13 @@ import (
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 )
 
-// LogConfig is the admin-tunable rotation policy for ovcp's own 3 flat log
-// files (openvpn.log, ovcp.log, dnsmasq.log) — persisted under "log_config"
-// (see `ovcp logs config`).
+// LogNames: the flat logs rotation applies to, each name+".log" under the
+// data dir's logs/ — the one place these are spelled out; CLI, API routes,
+// and the rotate-now button all build on this, never their own copy.
+var LogNames = []string{"openvpn", "ovcp", "dnsmasq"}
+
+// LogConfig is the admin-tunable rotation policy for LogNames — persisted
+// under "log_config" (see `ovcp logs config`).
 type LogConfig struct {
 	Enabled          bool
 	RetentionDays    int

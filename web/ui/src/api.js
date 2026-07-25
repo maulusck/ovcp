@@ -113,3 +113,10 @@ export function toggleSearch(search) {
 export function autofocus(node) {
   node.focus()
 }
+
+// flash sets a message state then clears it after ms — the one place every
+// err/ok line's auto-dismiss timing lives, paired with <Msg> for the fade.
+export function flash(set, value, ms = 5000) {
+  set(value)
+  if (value) setTimeout(() => set(''), ms)
+}

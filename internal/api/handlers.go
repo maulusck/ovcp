@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -828,6 +829,22 @@ func (s *Server) handleLogsConfigSet(w http.ResponseWriter, r *http.Request, u *
 	}
 	s.Store.Audit(u.Username, "log_config_change", "")
 	jsonOK(w, cfg)
+}
+
+// handleLogsRotate is `ovcp logs rotate`'s API twin — same RotateLogs call.
+func (s *Server) handleLogsRotate(w http.ResponseWriter, r *http.Request, u *store.User) {
+	dir := filepath.Join(s.DataDir, "logs")
+	paths := make([]string, len(controller.LogNames))
+	for i, name := range controller.LogNames {
+		paths[i] = filepath.Join(dir, name+".log")
+	}
+	cfg := store.LoadJSON(s.Store, "log_config", controller.DefaultLogConfig())
+	if err := controller.RotateLogs(paths, cfg); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "log_rotate", "")
+	jsonOK(w, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleStatsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {

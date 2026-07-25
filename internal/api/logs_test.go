@@ -98,6 +98,27 @@ func TestLogEndpoints(t *testing.T) {
 	}
 }
 
+// TestLogsRotateEndpoint is `ovcp logs rotate`'s API twin — same copytruncate.
+func TestLogsRotateEndpoint(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	dir := filepath.Join(e.dir, "logs")
+	os.MkdirAll(dir, 0o750)
+	os.WriteFile(filepath.Join(dir, "ovcp.log"), []byte("hello\n"), 0o644)
+
+	r := e.req("POST", "/api/logs/rotate", "{}", true)
+	if r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "ovcp.log")); len(got) != 0 {
+		t.Fatalf("ovcp.log should be truncated after rotate, got %q", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if !slices.ContainsFunc(entries, func(d os.DirEntry) bool { return strings.HasPrefix(d.Name(), "ovcp.log-") }) {
+		t.Fatalf("want a rotated ovcp.log-<timestamp>, got %v", entries)
+	}
+}
+
 func TestLogsDownloadRequiresOperator(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
