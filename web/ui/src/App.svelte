@@ -369,9 +369,9 @@
     background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer;
   }
   :global(.th-sort:hover) { color: var(--text); }
-  /* shared by Certs/Settings/Users' forms — capped, not 1fr, so a 2-field
-     card (Stats config) doesn't stretch its inputs to fill a wide row. */
-  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 190px)); gap: 0 14px; }
+  /* shared by Certs/Settings/Users' forms — auto-fit collapses unused tracks,
+     so populated ones share the row's width instead of a hardcoded cap. */
+  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0 14px; }
   :global(.req) { color: var(--bad); }
   /* one message-line template — err/ok differ only in color, both block-level
      so they can never land on the same line even if both were shown at once. */
@@ -470,6 +470,7 @@
   @media (max-width: 700px) {
     header { padding: 8px 12px; gap: 10px; }
     main { padding: 12px; }
+    :global(.grid) { grid-template-columns: 1fr; } /* auto-fit alone could still pack 2 narrow columns here */
     .brand :global(.glyph), .brand strong, .acct-name, .avatar, .pill-text { display: none; } /* status dot, role pill still identify things */
     nav { display: none; }
     .nav-mobile, .theme-mobile { display: block; position: relative; }
