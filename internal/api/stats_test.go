@@ -11,7 +11,8 @@ import (
 // untouched and must not panic — same "not an error" tolerance the rest of
 // this package gives an unreachable mgmt socket (see TestStatusVPNDown).
 func TestSamplerTickSkipsOnMgmtDown(t *testing.T) {
-	srv := &Server{Mgmt: controller.NewClient(filepath.Join(t.TempDir(), "no.sock"))}
+	dir := t.TempDir()
+	srv := &Server{Mgmt: controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")), VPN: &fakeVPN{}}
 	prev := map[string]controller.VPNClient{"alice": {CN: "alice"}}
 
 	got := srv.samplerTick(true, prev)

@@ -49,9 +49,12 @@ func (s *Server) samplerTick(sampleStats bool, prev map[string]controller.VPNCli
 		}
 	}()
 
+	if s.VPN.Pid() == 0 {
+		return prev // openvpn not running; skip this tick, not an error
+	}
 	cur, err := s.Mgmt.Status()
 	if err != nil {
-		return prev // VPN down/restarting; skip this tick, not an error
+		return prev // status file not ready yet, or a torn read; skip this tick, not an error
 	}
 	if err := s.RefreshCertsHosts(cur); err != nil {
 		slog.Warn("certs.hosts refresh failed", "err", err)

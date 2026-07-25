@@ -54,10 +54,10 @@ func setup(t *testing.T) *env {
 	s.AddUser("viewer", h2, "readonly")
 	os.MkdirAll(filepath.Join(dir, "dns"), 0o750)
 	srv := &Server{Store: s, Auth: a, PKI: p,
-		Mgmt:            controller.NewClient(filepath.Join(dir, "no.sock")),
+		Mgmt:            controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")),
 		VPN:             &fakeVPN{},
 		DNS:             &fakeVPN{},
-		Telegram:        telegram.New(s, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"))),
+		Telegram:        telegram.New(s, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log"))),
 		DataDir:         dir,
 		ConfigPath:      filepath.Join(dir, "server.conf"),
 		TLSCrypt:        filepath.Join(dir, "pki", "tls-crypt.key"),

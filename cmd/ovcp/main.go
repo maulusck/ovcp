@@ -199,7 +199,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	dnsVersion, dnsPath, _ := controller.DnsmasqVersion() // same advisory-only treatment
 	dnsGid := dnsGID(dnsRunAsGroup())
 	dnsSup := newDNSSupervisor(pp, dnsPath, s)
-	mgmt := controller.NewClient(sock)
+	mgmt := controller.NewClient(sock, statusPath(sock))
 	tg := telegram.New(s, sup, mgmt)
 	s.OnAudit(tg.OnAudit)
 	srv := &api.Server{
@@ -291,12 +291,15 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	go srv.RunSampler(samplerStop)
 	tgStop := make(chan struct{})
 	go tg.RunExpirySweeper(tgStop)
+	logRotateStop := make(chan struct{})
+	go runLogRotateTicker(s, dataDir, logRotateStop)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	close(samplerStop)
 	close(tgStop)
+	close(logRotateStop)
 	tg.Stop()
 	ctl.Close()
 	if err := sup.Stop(); err != nil {
@@ -429,7 +432,7 @@ func refreshCertsHostsCLI(dataDir string, s *store.Store) {
 type paths struct {
 	PKIDir                                                   string
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, ServerConf string
-	LogsDir, OpenVPNLog, OvcpLog, StatusLog, DnsmasqLog      string
+	LogsDir, OpenVPNLog, OvcpLog, DnsmasqLog                 string
 	DNSDir, CertsHosts, CustomHosts                          string
 }
 
@@ -446,7 +449,6 @@ func dataPaths(dataDir string) paths {
 		LogsDir:     ld,
 		OpenVPNLog:  filepath.Join(ld, "openvpn.log"),
 		OvcpLog:     filepath.Join(ld, "ovcp.log"),
-		StatusLog:   filepath.Join(ld, "status.log"),
 		DnsmasqLog:  filepath.Join(ld, "dnsmasq.log"),
 		DNSDir:      dd,
 		CertsHosts:  filepath.Join(dd, "certs.hosts"),
@@ -524,8 +526,33 @@ func fillPaths(cfg *ovpnconf.Config, dataDir, sock string) {
 	cfg.CACert, cfg.ServerCert, cfg.ServerKey = pp.CACert, pp.ServerCert, pp.ServerKey
 	cfg.CRL, cfg.TLSCrypt = pp.CRL, pp.TLSCrypt
 	cfg.MgmtSocket = sock
-	cfg.StatusLog = pp.StatusLog
+	cfg.StatusLog = statusPath(sock)
+	cfg.StatusInterval = statusInterval()
 	cfg.ServerCN = adminCertCN(dataDir)
+}
+
+// statusPath sits beside the mgmt/control sockets in /run/ovcp, not under
+// $OVCP_DATA/logs — it's live state rewritten forever, not a log, and
+// keeping it out of logs/ keeps it out of any external logrotate glob there.
+func statusPath(sock string) string {
+	return filepath.Join(filepath.Dir(sock), "status")
+}
+
+// statusInterval reads OVCP_STATUS_INTERVAL, clamped to [1,60]; unset,
+// unparseable, or out of range falls back to 3 with a warning, never a
+// hard failure — a bad env var must not stop ovcp from starting.
+func statusInterval() int {
+	const def = 3
+	v := os.Getenv("OVCP_STATUS_INTERVAL")
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 60 {
+		slog.Warn("OVCP_STATUS_INTERVAL invalid, using default", "value", v, "default", def)
+		return def
+	}
+	return n
 }
 
 // preflight verifies init artifacts exist, with an actionable error.

@@ -14,7 +14,7 @@ import (
 )
 
 func TestTailLinesMissingFile(t *testing.T) {
-	lines, err := tailLines(filepath.Join(t.TempDir(), "nope.log"), 10, nil)
+	lines, err := tailLines(filepath.Join(t.TempDir(), "nope.log"), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestTailLinesCapsAtN(t *testing.T) {
 	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	lines, err := tailLines(path, 10, nil)
+	lines, err := tailLines(path, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,29 +56,12 @@ func TestTailLinesBoundsRead(t *testing.T) {
 	}
 	f.WriteString("the tail\n")
 	f.Close()
-	lines, err := tailLines(path, 1, nil)
+	lines, err := tailLines(path, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(lines) != 1 || lines[0] != "the tail" {
 		t.Fatalf("want [\"the tail\"], got %v", lines)
-	}
-}
-
-func TestTailLinesSkip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "openvpn.log")
-	content := "2026-07-11 20:00:00 MANAGEMENT: CMD 'status 3'\n" +
-		"2026-07-11 20:00:03 TLS: Initial packet from [AF_INET]203.0.113.7:5000\n" +
-		"2026-07-11 20:00:03 MANAGEMENT: CMD 'status 3'\n"
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	lines, err := tailLines(path, 10, isStatusPollLine)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(lines) != 1 || !strings.Contains(lines[0], "TLS: Initial packet") {
-		t.Fatalf("want only the TLS line, got %v", lines)
 	}
 }
 
