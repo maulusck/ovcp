@@ -611,6 +611,9 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 
 		// 4) server.conf from defaults
 		cfg := ovpnconf.Default()
+		if _, _, ok := controller.DnsmasqVersion(); ok {
+			cfg.PushInternalDNS = true // dnsmasq present: internal names resolve out of the box
+		}
 		fillPaths(&cfg, ctx.dataDir, *mgmt)
 		raw, _ := json.Marshal(cfg)
 		die(s.SetSetting("vpn_config", string(raw)))
@@ -901,6 +904,15 @@ func cmdDNS(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// warnDNSLeak prints api.DNSLeakWarning's advisory (if any) after a vpn/dns
+// config save — same non-fatal check the web UI shows inline.
+func warnDNSLeak(s *store.Store) {
+	raw, _ := s.GetSetting("vpn_config")
+	if w := api.DNSLeakWarning(ovpnconf.Load(raw), api.LoadDNSConfig(s)); w != "" {
+		fmt.Fprintln(os.Stderr, "warning:", w)
+	}
+}
+
 func cmdDNSConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
@@ -929,6 +941,7 @@ func cmdDNSConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 			action = "on"
 		}
 		s.Audit("cli", "dns_block_internet_"+action, "")
+		warnDNSLeak(s)
 		output(cfg, func(c api.DNSConfig) {
 			fmt.Println("block-internet:", c.BlockInternet, "(restart dns to apply)")
 			fmt.Println("saved")
@@ -1067,6 +1080,7 @@ func printConfigText(c ovpnconf.Config) {
 	fmt.Println("subnet:     ", c.Subnet)
 	fmt.Println("cipher:     ", c.Cipher)
 	fmt.Println("dns:        ", strings.Join(c.DNS, ", "))
+	fmt.Println("push-internal-dns:", c.PushInternalDNS)
 	fmt.Println("routes:     ", strings.Join(c.Routes, ", "))
 	fmt.Println("redirect-gw:", c.RedirectGW)
 	if c.Extra != "" {
@@ -1084,6 +1098,7 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 	subnet := fs.String("subnet", "", "VPN subnet CIDR (unchanged if omitted)")
 	cipher := fs.String("cipher", "", "AES-256-GCM|AES-128-GCM|CHACHA20-POLY1305 (unchanged if omitted)")
 	dns := fs.String("dns", "", "comma-separated pushed DNS resolvers (unchanged if omitted)")
+	pushInternalDNS := fs.String("push-internal-dns", "", "on|off: also push the internal dnsmasq resolver, first (unchanged if omitted)")
 	routes := fs.String("routes", "", "comma-separated pushed routes, CIDR (unchanged if omitted)")
 	redirectGW := fs.String("redirect-gw", "", "on|off: route all client traffic through the VPN (unchanged if omitted)")
 	extra := fs.String("extra", "", "custom directives: comma-separated, a file via $(cat FILE), or - for $EDITOR (unchanged if omitted)")
@@ -1102,6 +1117,13 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 		}
 		if *dns != "" {
 			cfg.DNS = ovpnconf.SplitCSV(*dns)
+		}
+		if *pushInternalDNS != "" {
+			b, err := parseBoolArg(*pushInternalDNS)
+			if err != nil {
+				return cfg, fmt.Errorf("-push-internal-dns: %w", err)
+			}
+			cfg.PushInternalDNS = b
 		}
 		if *routes != "" {
 			cfg.Routes = ovpnconf.SplitCSV(*routes)
@@ -1138,6 +1160,7 @@ func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		die(s.SetSetting("vpn_config", string(enc)))
 		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
 		s.Audit("cli", "config_change", "")
+		warnDNSLeak(s)
 		output(cfg, func(c ovpnconf.Config) { fmt.Println("saved; run `ovcp vpn restart` to apply") })
 	}
 }

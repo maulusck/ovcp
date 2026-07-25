@@ -371,7 +371,9 @@
   }
   :global(.th-sort:hover) { color: var(--text); }
   /* shared by Certs.svelte and Users.svelte's forms/tables */
-  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
+  /* fixed-ish column width, not 1fr: a 2-field card (Stats config) shouldn't
+     stretch its inputs across the whole row just because there's room. */
+  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 260px)); gap: 0 14px; }
   :global(.req) { color: var(--bad); }
   :global(.ok) { color: var(--ok); font-size: 13px; }
   :global(.rv) { color: var(--bad); }

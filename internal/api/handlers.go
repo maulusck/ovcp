@@ -773,6 +773,19 @@ func LoadDNSConfig(s *store.Store) DNSConfig {
 }
 func SaveDNSConfig(s *store.Store, cfg DNSConfig) error { return store.SaveJSON(s, dnsConfigKey, cfg) }
 
+// DNSLeakWarning flags a vpn/dns config combo that can leak queries around
+// Block internet DNS — advisory only, never blocks a save. Shared by the CLI
+// and the web UI's own inline check.
+func DNSLeakWarning(vpn ovpnconf.Config, dns DNSConfig) string {
+	switch {
+	case dns.BlockInternet && len(vpn.DNS) > 0:
+		return "manual DNS entries can leak queries around Block internet DNS"
+	case dns.BlockInternet && !vpn.PushInternalDNS:
+		return "Block internet DNS has no effect unless Push internal DNS is also on"
+	}
+	return ""
+}
+
 func (s *Server) handleDNSConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	jsonOK(w, map[string]bool{"blockInternet": LoadDNSConfig(s.Store).BlockInternet})
 }

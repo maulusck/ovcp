@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/store"
 )
 
@@ -120,5 +121,23 @@ func TestWriteAtomicHosts(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 {
 		t.Fatalf("expected exactly the final file, got %v", entries)
+	}
+}
+
+// TestDNSLeakWarning covers the advisory-only cross-domain check — never an
+// error, just a heads-up when block-internet and pushed DNS contradict.
+func TestDNSLeakWarning(t *testing.T) {
+	blockOn := DNSConfig{BlockInternet: true}
+	if w := DNSLeakWarning(ovpnconf.Config{PushInternalDNS: true}, blockOn); w != "" {
+		t.Fatalf("internal-only push under block-internet should be clean, got %q", w)
+	}
+	if w := DNSLeakWarning(ovpnconf.Config{PushInternalDNS: true, DNS: []string{"1.1.1.1"}}, blockOn); w == "" {
+		t.Fatal("manual DNS alongside block-internet should warn")
+	}
+	if w := DNSLeakWarning(ovpnconf.Config{PushInternalDNS: false}, blockOn); w == "" {
+		t.Fatal("block-internet without pushing the internal resolver should warn")
+	}
+	if w := DNSLeakWarning(ovpnconf.Config{DNS: []string{"1.1.1.1"}}, DNSConfig{BlockInternet: false}); w != "" {
+		t.Fatalf("block-internet off should never warn, got %q", w)
 	}
 }

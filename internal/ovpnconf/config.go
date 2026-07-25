@@ -21,14 +21,15 @@ var ErrNoRedirect = errors.New("server doesn't redirect all traffic; nothing to 
 func (c Config) CanSplitTunnel() bool { return c.RedirectGW }
 
 type Config struct {
-	Proto      string   // udp|tcp
-	Port       int      // 1-65535
-	Subnet     string   // CIDR, e.g. 10.8.0.0/24
-	Cipher     string   // from allowedCiphers
-	DNS        []string // pushed resolvers
-	Routes     []string // pushed routes, CIDR
-	RedirectGW bool     // push redirect-gateway
-	Extra      string   // raw directives, appended verbatim; unvalidated by design
+	Proto           string   // udp|tcp
+	Port            int      // 1-65535
+	Subnet          string   // CIDR, e.g. 10.8.0.0/24
+	Cipher          string   // from allowedCiphers
+	DNS             []string // pushed resolvers (admin's own, additive)
+	PushInternalDNS bool     // also push the server's own tun IP, first — see ServerTunIP
+	Routes          []string // pushed routes, CIDR
+	RedirectGW      bool     // push redirect-gateway
+	Extra           string   // raw directives, appended verbatim; unvalidated by design
 
 	// paths (filled by the app from its data dir)
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, MgmtSocket, StatusLog string
@@ -198,6 +199,13 @@ func (c *Config) Render() []byte {
 	w("verb 3")
 	if c.RedirectGW {
 		w(`push "redirect-gateway def1 bypass-dhcp"`)
+	}
+	// internal resolver first: queries for our own hostnames must reach it
+	// before any other pushed resolver gets a chance to NXDOMAIN them.
+	if c.PushInternalDNS {
+		if ip, err := c.ServerTunIP(); err == nil {
+			w(`push "dhcp-option DNS %s"`, ip)
+		}
 	}
 	for _, d := range c.DNS {
 		w(`push "dhcp-option DNS %s"`, d)

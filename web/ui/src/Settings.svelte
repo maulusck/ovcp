@@ -70,6 +70,14 @@
   let dnsErr = $state('')
   let dnsOk = $state('')
 
+  // Advisory only, mirrors api.DNSLeakWarning — never blocks Save.
+  const dnsLeakWarning = $derived.by(() => {
+    if (!cfg || !blockInternet) return ''
+    if (dns.trim()) return 'Manual DNS entries can leak queries around Block internet DNS.'
+    if (!cfg.PushInternalDNS) return 'Block internet DNS has no effect unless Push internal DNS is also on.'
+    return ''
+  })
+
   async function loadDNS() {
     try {
       blockInternet = (await api('GET', '/dns/config')).blockInternet
@@ -228,17 +236,24 @@
             <option>CHACHA20-POLY1305</option>
           </select>
         </label>
-        <label>Push DNS (comma-separated)
-          <input bind:value={dns} placeholder="1.1.1.1, 9.9.9.9" disabled={!isAdmin} />
+        <label>Push DNS
+          <input bind:value={dns} placeholder="1.1.1.1, 9.9.9.9" title="comma-separated" disabled={!isAdmin} />
         </label>
         <label class="check">
           <input type="checkbox" bind:checked={cfg.RedirectGW} disabled={!isAdmin} />
           Route all client traffic through the VPN
         </label>
+        {#if dnsAvailable}
+          <label class="check">
+            <input type="checkbox" bind:checked={cfg.PushInternalDNS} disabled={!isAdmin} />
+            Also push internal DNS (dnsmasq), ahead of the entries above
+          </label>
+        {/if}
         <label class="wide">Custom options
           <textarea bind:value={cfg.Extra} rows="2" placeholder="e.g. client-to-client" disabled={!isAdmin}></textarea>
         </label>
       </div>
+      {#if dnsLeakWarning}<p class="err">{dnsLeakWarning}</p>{/if}
       {#if err}<p class="err">{err}</p>{/if}
       {#if ok}<p class="ok">{ok}</p>{/if}
       {#if preview}
@@ -252,7 +267,7 @@
       {/if}
       {#if isAdmin}
         <div class="row">
-          <button type="submit">Save configuration</button>
+          <button type="submit">Save</button>
           <button type="button" class="ghost" onclick={previewConfig}
             title="Show what Save would change in server.conf, without applying it">Preview</button>
           <button type="button" class="ghost" onclick={start}
@@ -289,6 +304,7 @@
           <textarea bind:value={dnsRecords} rows="6" placeholder="10.8.0.50 pihole" disabled={!isAdmin}></textarea>
         </label>
       </div>
+      {#if dnsLeakWarning}<p class="err">{dnsLeakWarning}</p>{/if}
       {#if dnsErr}<p class="err">{dnsErr}</p>{/if}
       {#if dnsOk}<p class="ok">{dnsOk}</p>{/if}
       {#if dnsPreview}
@@ -327,17 +343,17 @@
           <input type="checkbox" bind:checked={logsCfg.Enabled} disabled={!isAdmin} />
           Run daily rotation
         </label>
-        <label>Retention (days, 0 = forever)
-          <input type="number" bind:value={logsCfg.RetentionDays} min="0" disabled={!isAdmin} />
+        <label>Retention (days)
+          <input type="number" bind:value={logsCfg.RetentionDays} min="0" title="0 = keep forever" disabled={!isAdmin} />
         </label>
-        <label>Keep uncompressed (newest N rotations)
-          <input type="number" bind:value={logsCfg.KeepUncompressed} min="0" disabled={!isAdmin} />
+        <label>Keep uncompressed
+          <input type="number" bind:value={logsCfg.KeepUncompressed} min="0" title="newest N rotations stay uncompressed, gzip the rest" disabled={!isAdmin} />
         </label>
       </div>
       {#if logsErr}<p class="err">{logsErr}</p>{/if}
       {#if logsOk}<p class="ok">{logsOk}</p>{/if}
       {#if isAdmin}
-        <div class="row"><button type="submit">Save configuration</button></div>
+        <div class="row"><button type="submit">Save</button></div>
       {:else}
         <p class="muted small">Read-only: your role can view but not change settings.</p>
       {/if}
@@ -363,7 +379,7 @@
       {#if statsErr}<p class="err">{statsErr}</p>{/if}
       {#if statsOk}<p class="ok">{statsOk}</p>{/if}
       {#if isAdmin}
-        <div class="row"><button type="submit">Save configuration</button></div>
+        <div class="row"><button type="submit">Save</button></div>
       {:else}
         <p class="muted small">Read-only: your role can view but not change settings.</p>
       {/if}

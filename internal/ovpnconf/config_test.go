@@ -63,6 +63,24 @@ func TestRender(t *testing.T) {
 	}
 }
 
+// TestPushInternalDNSFirst: the internal resolver must be pushed before any
+// manual entry, so internal-name queries never reach a resolver that'll
+// NXDOMAIN them before dnsmasq gets a chance — see Render's DNS block.
+func TestPushInternalDNSFirst(t *testing.T) {
+	c := valid()
+	c.PushInternalDNS = true
+	out := string(c.Render())
+	internal := strings.Index(out, `push "dhcp-option DNS 10.8.0.1"`)
+	manual := strings.Index(out, `push "dhcp-option DNS 1.1.1.1"`)
+	if internal < 0 || manual < 0 || internal > manual {
+		t.Fatalf("want internal DNS pushed before manual entries, got:\n%s", out)
+	}
+	c.PushInternalDNS = false
+	if strings.Contains(string(c.Render()), `dhcp-option DNS 10.8.0.1`) {
+		t.Fatal("PushInternalDNS off must not push the tun IP")
+	}
+}
+
 func TestRenderExtra(t *testing.T) {
 	c := valid()
 	if strings.Contains(string(c.Render()), "custom options") {
