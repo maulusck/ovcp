@@ -44,6 +44,7 @@ type Server struct {
 	DNSGroupGID     int                  // dnsmasq's resolved drop-to group; both hosts files are chgrp'd to it
 	UI              fs.FS                // built frontend; nil = API only
 	DebugLevel      *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
+	PollInterval    time.Duration        // RunSampler's ticker; set from OVCP_STATUS_INTERVAL, same cadence OpenVPN writes its status file at
 }
 
 const (

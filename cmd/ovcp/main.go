@@ -166,7 +166,7 @@ func main() {
 	ctx := &cliContext{dataDir: *dataDir, p: pki.New(dataPaths(*dataDir).PKIDir)}
 
 	for _, c := range commands {
-		if c.name == args[0] {
+		if c.name == args[0] || c.alias == args[0] {
 			fs := newFlags(c.name)
 			// sub-op flags (user/backup/telegram) live on FlagSets created inside
 			// the closure, so they don't exist yet for -h's default printer to find.
@@ -224,6 +224,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 		CustomHostsPath: pp.CustomHosts,
 		DNSGroupGID:     dnsGid,
 		DNS:             dnsSup,
+		PollInterval:    time.Duration(statusInterval()) * time.Second,
 	}
 	srv.DefaultRemote = adminCertCN(dataDir)
 

@@ -32,6 +32,7 @@ import (
 // commands is the single source of truth dispatch, helpText, and completeArgs all read.
 type command struct {
 	name  string
+	alias string // short form accepted alongside name in dispatch/completion; "" if none
 	usage string
 	sub   []string
 	run   func(fs *flag.FlagSet) func(ctx *cliContext)
@@ -84,7 +85,7 @@ var (
 
 var commands = []command{
 	{name: "init", usage: "-server-cn HOST [-admin NAME]   one-shot setup: CA, server cert, tls-crypt, config, admin user", run: cmdInit},
-	{name: "certificate", usage: "issue|list|revoke|export|renew-server   manage certificates", sub: certOps, run: cmdCertificate},
+	{name: "certificate", alias: "cert", usage: "issue|list|revoke|export|renew-server   manage certificates", sub: certOps, run: cmdCertificate},
 	{name: "config", usage: "get|set|preview|edit   view/change openvpn server settings", sub: configOps, run: cmdConfig},
 	{name: "rotate-ca", usage: "re-encrypt the CA key under a new passphrase", run: cmdRotateCA},
 	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
@@ -143,7 +144,11 @@ func helpText() string {
 	b.WriteString("ovcp <command>\n")
 	tw := tabwriter.NewWriter(&b, 0, 4, 3, ' ', 0)
 	for _, c := range commands {
-		fmt.Fprintf(tw, "  %s\t%s\n", c.name, c.usage)
+		name := c.name
+		if c.alias != "" {
+			name += " (" + c.alias + ")"
+		}
+		fmt.Fprintf(tw, "  %s\t%s\n", name, c.usage)
 	}
 	tw.Flush()
 	b.WriteString("\n-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before\n")

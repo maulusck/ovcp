@@ -11,7 +11,7 @@ import (
 func completeArgs(words []string) []string {
 	find := func(name string) *command {
 		for i := range commands {
-			if commands[i].name == name {
+			if commands[i].name == name || commands[i].alias == name {
 				return &commands[i]
 			}
 		}

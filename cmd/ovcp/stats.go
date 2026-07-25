@@ -26,7 +26,9 @@ type statsSnapshot struct {
 func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 	cn := fs.String("cn", "", "client CN (default: global aggregate)")
 	follow := fs.Bool("follow", false, "live top-like view, via a running serve's control socket (ignores -json)")
-	interval := fs.Int("interval", 2, "poll interval in seconds, -follow only")
+	interval := new(int)
+	fs.IntVar(interval, "interval", 2, "poll interval in seconds, -follow only")
+	fs.IntVar(interval, "int", 2, "alias for -interval")
 	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket, -follow only")
 	return func(ctx *cliContext) {
 		if *follow {

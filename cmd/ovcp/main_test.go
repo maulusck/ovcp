@@ -350,6 +350,19 @@ func TestStats(t *testing.T) {
 	}
 }
 
+// TestStatsIntervalAlias covers -int as a drop-in alias for -interval: same
+// underlying var, so parsing one must be visible through the other.
+func TestStatsIntervalAlias(t *testing.T) {
+	fs := newFlags("stats")
+	cmdStats(fs)
+	if err := fs.Parse([]string{"-int", "7"}); err != nil {
+		t.Fatalf("-int should parse like -interval: %v", err)
+	}
+	if got := fs.Lookup("interval").Value.String(); got != "7" {
+		t.Fatalf("-int 7 didn't set -interval, got %q", got)
+	}
+}
+
 func TestSortByFlag(t *testing.T) {
 	type row struct{ name string }
 	rows := []row{{"charlie"}, {"alice"}, {"bob"}}

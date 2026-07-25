@@ -11,24 +11,22 @@ import (
 )
 
 const (
-	// dnsRefreshInterval drives the shared ticker; statsSampleInterval must
-	// be a whole multiple of it, since one poll now feeds both.
-	dnsRefreshInterval  = 5 * time.Second
+	// statsSampleInterval: how often traffic-history rows get written/pruned.
+	// Disconnect detection doesn't wait for this — see RunSampler.
 	statsSampleInterval = time.Minute
 	// bounds DB rows (~1440 samples) and the /api/stats payload; sessions key
 	// by CN not serial, so history survives cert revocation like the audit log does.
 	StatsRetention = 24 * time.Hour
 )
 
-// RunSampler polls VPN status on one ticker and fans it out: every tick
-// refreshes certs.hosts, every statsSampleInterval'th tick also samples
-// stats. Panics are recovered so one bad tick can't kill the daemon.
-// ponytail: CN-keyed, so a same-tick reconnect is invisible; fine for now.
+// RunSampler polls on PollInterval (OVCP_STATUS_INTERVAL): every tick
+// refreshes certs.hosts + detects disconnects, every statsSampleInterval'th
+// tick also records a traffic sample. ponytail: CN-keyed, so a same-tick reconnect is invisible.
 func (s *Server) RunSampler(stop <-chan struct{}) {
 	prev := map[string]controller.VPNClient{}
-	ticksPerSample := int(statsSampleInterval / dnsRefreshInterval)
+	ticksPerSample := max(1, int(statsSampleInterval/s.PollInterval))
 	tick := 0
-	t := time.NewTicker(dnsRefreshInterval)
+	t := time.NewTicker(s.PollInterval)
 	defer t.Stop()
 	for {
 		select {
@@ -56,17 +54,14 @@ func (s *Server) samplerTick(sampleStats bool, prev map[string]controller.VPNCli
 	if err := s.RefreshCertsHosts(cur); err != nil {
 		slog.Warn("certs.hosts refresh failed", "err", err)
 	}
-	if !sampleStats {
-		return prev
-	}
+
 	now := time.Now()
 	curByCN := make(map[string]controller.VPNClient, len(cur))
 	for _, c := range cur {
 		curByCN[c.CN] = c
-		if err := s.Store.AddClientSample(now, c.CN, c.BytesRecv, c.BytesSent); err != nil {
-			slog.Warn("stats sample write failed", "cn", c.CN, "err", err)
-		}
 	}
+	// Every tick, not gated behind sampleStats — a same-sample-window
+	// connect+disconnect must still show up here, not vanish silently.
 	for cn, was := range prev {
 		if _, stillUp := curByCN[cn]; stillUp {
 			continue
@@ -78,6 +73,15 @@ func (s *Server) samplerTick(sampleStats bool, prev map[string]controller.VPNCli
 		}
 		if err := s.Store.EndSession(sess); err != nil {
 			slog.Warn("stats session write failed", "cn", cn, "err", err)
+		}
+	}
+
+	if !sampleStats {
+		return curByCN
+	}
+	for _, c := range cur {
+		if err := s.Store.AddClientSample(now, c.CN, c.BytesRecv, c.BytesSent); err != nil {
+			slog.Warn("stats sample write failed", "cn", c.CN, "err", err)
 		}
 	}
 	if err := s.Store.PruneStats(now.Add(-StatsRetention)); err != nil {
