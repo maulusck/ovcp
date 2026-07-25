@@ -239,16 +239,18 @@
         <label>Push DNS
           <input bind:value={dns} placeholder="1.1.1.1, 9.9.9.9" title="comma-separated" disabled={!isAdmin} />
         </label>
-        <label class="check">
-          <input type="checkbox" bind:checked={cfg.RedirectGW} disabled={!isAdmin} />
-          Route all client traffic through the VPN
-        </label>
-        {#if dnsAvailable}
-          <label class="check" title="pushed ahead of the DNS entries above">
-            <input type="checkbox" bind:checked={cfg.PushInternalDNS} disabled={!isAdmin} />
-            Push internal DNS
+        <div class="check-row wide">
+          <label class="check">
+            <input type="checkbox" bind:checked={cfg.RedirectGW} disabled={!isAdmin} />
+            Route all client traffic through the VPN
           </label>
-        {/if}
+          {#if dnsAvailable}
+            <label class="check" title="pushed ahead of the DNS entries above">
+              <input type="checkbox" bind:checked={cfg.PushInternalDNS} disabled={!isAdmin} />
+              Push internal DNS
+            </label>
+          {/if}
+        </div>
         <label class="wide">Custom options
           <textarea bind:value={cfg.Extra} rows="2" placeholder="e.g. client-to-client" disabled={!isAdmin}></textarea>
         </label>

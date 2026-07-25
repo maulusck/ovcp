@@ -321,7 +321,7 @@
   :global(button.ghost.active:hover:not(:disabled)) { background: var(--amber); opacity: .85; }
   :global(button:disabled) { opacity: .45; cursor: not-allowed; }
   :global(input), :global(select) {
-    font: inherit; color: var(--text); background: var(--ink);
+    font: inherit; line-height: 1.2; color: var(--text); background: var(--ink);
     border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; width: 100%;
   }
   :global(input:hover), :global(select:hover) { border-color: var(--amber); }
@@ -347,7 +347,7 @@
   /* row-action buttons (Certs/Users/Dashboard) — same "operator button" family as
      Settings' Start/Stop/Restart/Backup, just shorter to fit a table row. */
   :global(td button.ghost) { padding: 4px 14px; }
-  :global(.err) { color: var(--bad); font-size: 13px; }
+  :global(.err) { color: var(--bad); font-size: 13px; margin: 4px 0; }
   :global(.muted) { color: var(--dim); }
   /* inline "Label [control]" pairs — filter dropdowns (Certs/Users), Logs tab's own options */
   :global(.poll-pick) { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; }
@@ -370,15 +370,11 @@
     background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer;
   }
   :global(.th-sort:hover) { color: var(--text); }
-  /* shared by Certs.svelte and Users.svelte's forms/tables */
-  /* fixed-ish column width, not 1fr: a 2-field card (Stats config) shouldn't
-     stretch its inputs across the whole row just because there's room. */
-  /* -10px cancels the last row's label margin-bottom, which grid item
-     margins don't collapse away on their own — without this, whatever
-     follows (an error/ok line) stacks its own margin on top of it too. */
-  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 260px)); gap: 0 14px; margin-bottom: -10px; }
+  /* shared by Certs/Settings/Users' forms — capped, not 1fr, so a 2-field
+     card (Stats config) doesn't stretch its inputs to fill a wide row. */
+  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 200px)); gap: 0 14px; }
   :global(.req) { color: var(--bad); }
-  :global(.ok) { color: var(--ok); font-size: 13px; }
+  :global(.ok) { color: var(--ok); font-size: 13px; margin: 4px 0; }
   :global(.rv) { color: var(--bad); }
   /* stacked sibling cards (Certs/Settings/Users) always get a gap, not just
      the ones a page happens to mark .form-card */
@@ -392,6 +388,9 @@
   :global(.check) { display: flex; align-items: center; gap: 8px; }
   :global(.check input) { width: auto; }
   :global(.wide) { grid-column: 1 / -1; }
+  /* groups 2+ .check labels onto their own full row instead of letting them
+     fall into the field flow; combine with .wide for the row-span. */
+  :global(.check-row) { display: flex; flex-wrap: wrap; gap: 8px 24px; }
   :global(.wide textarea) {
     width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
     background: var(--ink); color: var(--text); border: 1px solid var(--line);
