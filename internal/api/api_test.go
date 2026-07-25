@@ -57,7 +57,7 @@ func setup(t *testing.T) *env {
 		Mgmt:            controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")),
 		VPN:             &fakeVPN{},
 		DNS:             &fakeVPN{},
-		Telegram:        telegram.New(s, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log"))),
+		Telegram:        telegram.New(s, &fakeVPN{}, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log"))),
 		DataDir:         dir,
 		ConfigPath:      filepath.Join(dir, "server.conf"),
 		TLSCrypt:        filepath.Join(dir, "pki", "tls-crypt.key"),

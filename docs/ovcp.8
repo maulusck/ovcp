@@ -97,12 +97,17 @@ checked against exactly one configured Telegram identity (numeric id or
 otherwise ignored \(en for the first 3 attempts. Past that, the sender is
 blocked for the rest of the process's life: no more 403s, no API call, no
 log line. The bot's own command surface is deliberately narrow
-(\fB/status\fR, and \fB/menu\fR's Start/Stop/Restart/Reconnect, Stop and
-Restart behind a confirm step) \(en revoke, user management, CA rotation,
-config, and backup are unreachable from Telegram at any privilege.
-\fB/menu\fR's buttons call the same openvpn lifecycle methods
+(\fB/status\fR reports openvpn and dnsmasq state plus a cert\-expiry
+summary; \fB/menu\fR hands out openvpn's Start/Stop/Restart/Reconnect;
+\fB/dns\fR hands out dnsmasq's own Start/Stop/Restart \(en Stop and
+Restart always behind a confirm step, for both) \(en revoke, user
+management, CA rotation, config, and backup are unreachable from Telegram
+at any privilege. Its buttons call the same openvpn/dnsmasq lifecycle
+methods
 .B vpn
-itself does, so mashing Restart in the chat hits the same overlap guard
+and
+.B dns
+themselves use, so mashing Restart in the chat hits the same overlap guard
 described there \(en no more disruptive than doing it from the CLI.
 .SH QUICK START
 .nf
@@ -536,18 +541,21 @@ business on the command line): prompts interactively, or reads
 saving. \fB\-admin\fR takes the numeric user id or \fB@username\fR
 directly (default \fBOVCP_TELEGRAM_ADMIN\fR if set); anyone else who
 messages the bot gets a 403 reply and nothing else.
-\fBtelegram config get\fR prints whether a token is set and the current admin,
-never the token itself \(en same values as \fBGET\fR/\fBPUT
+\fBtelegram config get\fR prints whether a token is set, the current admin,
+and whether the chat is linked yet (a \fB@username\fR admin only links once
+they've messaged the bot; re\-saving the same token or admin never unlinks
+it) \(en never the token itself \(en same values as \fBGET\fR/\fBPUT
 /api/telegram/config\fR (web UI).
 \fBstart\fR/\fBstop\fR/\fBrestart\fR/\fBstatus\fR drive the poller inside a
 running \fBserve\fR over the control socket (see \fBOVCP_CTRL_SOCK\fR),
 same as \fBvpn\fR; the poller also auto\-starts with \fBserve\fR if a token
 is already set. Once linked, the bot pushes notifications for revoke,
-user add/del, CA rotate, and a cert entering its 30\-day expiry window
-(once per cert); \fB/status\fR and \fB/menu\fR (inline Start/Stop/Restart/
-Reconnect/Status buttons, Stop/Restart behind a confirm step) are the
-only commands it accepts \(en revoke, user management, CA rotation,
-config, and backup stay CLI/web\-login only.
+user add/del, CA rotate, a cert entering its 30\-day expiry window (once
+per cert), and openvpn/dnsmasq giving up auto\-restart after crash\-looping;
+\fB/status\fR, \fB/menu\fR (openvpn Start/Stop/Restart/Reconnect), and
+\fB/dns\fR (dnsmasq Start/Stop/Restart, same confirm step on Stop/Restart)
+are the only commands it accepts \(en revoke, user management, CA
+rotation, config, and backup stay CLI/web\-login only.
 .TP
 .B version
 Print \fBovcp\fR's version, and the \fBopenvpn\fR and \fBdnsmasq\fR binaries'
@@ -729,8 +737,9 @@ serial, expires, includeDNS}\fR (same \fBstatus\fR values as
 one string.
 .TP
 .B telegram config get, telegram config set, telegram start|stop|restart|status
-\fB{running, tokenSet, admin}\fR \(en same shape from every one of these,
-whether or not \fB\-token\fR/\fB\-admin\fR were passed to \fBconfig set\fR.
+\fB{running, tokenSet, admin, chatLinked}\fR \(en same shape from every one
+of these, whether or not \fB\-token\fR/\fB\-admin\fR were passed to
+\fBconfig set\fR.
 .TP
 .B user add
 \fB{username, role}\fR.

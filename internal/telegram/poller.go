@@ -31,6 +31,7 @@ const unauthorizedBlockThreshold = 3
 type Poller struct {
 	s    *store.Store
 	vpn  controller.Lifecycle
+	dns  controller.Lifecycle
 	mgmt *controller.Client
 
 	mu      sync.Mutex
@@ -42,33 +43,49 @@ type Poller struct {
 	blocked  map[int64]bool
 }
 
-func New(s *store.Store, vpn controller.Lifecycle, mgmt *controller.Client) *Poller {
-	return &Poller{s: s, vpn: vpn, mgmt: mgmt}
+func New(s *store.Store, vpn, dns controller.Lifecycle, mgmt *controller.Client) *Poller {
+	return &Poller{s: s, vpn: vpn, dns: dns, mgmt: mgmt}
+}
+
+// isNumericID reports whether s is a Telegram numeric id rather than a
+// @username — shared by matches, chatID and ConfigStatus.
+func isNumericID(s string) bool {
+	_, err := strconv.ParseInt(s, 10, 64)
+	return err == nil
 }
 
 // SetToken validates token against getMe, then saves it — independently of
 // SetAdmin, so changing one never requires re-supplying the other. Forgets
-// any previously-learned chat: a new bot identity invalidates it.
+// any previously-learned chat only if the token actually changed — a bare
+// re-save (e.g. the web UI's own form) must not silently re-link the chat.
 func SetToken(s *store.Store, token string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := newBot(token).getMe(ctx); err != nil {
 		return fmt.Errorf("invalid token: %w", err)
 	}
+	old, _ := s.GetSetting(keyToken)
 	if err := s.SetSetting(keyToken, token); err != nil {
 		return err
 	}
 	slog.Info("telegram: token updated")
+	if token == old {
+		return nil
+	}
 	return s.SetSetting(keyChat, "")
 }
 
-// SetAdmin saves the admin identity — forgets any previously-learned chat:
-// a different admin means a different authorized chat.
+// SetAdmin saves the admin identity — forgets any previously-learned chat
+// only if the admin actually changed, same reasoning as SetToken.
 func SetAdmin(s *store.Store, admin string) error {
+	old, _ := s.GetSetting(keyAdmin)
 	if err := s.SetSetting(keyAdmin, admin); err != nil {
 		return err
 	}
 	slog.Info("telegram: admin updated", "admin", admin)
+	if admin == old {
+		return nil
+	}
 	return s.SetSetting(keyChat, "")
 }
 
@@ -78,7 +95,11 @@ func SetAdmin(s *store.Store, admin string) error {
 func ConfigStatus(s *store.Store) controller.TelegramStatus {
 	token, _ := s.GetSetting(keyToken)
 	admin, _ := s.GetSetting(keyAdmin)
-	return controller.TelegramStatus{TokenSet: token != "", Admin: admin}
+	chat, _ := s.GetSetting(keyChat)
+	return controller.TelegramStatus{
+		TokenSet: token != "", Admin: admin,
+		ChatLinked: isNumericID(admin) || chat != "",
+	}
 }
 
 func (p *Poller) Status() controller.TelegramStatus {
@@ -234,7 +255,7 @@ func (p *Poller) handle(ctx context.Context, b *bot, admin string, u update) {
 	}
 	if !matches(admin, from) {
 		if p.shouldReplyUnauthorized(from.ID, from.Username) && u.Message != nil {
-			b.sendMessage(ctx, chatID, "🚫 403: you're not my admin.", nil)
+			b.sendMessage(ctx, chatID, "🚫 403: not my admin.", nil)
 		}
 		return
 	}
@@ -256,12 +277,16 @@ func (p *Poller) handle(ctx context.Context, b *bot, admin string, u update) {
 }
 
 const (
-	cmdStatus    = "status"
-	cmdMenu      = "menu"
-	cmdStart     = "start"
-	cmdStop      = "stop"
-	cmdRestart   = "restart"
-	cmdReconnect = "reconnect"
+	cmdStatus     = "status"
+	cmdMenu       = "menu"
+	cmdStart      = "start"
+	cmdStop       = "stop"
+	cmdRestart    = "restart"
+	cmdReconnect  = "reconnect"
+	cmdDNS        = "dns"
+	cmdDNSStart   = "dns_start"
+	cmdDNSStop    = "dns_stop"
+	cmdDNSRestart = "dns_restart"
 )
 
 // Reply-keyboard labels double as the tap-back text (no callback_data on a
@@ -272,26 +297,36 @@ const (
 	lblRestart   = "🔄 restart"
 	lblReconnect = "🔌 reconnect"
 	lblStatus    = "📊 status"
+	lblDNS       = "🌐 dns"
 )
 
 // opsKeyboard is the persistent reply keyboard /menu (and /start) hands out.
-// Status gets its own wide row: it's the one you check without acting.
+// Status/dns get their own wide rows: they're what you check, not act on directly.
 var opsKeyboard = rkb(
 	[]string{lblStart, lblStop},
 	[]string{lblRestart, lblReconnect},
 	[]string{lblStatus},
+	[]string{lblDNS},
 )
+
+// dnsKeyboard: dns's own start/stop/restart, handed out under /dns — no
+// config surface from the bot, same boundary as vpn.
+var dnsKeyboard = kb([]inlineButton{btn("start", cmdDNSStart), btn("stop", cmdDNSStop), btn("restart", cmdDNSRestart)})
 
 // botCommands drives Telegram's "/" autocomplete menu (registered via
 // setMyCommands on every start), using the same consts handleCommand
 // dispatches on, so the menu can't list something unhandled.
 var botCommands = []botCommand{
-	{cmdStatus, "pid, uptime, client count"},
+	{cmdStatus, "full status: vpn, dns, certs"},
 	{cmdMenu, "hand out the control-panel keyboard"},
 	{cmdStart, "bring the tunnel up"},
 	{cmdStop, "bring it down (asks first)"},
 	{cmdRestart, "full bounce (asks first)"},
 	{cmdReconnect, "SIGUSR1: renegotiate, no restart"},
+	{cmdDNS, "dnsmasq status + start/stop/restart"},
+	{cmdDNSStart, "bring dnsmasq up"},
+	{cmdDNSStop, "bring it down (asks first)"},
+	{cmdDNSRestart, "full bounce (asks first)"},
 }
 
 type botCommand struct {
@@ -309,24 +344,37 @@ func (p *Poller) handleCommand(ctx context.Context, b *bot, chatID int64, cmd st
 		b.sendMessage(ctx, chatID, resultText("▶ up.", p.vpn.Start()), nil)
 	case "/" + cmdStop, cmdStop, lblStop:
 		b.sendMessage(ctx, chatID, "stop the tunnel? every client drops.", kb(
-			[]inlineButton{btn("yes, stop", "stop_confirm"), btn("cancel", "cancel")}))
+			[]inlineButton{btn("yes, stop", "vpn_stop_confirm"), btn("cancel", "cancel")}))
 	case "/" + cmdRestart, cmdRestart, lblRestart:
 		b.sendMessage(ctx, chatID, "restart? full bounce, clients briefly drop.", kb(
-			[]inlineButton{btn("yes, restart", "restart_confirm"), btn("cancel", "cancel")}))
+			[]inlineButton{btn("yes, restart", "vpn_restart_confirm"), btn("cancel", "cancel")}))
 	case "/" + cmdReconnect, cmdReconnect, lblReconnect:
-		b.sendMessage(ctx, chatID, resultText("🔌 kicked (SIGUSR1).", p.vpn.Reconnect()), nil)
-	case "stop_confirm":
+		b.sendMessage(ctx, chatID, resultText("🔌 reconnect signal sent (SIGUSR1).", p.vpn.Reconnect()), nil)
+	case "vpn_stop_confirm":
 		b.sendMessage(ctx, chatID, resultText("⏹ down.", p.vpn.Stop()), nil)
-	case "restart_confirm":
-		b.sendMessage(ctx, chatID, resultText("🔄 bounced.", p.vpn.Restart()), nil)
+	case "vpn_restart_confirm":
+		b.sendMessage(ctx, chatID, resultText("🔄 restarted.", p.vpn.Restart()), nil)
+	case "/" + cmdDNS, cmdDNS, lblDNS:
+		b.sendMessage(ctx, chatID, p.dnsLine(), dnsKeyboard)
+	case "/" + cmdDNSStart, cmdDNSStart:
+		b.sendMessage(ctx, chatID, resultText("🟢 dns up.", p.dns.Start()), nil)
+	case "/" + cmdDNSStop, cmdDNSStop:
+		b.sendMessage(ctx, chatID, "stop dns? clients stop resolving internal names.", kb(
+			[]inlineButton{btn("yes, stop", "dns_stop_confirm"), btn("cancel", "cancel")}))
+	case "/" + cmdDNSRestart, cmdDNSRestart:
+		b.sendMessage(ctx, chatID, "restart dns? full bounce, clients briefly can't resolve.", kb(
+			[]inlineButton{btn("yes, restart", "dns_restart_confirm"), btn("cancel", "cancel")}))
+	case "dns_stop_confirm":
+		b.sendMessage(ctx, chatID, resultText("🔴 dns down.", p.dns.Stop()), nil)
+	case "dns_restart_confirm":
+		b.sendMessage(ctx, chatID, resultText("🔄 dns restarted.", p.dns.Restart()), nil)
 	case "cancel":
 		b.sendMessage(ctx, chatID, "cancelled.", nil)
 	}
 }
 
-// menuText: old-school sysadmin tone for the /menu control panel — a status
-// line, not a greeting.
-const menuText = "ovcp control panel. pick your poison:"
+// menuText: old-school sysadmin tone for the /menu control panel.
+const menuText = "ovcp control panel:"
 
 func resultText(ok string, err error) string {
 	if err != nil {
@@ -335,18 +383,49 @@ func resultText(ok string, err error) string {
 	return ok
 }
 
-func (p *Poller) statusText() string {
-	ovcpUptime := time.Since(controller.ProcessStartedAt).Round(time.Second)
+// vpnLine/dnsLine: one worker's status, shared by statusText and /dns.
+func (p *Poller) vpnLine() string {
 	pid := p.vpn.Pid()
 	if pid == 0 {
-		return fmt.Sprintf("🔴 VPN down.\novcp up %s", ovcpUptime)
+		return "🔴 vpn down"
 	}
 	n := 0
 	if cl, err := p.mgmt.Status(); err == nil {
 		n = len(cl)
 	}
-	vpnUptime := time.Since(p.vpn.StartedAt()).Round(time.Second)
-	return fmt.Sprintf("🟢 VPN up (pid %d, up %s) · %d client(s) connected\novcp up %s", pid, vpnUptime, n, ovcpUptime)
+	return fmt.Sprintf("🟢 vpn up (pid %d, up %s) · %d client(s) connected", pid, time.Since(p.vpn.StartedAt()).Round(time.Second), n)
+}
+
+func (p *Poller) dnsLine() string {
+	if pid := p.dns.Pid(); pid != 0 {
+		return fmt.Sprintf("🟢 dns up (pid %d, up %s)", pid, time.Since(p.dns.StartedAt()).Round(time.Second))
+	}
+	return "🔴 dns down"
+}
+
+// certLine: live cert count + how many are within store.ExpiryWarnDays.
+func (p *Poller) certLine() string {
+	certs, _ := p.s.ListCerts()
+	live, soon := 0, 0
+	for _, c := range certs {
+		if c.RevokedAt != nil {
+			continue
+		}
+		live++
+		if d := time.Until(c.NotAfter).Hours() / 24; d >= 0 && d <= store.ExpiryWarnDays {
+			soon++
+		}
+	}
+	if soon == 0 {
+		return fmt.Sprintf("📜 %d cert(s)", live)
+	}
+	return fmt.Sprintf("📜 %d cert(s) · %d expiring ≤%dd", live, soon, store.ExpiryWarnDays)
+}
+
+// statusText: the full report — every worker plus certs, not just the vpn.
+func (p *Poller) statusText() string {
+	ovcpUptime := time.Since(controller.ProcessStartedAt).Round(time.Second)
+	return fmt.Sprintf("%s\n%s\n%s\novcp up %s", p.vpnLine(), p.dnsLine(), p.certLine(), ovcpUptime)
 }
 
 // Notify best-effort pushes text to the linked admin chat. No-op if not
@@ -360,7 +439,9 @@ func (p *Poller) Notify(text string) {
 	}
 	chatID, err := p.chatID(admin)
 	if err != nil {
-		slog.Debug("telegram: notify skipped", "err", err)
+		// admin is a @username and hasn't messaged the bot yet — visible at
+		// Warn, not Debug, since this silently swallows every push otherwise.
+		slog.Warn("telegram: notify skipped, chat not linked yet", "err", err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

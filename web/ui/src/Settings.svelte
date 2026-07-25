@@ -182,7 +182,7 @@
     } catch (x) { flash(v => backupErr = v, x.error || 'backup failed') }
   }
 
-  let tg = $state(null) // {running, tokenSet, admin}
+  let tg = $state(null) // {running, tokenSet, admin, chatLinked}
   let tgErr = $state('')
   let tgOk = $state('')
   async function loadTelegram() {
@@ -190,15 +190,25 @@
   }
   loadTelegram()
 
+  // Token and admin are independent identities (rotating one must never touch
+  // the other, or re-saving an unchanged admin would silently re-link the chat).
   async function setTelegramToken() {
     const token = prompt('Telegram bot token (from @BotFather):')
     if (!token) return
+    tgErr = ''; tgOk = ''
+    try {
+      tg = await api('PUT', '/telegram/config', { Token: token })
+      flash(v => tgOk = v, 'Token set. Start the bot below to bring it up.')
+    } catch (x) { flash(v => tgErr = v, x.error) }
+  }
+
+  async function setTelegramAdmin() {
     const admin = prompt('Admin Telegram numeric id or @username — the only identity the bot will ever respond to:')
     if (!admin) return
     tgErr = ''; tgOk = ''
     try {
-      tg = await api('PUT', '/telegram/config', { Token: token, Admin: admin })
-      flash(v => tgOk = v, 'Saved. Start the bot below to bring it up.')
+      tg = await api('PUT', '/telegram/config', { Admin: admin })
+      flash(v => tgOk = v, 'Admin set.')
     } catch (x) { flash(v => tgErr = v, x.error) }
   }
 
@@ -216,7 +226,8 @@
   const tgState = $derived(!tg?.tokenSet ? 'na' : tg.running ? 'ok' : 'down')
   const tgLabel = $derived(
     tgState === 'na' ? 'not configured' :
-    tgState === 'ok' ? `running · admin: ${tg.admin}` : 'stopped')
+    tgState !== 'ok' ? 'stopped' :
+    `running · admin: ${tg.admin}` + (tg.chatLinked ? '' : ' · chat not linked yet, message the bot once'))
 </script>
 
 <div class="card">
@@ -412,7 +423,9 @@
     {/if}
     <div class="row">
       <button type="button" class="ghost" onclick={setTelegramToken}
-        title="Set the bot token and admin identity">{tg?.tokenSet ? 'Regenerate token' : 'Set token'}</button>
+        title="Set the bot token, independently of admin">{tg?.tokenSet ? 'Regenerate token' : 'Set token'}</button>
+      <button type="button" class="ghost" onclick={setTelegramAdmin}
+        title="Set the admin identity, independently of token">{tg?.admin ? 'Change admin' : 'Set admin'}</button>
       {#if tg?.tokenSet}
         <button type="button" class="ghost" onclick={tgStart} title="Bring the poller up">Start</button>
         <button type="button" class="ghost" onclick={tgStop} title="Stop the poller; bot goes quiet">Stop</button>

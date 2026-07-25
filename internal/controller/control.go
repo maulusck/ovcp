@@ -36,9 +36,10 @@ type Lifecycle interface {
 // TelegramStatus mirrors telegram.Poller.Status()'s shape, defined here (not
 // in package telegram, which imports controller) to avoid an import cycle.
 type TelegramStatus struct {
-	Running  bool   `json:"running"`
-	TokenSet bool   `json:"tokenSet"`
-	Admin    string `json:"admin"`
+	Running    bool   `json:"running"`
+	TokenSet   bool   `json:"tokenSet"`
+	Admin      string `json:"admin"`
+	ChatLinked bool   `json:"chatLinked"` // false: admin hasn't messaged the bot yet, push notifications can't reach them
 }
 
 // TelegramController is the telegram poller's control surface (implemented

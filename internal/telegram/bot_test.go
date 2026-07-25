@@ -60,3 +60,43 @@ func TestSetTokenAndAdmin(t *testing.T) {
 		t.Fatalf("SetToken must not touch admin, got %q", admin2)
 	}
 }
+
+// TestReSaveDoesNotUnlinkChat: re-submitting the same admin/token (e.g. the
+// web UI resubmitting an unchanged field) must not wipe the learned chat —
+// only an actual identity change should. Regression for a bug where every
+// form save silently broke push notifications.
+func TestReSaveDoesNotUnlinkChat(t *testing.T) {
+	mockAPI(t)
+	s, _ := store.Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	defer s.Close()
+
+	if err := SetAdmin(s, testAdmin); err != nil {
+		t.Fatal(err)
+	}
+	s.SetSetting(keyChat, "555")
+
+	if err := SetAdmin(s, testAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if chat, _ := s.GetSetting(keyChat); chat != "555" {
+		t.Fatalf("re-saving the same admin must not unlink the chat, got %q", chat)
+	}
+
+	if err := SetAdmin(s, "@bob"); err != nil {
+		t.Fatal(err)
+	}
+	if chat, _ := s.GetSetting(keyChat); chat != "" {
+		t.Fatalf("changing admin must unlink the chat, got %q", chat)
+	}
+
+	if err := SetToken(s, goodToken); err != nil {
+		t.Fatal(err)
+	}
+	s.SetSetting(keyChat, "555")
+	if err := SetToken(s, goodToken); err != nil {
+		t.Fatal(err)
+	}
+	if chat, _ := s.GetSetting(keyChat); chat != "555" {
+		t.Fatalf("re-saving the same token must not unlink the chat, got %q", chat)
+	}
+}

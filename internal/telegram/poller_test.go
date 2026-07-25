@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/store"
 )
 
 type fakeLife struct{}
@@ -89,7 +91,9 @@ func TestHandleCommandCoversRegisteredSurface(t *testing.T) {
 	defer srv.Close()
 	defer SetAPIBaseForTesting(srv.URL + "/bot")()
 
-	p := &Poller{vpn: fakeLife{}}
+	s, _ := store.Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	defer s.Close()
+	p := &Poller{s: s, vpn: fakeLife{}, dns: fakeLife{}}
 	b := newBot("t")
 	ctx := context.Background()
 

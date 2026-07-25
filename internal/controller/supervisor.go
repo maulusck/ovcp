@@ -53,6 +53,10 @@ type Supervisor struct {
 	CrashLoopWindow   time.Duration
 	CrashLoopMax      int
 
+	// OnCrashLoopGiveUp, if set, fires once when auto-restart gives up —
+	// the one worker failure that needs a push, not just a log line.
+	OnCrashLoopGiveUp func(streak int)
+
 	opMu sync.Mutex // serializes whole lifecycle operations
 
 	stMu      sync.Mutex // guards the fields below
@@ -248,6 +252,9 @@ func (s *Supervisor) autoRestart() {
 	s.stMu.Unlock()
 	if streak > max {
 		slog.Error(s.Name+" crash-looping, giving up auto-restart until manually restarted once the underlying issue is fixed", "streak", streak)
+		if s.OnCrashLoopGiveUp != nil {
+			s.OnCrashLoopGiveUp(streak)
+		}
 		return
 	}
 
