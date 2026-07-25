@@ -54,11 +54,13 @@
   }
   boot()
 
-  // app-wide live status poll while signed in
+  // app-wide live status poll while signed in — cadence matches how often
+  // openvpn itself rewrites its status file server-side (statusPollSeconds),
+  // so polling faster would just re-read the same data.
   $effect(() => {
     if (!user) return
     pollOnce()
-    const t = setInterval(pollOnce, 3000)
+    const t = setInterval(pollOnce, (user.statusPollSeconds || 3) * 1000)
     return () => clearInterval(t)
   })
 

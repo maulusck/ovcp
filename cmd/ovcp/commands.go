@@ -94,6 +94,7 @@ var commands = []command{
 	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill   manage/inspect the openvpn worker (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
 	{name: "dns", usage: "start|stop|restart|status|block-internet [on|off|status]   manage/inspect the dnsmasq worker", sub: dnsOps, run: cmdDNS},
 	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
+	{name: "logs", usage: "config get|set | rotate | status   manage log rotation for openvpn.log/ovcp.log/dnsmasq.log", sub: logsOps, run: cmdLogs},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
 	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},

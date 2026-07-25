@@ -74,6 +74,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User)
 		"openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
 		"dnsmasqVersion": s.DnsmasqVersion, "dnsmasqPath": s.DnsmasqPath,
 		"minSecretLen": auth.MinSecretLen, "minSecretClasses": auth.MinSecretClasses,
+		// how often openvpn itself rewrites its status file (OVCP_STATUS_INTERVAL)
+		// — the UI polls /api/status at the same cadence so it's never asking
+		// faster than the data can actually change.
+		"statusPollSeconds": s.LoadConfig().EffectiveStatusInterval(),
 	})
 }
 
@@ -82,7 +86,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.U
 	// inside a live serve process.
 	out := map[string]any{"ovcp_uptime_seconds": int64(time.Since(controller.ProcessStartedAt).Seconds())}
 
-	if clients, err := s.Mgmt.Status(); err != nil {
+	clients, err := s.Mgmt.Status()
+	// Both signals required: Pid()!=0 catches a stale status file surviving a
+	// crash (it wouldn't error — it just wouldn't be rewritten again),
+	// err==nil catches a not-yet-running or torn-read status file.
+	if up := s.VPN.Pid() != 0 && err == nil; !up {
 		// VPN down/restarting is a normal state for the panel, not a 500.
 		out["vpn_up"], out["clients"] = false, []any{}
 	} else {
@@ -341,6 +349,7 @@ func mergedConfig(cur ovpnconf.Config, r *http.Request) (ovpnconf.Config, bool) 
 	}
 	in.CACert, in.ServerCert, in.ServerKey = cur.CACert, cur.ServerCert, cur.ServerKey
 	in.CRL, in.TLSCrypt, in.MgmtSocket, in.StatusLog = cur.CRL, cur.TLSCrypt, cur.MgmtSocket, cur.StatusLog
+	in.StatusInterval = cur.StatusInterval
 	in.ServerCN = cur.ServerCN
 	return in, true
 }

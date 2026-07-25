@@ -26,8 +26,8 @@ const (
 )
 
 // tailLines returns up to n trailing lines of path (missing file isn't an
-// error), reading at most tailMaxBytes; skip (nil = none) filters before the n-line cap.
-func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
+// error), reading at most tailMaxBytes.
+func tailLines(path string, n int) ([]string, error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return []string{}, nil
@@ -43,11 +43,7 @@ func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
-		line := sc.Text()
-		if skip != nil && skip(line) {
-			continue
-		}
-		lines = append(lines, line)
+		lines = append(lines, sc.Text())
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
@@ -58,17 +54,11 @@ func tailLines(path string, n int, skip func(string) bool) ([]string, error) {
 	return lines, nil
 }
 
-// isStatusPollLine matches openvpn's periodic "status 3" poll (App.svelte's
-// status timer) — expected noise that would otherwise drown a 200-line tail.
-func isStatusPollLine(line string) bool {
-	return strings.Contains(line, `MANAGEMENT: CMD 'status 3'`)
-}
-
 // logHandler builds a GET handler tailing <DataDir>/logs/filename; shared by
 // the openvpn.log and ovcp.log routes so the tailing logic exists exactly once.
 func (s *Server) logHandler(filename string) handler {
 	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
-		lines, err := tailLines(filepath.Join(s.DataDir, "logs", filename), tailLineLimit, isStatusPollLine)
+		lines, err := tailLines(filepath.Join(s.DataDir, "logs", filename), tailLineLimit)
 		if err != nil {
 			jsonErr(w, 500, err.Error())
 			return
@@ -144,7 +134,7 @@ func (s *Server) statusExport() statusExport {
 		GeneratedAt: time.Now(),
 		ServerCN:    s.DefaultRemote,
 		Version:     s.Version,
-		VPNUp:       err == nil,
+		VPNUp:       s.VPN.Pid() != 0 && err == nil,
 		Clients:     clients,
 		Certs:       []store.Cert{},
 		Users:       []UserSummary{},

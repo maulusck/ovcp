@@ -36,7 +36,7 @@ func (f *fakeTelegram) Status() TelegramStatus {
 // noMgmt is a never-dialed *Client, for tests that just need a valid argument.
 func noMgmt(t *testing.T) *Client {
 	t.Helper()
-	return NewClient(filepath.Join(t.TempDir(), "unused-mgmt.sock"))
+	return NewClient(filepath.Join(t.TempDir(), "unused-mgmt.sock"), "")
 }
 
 func TestControlRoundTrip(t *testing.T) {
@@ -138,7 +138,7 @@ func TestControlDebugToggle(t *testing.T) {
 func TestControlClientsAndKill(t *testing.T) {
 	mgmtSock, _ := fakeMgmt(t)
 	sock := filepath.Join(t.TempDir(), "control.sock")
-	l, err := ServeControl(sock, &fakeLife{}, &fakeLife{}, NewClient(mgmtSock), new(slog.LevelVar), &fakeTelegram{})
+	l, err := ServeControl(sock, &fakeLife{}, &fakeLife{}, NewClient(mgmtSock, writeStatus(t, oneClientStatus)), new(slog.LevelVar), &fakeTelegram{})
 	if err != nil {
 		t.Fatal(err)
 	}

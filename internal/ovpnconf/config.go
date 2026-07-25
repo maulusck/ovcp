@@ -34,6 +34,26 @@ type Config struct {
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, MgmtSocket, StatusLog string
 	RunAsUser, RunAsGroup                                               string // e.g. nobody/nogroup; empty = omit
 	ServerCN                                                            string // admin cert CN; drives DOMAIN-SEARCH push (Records tab)
+
+	// StatusInterval: seconds between openvpn rewriting StatusLog. Server-owned
+	// like the paths above (from OVCP_STATUS_INTERVAL, see fillPaths), never
+	// user-editable — see EffectiveStatusInterval for the <=0 fallback.
+	StatusInterval int
+}
+
+// defaultStatusInterval is EffectiveStatusInterval's fallback when
+// StatusInterval isn't set — keeps a rendered config always valid even from
+// a Default()/stale-JSON Config that never went through fillPaths.
+const defaultStatusInterval = 3
+
+// EffectiveStatusInterval is StatusInterval with defaultStatusInterval
+// applied — the one source of truth Render and the /api/me poll-cadence
+// field both use, so they can't disagree about what "unset" means.
+func (c Config) EffectiveStatusInterval() int {
+	if c.StatusInterval <= 0 {
+		return defaultStatusInterval
+	}
+	return c.StatusInterval
 }
 
 // ServerTunIP returns the server's own address within Subnet — OpenVPN's own
@@ -172,7 +192,7 @@ func (c *Config) Render() []byte {
 		w("group %s", c.RunAsGroup)
 	}
 	w("management %s unix", c.MgmtSocket)
-	w("status %s 10", c.StatusLog)
+	w("status %s %d", c.StatusLog, c.EffectiveStatusInterval())
 	w("status-version 3")
 	w("verb 3")
 	if c.RedirectGW {

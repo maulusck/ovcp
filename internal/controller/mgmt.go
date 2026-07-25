@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 type Client struct {
 	SocketPath string
+	StatusPath string        // openvpn's periodically-rewritten status file (status-version 3); see Status()
 	Timeout    time.Duration // per-op; default 5s
 
 	mu   sync.Mutex // serializes access to conn: the mgmt protocol is one command/response stream, not safe for concurrent use
@@ -22,8 +24,8 @@ type Client struct {
 	r    *bufio.Reader
 }
 
-func NewClient(socketPath string) *Client {
-	return &Client{SocketPath: socketPath, Timeout: 5 * time.Second}
+func NewClient(socketPath, statusPath string) *Client {
+	return &Client{SocketPath: socketPath, StatusPath: statusPath, Timeout: 5 * time.Second}
 }
 
 type VPNClient struct {
@@ -99,45 +101,53 @@ func (c *Client) tryExec(cmd string, parse func(*bufio.Reader) error) error {
 	return parse(c.r)
 }
 
-// Status returns currently connected clients (mgmt `status 3`).
+// Status reads openvpn's own periodic status file instead of querying the
+// mgmt socket — polling "status 3" there logs a line per poll. Requires a
+// terminating "END" line to succeed; a torn read errors, never partial data.
 func (c *Client) Status() ([]VPNClient, error) {
+	f, err := os.Open(c.StatusPath)
+	if err != nil {
+		return nil, fmt.Errorf("controller: status file: %w", err)
+	}
+	defer f.Close()
+	return parseStatusFile(bufio.NewReader(f))
+}
+
+// parseStatusFile parses status-version-3 lines up to and including a
+// terminating "END" — see Status()'s doc comment for why END is required.
+func parseStatusFile(r *bufio.Reader) ([]VPNClient, error) {
 	var out []VPNClient
-	err := c.exec("status 3", func(r *bufio.Reader) error {
-		out = nil // discard any partial parse from a failed first attempt
-		for {
-			line, err := r.ReadString('\n')
-			if err != nil {
-				return err
-			}
-			line = strings.TrimRight(line, "\r\n")
-			switch {
-			case line == "END":
-				return nil
-			case strings.HasPrefix(line, ">"): // async event, ignore
-			case strings.HasPrefix(line, "CLIENT_LIST\t"):
-				f := strings.Split(line, "\t")
-				// CLIENT_LIST CN Real Virt Virt6 BRecv BSent Since SinceT User CID PID Cipher
-				if len(f) < 12 {
-					continue
-				}
-				vc := VPNClient{
-					CN:             f[1],
-					RealAddress:    f[2],
-					VirtualAddress: f[3],
-				}
-				vc.BytesRecv, _ = strconv.ParseUint(f[5], 10, 64)
-				vc.BytesSent, _ = strconv.ParseUint(f[6], 10, 64)
-				if ts, err := strconv.ParseInt(f[8], 10, 64); err == nil {
-					vc.ConnectedSince = time.Unix(ts, 0)
-				}
-				if len(f) >= 13 {
-					vc.Cipher = f[12]
-				}
-				out = append(out, vc)
-			}
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("controller: status file: no END line (torn read): %w", err)
 		}
-	})
-	return out, err
+		line = strings.TrimRight(line, "\r\n")
+		switch {
+		case line == "END":
+			return out, nil
+		case strings.HasPrefix(line, "CLIENT_LIST\t"):
+			f := strings.Split(line, "\t")
+			// CLIENT_LIST CN Real Virt Virt6 BRecv BSent Since SinceT User CID PID Cipher
+			if len(f) < 12 {
+				continue
+			}
+			vc := VPNClient{
+				CN:             f[1],
+				RealAddress:    f[2],
+				VirtualAddress: f[3],
+			}
+			vc.BytesRecv, _ = strconv.ParseUint(f[5], 10, 64)
+			vc.BytesSent, _ = strconv.ParseUint(f[6], 10, 64)
+			if ts, err := strconv.ParseInt(f[8], 10, 64); err == nil {
+				vc.ConnectedSince = time.Unix(ts, 0)
+			}
+			if len(f) >= 13 {
+				vc.Cipher = f[12]
+			}
+			out = append(out, vc)
+		}
+	}
 }
 
 // Kill disconnects all sessions for a CN (mgmt `kill`). cn is rejected if it
