@@ -347,7 +347,6 @@
   /* row-action buttons (Certs/Users/Dashboard) — same "operator button" family as
      Settings' Start/Stop/Restart/Backup, just shorter to fit a table row. */
   :global(td button.ghost) { padding: 4px 14px; }
-  :global(.err) { color: var(--bad); font-size: 13px; margin: 4px 0; }
   :global(.muted) { color: var(--dim); }
   /* inline "Label [control]" pairs — filter dropdowns (Certs/Users), Logs tab's own options */
   :global(.poll-pick) { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; }
@@ -372,9 +371,13 @@
   :global(.th-sort:hover) { color: var(--text); }
   /* shared by Certs/Settings/Users' forms — capped, not 1fr, so a 2-field
      card (Stats config) doesn't stretch its inputs to fill a wide row. */
-  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 200px)); gap: 0 14px; }
+  :global(.grid) { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 190px)); gap: 0 14px; }
   :global(.req) { color: var(--bad); }
-  :global(.ok) { color: var(--ok); font-size: 13px; margin: 4px 0; }
+  /* one message-line template — err/ok differ only in color, both block-level
+     so they can never land on the same line even if both were shown at once. */
+  :global(.err), :global(.ok) { font-size: 13px; margin: 4px 0; }
+  :global(.err) { color: var(--bad); }
+  :global(.ok) { color: var(--ok); }
   :global(.rv) { color: var(--bad); }
   /* stacked sibling cards (Certs/Settings/Users) always get a gap, not just
      the ones a page happens to mark .form-card */
@@ -397,7 +400,7 @@
     border-radius: 4px; padding: 7px 10px; min-height: 2.4em;
   }
   :global(.row) { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
-  :global(.small) { font-size: 12px; margin: 8px 0; }
+  :global(.small) { font-size: 12px; margin: 4px 0; }
   /* config-preview diffs (Settings' server.conf and custom.hosts) */
   :global(.diff) { font-family: var(--mono); font-size: 12px; white-space: pre; overflow-x: auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
