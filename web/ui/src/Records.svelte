@@ -8,13 +8,13 @@
 
   let blockInternet = $state(false)
   async function loadBlockInternet() {
-    try { blockInternet = (await api('GET', '/dns/block-internet')).blockInternet } catch (x) { dnsErr = x.error }
+    try { blockInternet = (await api('GET', '/dns/config')).blockInternet } catch (x) { dnsErr = x.error }
   }
   loadBlockInternet()
 
   async function toggleBlockInternet(e) {
     const want = e.target.checked
-    try { blockInternet = (await api('POST', '/dns/block-internet', { BlockInternet: want })).blockInternet }
+    try { blockInternet = (await api('PUT', '/dns/config', { BlockInternet: want })).blockInternet }
     catch (x) { dnsErr = x.error; e.target.checked = !want }
   }
 

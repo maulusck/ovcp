@@ -36,7 +36,7 @@
     catch (x) { err = x.error }
   }
   refresh()
-  api('GET', '/config').then(c => (redirectGW = c.RedirectGW)).catch(() => {})
+  api('GET', '/vpn/config').then(c => (redirectGW = c.RedirectGW)).catch(() => {})
 
   // arrival from Dashboard's "jump to this cert" click: clear whatever
   // filters might be hiding it, then scroll to and flash the matching row.

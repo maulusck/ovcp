@@ -160,14 +160,16 @@ func TestRBAC(t *testing.T) {
 		{"POST", "/api/certs/renew-server"},
 		{"POST", "/api/backup"},
 		{"POST", "/api/certs/export"},
-		{"PUT", "/api/config"},
+		{"PUT", "/api/vpn/config"},
 		{"POST", "/api/vpn/restart"},
 		{"POST", "/api/dns/restart"},
 		{"PATCH", "/api/certs/x/dns"},
 		{"PUT", "/api/dns/custom"},
 		{"POST", "/api/dns/custom/preview"},
-		{"POST", "/api/dns/block-internet"},
-		{"PUT", "/api/telegram"},
+		{"PUT", "/api/dns/config"},
+		{"PUT", "/api/logs/config"},
+		{"PUT", "/api/stats/config"},
+		{"PUT", "/api/telegram/config"},
 		{"POST", "/api/telegram/start"},
 		{"POST", "/api/debug"},
 		{"GET", "/api/users"},
@@ -248,10 +250,10 @@ func TestStatusVPNDown(t *testing.T) {
 func TestConfigPutValidation(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
-	if r := e.req("PUT", "/api/config", `{"Proto":"sctp"}`, true); r.StatusCode != 400 {
+	if r := e.req("PUT", "/api/vpn/config", `{"Proto":"sctp"}`, true); r.StatusCode != 400 {
 		t.Fatal("bad proto must 400, got", r.Status)
 	}
-	if r := e.req("PUT", "/api/config", `{"Proto":"tcp","Port":443}`, true); r.StatusCode != 200 {
+	if r := e.req("PUT", "/api/vpn/config", `{"Proto":"tcp","Port":443}`, true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
 	if r := e.req("POST", "/api/vpn/restart", "", true); r.StatusCode != 200 {
@@ -265,7 +267,7 @@ func TestConfigPreview(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
 
-	r := e.req("POST", "/api/config/preview", `{}`, true)
+	r := e.req("POST", "/api/vpn/config/preview", `{}`, true)
 	var pv struct {
 		Diff    []string
 		Changed bool
@@ -278,7 +280,7 @@ func TestConfigPreview(t *testing.T) {
 		t.Fatalf("no-op preview should report no change, got %+v", pv)
 	}
 
-	r = e.req("POST", "/api/config/preview", `{"Port":443}`, true)
+	r = e.req("POST", "/api/vpn/config/preview", `{"Port":443}`, true)
 	json.NewDecoder(r.Body).Decode(&pv)
 	if r.StatusCode != 200 || !pv.Changed {
 		t.Fatalf("port-change preview: status=%d %+v", r.StatusCode, pv)
@@ -287,14 +289,14 @@ func TestConfigPreview(t *testing.T) {
 		t.Fatalf("preview diff missing the port change: %+v", pv.Diff)
 	}
 
-	r = e.req("GET", "/api/config", "", true)
+	r = e.req("GET", "/api/vpn/config", "", true)
 	var got struct{ Port int }
 	json.NewDecoder(r.Body).Decode(&got)
 	if got.Port != 1194 {
 		t.Fatalf("preview must not persist: GET /api/config Port = %d, want 1194", got.Port)
 	}
 
-	if r := e.req("POST", "/api/config/preview", `{"Proto":"sctp"}`, true); r.StatusCode != 400 {
+	if r := e.req("POST", "/api/vpn/config/preview", `{"Proto":"sctp"}`, true); r.StatusCode != 400 {
 		t.Fatal("bad proto preview must 400, got", r.Status)
 	}
 }
@@ -489,7 +491,7 @@ func TestPasswordYOLO(t *testing.T) {
 func TestExportBundle(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
-	if r := e.req("PUT", "/api/config", `{"Proto":"tcp","Port":443,"Cipher":"CHACHA20-POLY1305"}`, true); r.StatusCode != 200 {
+	if r := e.req("PUT", "/api/vpn/config", `{"Proto":"tcp","Port":443,"Cipher":"CHACHA20-POLY1305"}`, true); r.StatusCode != 200 {
 		t.Fatal("config put:", r.Status)
 	}
 	r := e.req("POST", "/api/certs/export", `{"CN":"alice","Passphrase":"`+pass+`"}`, true)
@@ -527,7 +529,7 @@ func TestExportSplitTunnel(t *testing.T) {
 func TestExportSplitTunnelRejected(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
-	if r := e.req("PUT", "/api/config", `{"RedirectGW":false}`, true); r.StatusCode != 200 {
+	if r := e.req("PUT", "/api/vpn/config", `{"RedirectGW":false}`, true); r.StatusCode != 200 {
 		t.Fatal("config put:", r.Status)
 	}
 	r := e.req("POST", "/api/certs/export", `{"CN":"bob","Passphrase":"`+pass+`","SplitTunnel":true}`, true)
@@ -590,6 +592,54 @@ func TestStatsEndpoint(t *testing.T) {
 	}
 }
 
+// TestStatsConfigEndpoint covers get/set for the sampling/retention policy —
+// same merge-onto-current shape as vpn config, and the CLI's own get/set.
+func TestStatsConfigEndpoint(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+
+	var cfg struct{ SampleIntervalSec, RetentionHours int }
+	r := e.req("GET", "/api/stats/config", "", false)
+	json.NewDecoder(r.Body).Decode(&cfg)
+	if r.StatusCode != 200 || cfg.SampleIntervalSec != 60 || cfg.RetentionHours != 24 {
+		t.Fatalf("defaults: status=%d %+v", r.StatusCode, cfg)
+	}
+
+	e.login("admin")
+	if r := e.req("PUT", "/api/stats/config", `{"RetentionHours":0}`, true); r.StatusCode != 400 {
+		t.Fatal("zero retention must 400, got", r.Status)
+	}
+	r = e.req("PUT", "/api/stats/config", `{"RetentionHours":48}`, true)
+	json.NewDecoder(r.Body).Decode(&cfg)
+	if r.StatusCode != 200 || cfg.RetentionHours != 48 || cfg.SampleIntervalSec != 60 {
+		t.Fatalf("partial set: status=%d %+v", r.StatusCode, cfg)
+	}
+}
+
+// TestLogsConfigEndpoint covers get/set for the log-rotation policy — same
+// merge-onto-current shape, and the CLI's `logs config` twin.
+func TestLogsConfigEndpoint(t *testing.T) {
+	e := setup(t)
+	e.login("viewer")
+
+	var cfg struct {
+		Enabled                         bool
+		RetentionDays, KeepUncompressed int
+	}
+	r := e.req("GET", "/api/logs/config", "", false)
+	json.NewDecoder(r.Body).Decode(&cfg)
+	if r.StatusCode != 200 || !cfg.Enabled || cfg.RetentionDays != 14 || cfg.KeepUncompressed != 2 {
+		t.Fatalf("defaults: status=%d %+v", r.StatusCode, cfg)
+	}
+
+	e.login("admin")
+	r = e.req("PUT", "/api/logs/config", `{"RetentionDays":30}`, true)
+	json.NewDecoder(r.Body).Decode(&cfg)
+	if r.StatusCode != 200 || cfg.RetentionDays != 30 || cfg.KeepUncompressed != 2 || !cfg.Enabled {
+		t.Fatalf("partial set: status=%d %+v", r.StatusCode, cfg)
+	}
+}
+
 func TestDebugToggle(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
@@ -626,22 +676,22 @@ func TestDNSBlockInternetToggle(t *testing.T) {
 	e := setup(t)
 	e.login("viewer")
 	var out struct{ BlockInternet bool }
-	r := e.req("GET", "/api/dns/block-internet", "", false)
+	r := e.req("GET", "/api/dns/config", "", false)
 	json.NewDecoder(r.Body).Decode(&out)
 	if r.StatusCode != 200 || out.BlockInternet {
 		t.Fatalf("want blockInternet=false initially, got status=%d %v", r.StatusCode, out.BlockInternet)
 	}
-	if r := e.req("POST", "/api/dns/block-internet", `{"BlockInternet":true}`, true); r.StatusCode != 403 {
+	if r := e.req("PUT", "/api/dns/config", `{"BlockInternet":true}`, true); r.StatusCode != 403 {
 		t.Fatal("readonly must not toggle it, got", r.Status)
 	}
 
 	e.login("admin")
-	r = e.req("POST", "/api/dns/block-internet", `{"BlockInternet":true}`, true)
+	r = e.req("PUT", "/api/dns/config", `{"BlockInternet":true}`, true)
 	json.NewDecoder(r.Body).Decode(&out)
 	if r.StatusCode != 200 || !out.BlockInternet {
 		t.Fatalf("want blockInternet=true after enabling, got status=%d %v", r.StatusCode, out.BlockInternet)
 	}
-	r = e.req("GET", "/api/dns/block-internet", "", false)
+	r = e.req("GET", "/api/dns/config", "", false)
 	json.NewDecoder(r.Body).Decode(&out)
 	if !out.BlockInternet {
 		t.Fatal("GET after enable should report blockInternet=true")
@@ -667,23 +717,23 @@ func TestTelegramEndpoints(t *testing.T) {
 		TokenSet bool
 		Admin    string
 	}
-	r := e.req("GET", "/api/telegram", "", false)
+	r := e.req("GET", "/api/telegram/config", "", false)
 	json.NewDecoder(r.Body).Decode(&st)
 	if r.StatusCode != 200 || st.TokenSet {
 		t.Fatalf("want unconfigured, got status=%d %+v", r.StatusCode, st)
 	}
 
-	if r := e.req("PUT", "/api/telegram", `{"Token":"bad-token"}`, true); r.StatusCode != 400 {
+	if r := e.req("PUT", "/api/telegram/config", `{"Token":"bad-token"}`, true); r.StatusCode != 400 {
 		t.Fatal("rejected token must 400, got", r.Status)
 	}
 	// token and admin are independently settable — setting one must never
 	// require resupplying the other.
-	r = e.req("PUT", "/api/telegram", `{"Token":"good-token"}`, true)
+	r = e.req("PUT", "/api/telegram/config", `{"Token":"good-token"}`, true)
 	json.NewDecoder(r.Body).Decode(&st)
 	if r.StatusCode != 200 || !st.TokenSet || st.Admin != "" {
 		t.Fatalf("token alone: status=%d %+v", r.StatusCode, st)
 	}
-	r = e.req("PUT", "/api/telegram", `{"Admin":"@alice"}`, true)
+	r = e.req("PUT", "/api/telegram/config", `{"Admin":"@alice"}`, true)
 	json.NewDecoder(r.Body).Decode(&st)
 	if r.StatusCode != 200 || !st.TokenSet || st.Admin != "@alice" {
 		t.Fatalf("admin alone: status=%d %+v", r.StatusCode, st)

@@ -336,7 +336,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 	w.Write(bundle)
 }
 
-func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleVPNConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	jsonOK(w, s.LoadConfig())
 }
 
@@ -354,7 +354,7 @@ func mergedConfig(cur ovpnconf.Config, r *http.Request) (ovpnconf.Config, bool) 
 	return in, true
 }
 
-func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleVPNConfigPut(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cur := s.LoadConfig()
 	in, ok := mergedConfig(cur, r)
 	if !ok {
@@ -377,9 +377,9 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request, u *stor
 	jsonOK(w, in)
 }
 
-// handleConfigPreview is handleConfigPut's dry run: same merge+validation,
+// handleVPNConfigPreview is handleVPNConfigPut's dry run: same merge+validation,
 // but diffs against the persisted config instead of writing.
-func (s *Server) handleConfigPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleVPNConfigPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cur := s.LoadConfig()
 	in, ok := mergedConfig(cur, r)
 	if !ok {
@@ -427,13 +427,13 @@ func (s *Server) handleProc(name string, target controller.Lifecycle, allowRecon
 	}
 }
 
-func (s *Server) handleTelegramGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleTelegramConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	jsonOK(w, s.Telegram.Status())
 }
 
-// handleTelegramPut sets token and/or admin independently — empty means
+// handleTelegramConfigSet sets token and/or admin independently — empty means
 // unchanged for that field; SetToken validates against getMe when given.
-func (s *Server) handleTelegramPut(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Token, Admin string }
 	if !decode(r, &in) {
 		jsonErr(w, 400, "bad json")
@@ -544,7 +544,7 @@ func (s *Server) handleCustomHostsPut(w http.ResponseWriter, r *http.Request, u 
 }
 
 // handleCustomHostsPreview is handleCustomHostsPut's dry run, same shape as
-// handleConfigPreview: diff against what's on disk, don't write it.
+// handleVPNConfigPreview: diff against what's on disk, don't write it.
 func (s *Server) handleCustomHostsPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Content string }
 	if !decode(r, &in) {
@@ -773,13 +773,13 @@ func LoadDNSConfig(s *store.Store) DNSConfig {
 }
 func SaveDNSConfig(s *store.Store, cfg DNSConfig) error { return store.SaveJSON(s, dnsConfigKey, cfg) }
 
-func (s *Server) handleDNSBlockGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleDNSConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	jsonOK(w, map[string]bool{"blockInternet": LoadDNSConfig(s.Store).BlockInternet})
 }
 
-// handleDNSBlockSet toggles whether dnsmasq forwards to upstream resolvers;
+// handleDNSConfigSet toggles whether dnsmasq forwards to upstream resolvers;
 // PreStart picks it up on the next dnsmasq start/restart.
-func (s *Server) handleDNSBlockSet(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleDNSConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ BlockInternet bool }
 	if !decode(r, &in) {
 		jsonErr(w, 400, "bad json")
@@ -795,6 +795,50 @@ func (s *Server) handleDNSBlockSet(w http.ResponseWriter, r *http.Request, u *st
 	}
 	s.Store.Audit(u.Username, "dns_block_internet_"+action, "")
 	jsonOK(w, map[string]bool{"blockInternet": in.BlockInternet})
+}
+
+func (s *Server) handleLogsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	jsonOK(w, store.LoadJSON(s.Store, "log_config", controller.DefaultLogConfig()))
+}
+
+// handleLogsConfigSet merges the JSON body onto the current config — an
+// omitted field stays unchanged, same as PUT /api/vpn/config.
+func (s *Server) handleLogsConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	cfg := store.LoadJSON(s.Store, "log_config", controller.DefaultLogConfig())
+	if !decode(r, &cfg) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	if err := store.SaveJSON(s.Store, "log_config", cfg); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "log_config_change", "")
+	jsonOK(w, cfg)
+}
+
+func (s *Server) handleStatsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	jsonOK(w, s.StatsConfig())
+}
+
+// handleStatsConfigSet merges the JSON body onto the current config, same
+// idiom as handleLogsConfigSet.
+func (s *Server) handleStatsConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
+	cfg := s.StatsConfig()
+	if !decode(r, &cfg) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	if cfg.SampleIntervalSec <= 0 || cfg.RetentionHours <= 0 {
+		jsonErr(w, 400, "sampleIntervalSec and retentionHours must be positive")
+		return
+	}
+	if err := SaveStatsConfig(s.Store, cfg); err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	s.Store.Audit(u.Username, "stats_config_change", "")
+	jsonOK(w, cfg)
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *store.User) {

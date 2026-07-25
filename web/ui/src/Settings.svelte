@@ -9,7 +9,7 @@
 
   async function load() {
     try {
-      cfg = await api('GET', '/config')
+      cfg = await api('GET', '/vpn/config')
       dns = (cfg.DNS || []).join(', ')
     } catch (x) { err = x.error }
   }
@@ -25,7 +25,7 @@
     e.preventDefault()
     err = ''; ok = ''; preview = null
     try {
-      cfg = await api('PUT', '/config', normalized())
+      cfg = await api('PUT', '/vpn/config', normalized())
       ok = 'Saved. Use Restart to apply configuration changes.'
     } catch (x) { err = x.error }
   }
@@ -33,7 +33,7 @@
   let preview = $state(null) // {diff, changed}
   async function previewConfig() {
     err = ''; ok = ''
-    try { preview = await api('POST', '/config/preview', normalized()) }
+    try { preview = await api('POST', '/vpn/config/preview', normalized()) }
     catch (x) { err = x.error }
   }
 
@@ -79,7 +79,7 @@
   let tgErr = $state('')
   let tgOk = $state('')
   async function loadTelegram() {
-    try { tg = await api('GET', '/telegram') } catch (x) { tgErr = x.error }
+    try { tg = await api('GET', '/telegram/config') } catch (x) { tgErr = x.error }
   }
   loadTelegram()
 
@@ -90,7 +90,7 @@
     if (!admin) return
     tgErr = ''; tgOk = ''
     try {
-      tg = await api('PUT', '/telegram', { Token: token, Admin: admin })
+      tg = await api('PUT', '/telegram/config', { Token: token, Admin: admin })
       tgOk = 'Saved. Start the bot below to bring it up.'
     } catch (x) { tgErr = x.error }
   }
