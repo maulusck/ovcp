@@ -24,7 +24,7 @@ second-class citizen.
   `-json` switches every command to machine-readable output, same fields
   either way. Shell completion for bash/zsh/fish.
 - **Client export** — a complete, ready-to-import `.ovpn` profile on
-  stdout or as a QR code, optionally key-encrypted, from the CLI or the UI.
+  stdout, optionally key-encrypted, from the CLI or the UI.
 - **Internal DNS** (optional) — dnsmasq resolves the server and each
   connected client by hostname over the tunnel, plus custom hosts-file
   entries. Switch it to answer only local names, no upstream forwarding.
@@ -37,7 +37,8 @@ second-class citizen.
   everything needed to restore the server, nothing that needs the
   original host.
 - **Access control** — role-based (admin/operator/readonly), optional
-  TOTP 2FA, rate-limited logins, CSRF-protected HTTPS-only sessions.
+  TOTP 2FA with QR-code enrollment, rate-limited logins, CSRF-protected
+  HTTPS-only sessions.
 - **Packaging** — systemd unit, `.deb`/`.rpm`/`.apk`/Arch/Void packages
   (amd64, ARM, RISC-V; glibc or musl), a multi-arch container image, and a
   SELinux policy. All included, none bolted on later.
@@ -113,10 +114,8 @@ podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
   -v ovcp:/var/lib/ovcp ovcp
 ```
 
-If every client shows the same `RealAddress`, the container runtime's
-userspace port proxy is rewriting the source address — not an ovcp bug.
-See `man ovcp`'s **DEPLOYMENT** → **container** section for the fix
-(Docker, Podman, and Kubernetes each require a different one).
+Every client showing the same `RealAddress`? See `man ovcp`'s
+**DEPLOYMENT** → **container** section.
 
 ## CLI
 

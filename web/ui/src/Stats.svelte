@@ -38,11 +38,12 @@
       globalSamples = d.samples || []
       sessions = d.sessions || []
       revokedCNs = new Set(certs.filter(c => c.Revoked).map(c => c.CN))
+      err = ''
     } catch (x) { err = x.error }
   }
   async function loadScoped() {
     if (!scope) { scopeSamples = globalSamples; return }
-    try { scopeSamples = (await api('GET', '/stats?cn=' + encodeURIComponent(scope))).samples || [] }
+    try { scopeSamples = (await api('GET', '/stats?cn=' + encodeURIComponent(scope))).samples || []; err = '' }
     catch (x) { err = x.error }
   }
   loadGlobal()

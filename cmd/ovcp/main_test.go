@@ -397,6 +397,37 @@ func TestStatsConfigCommand(t *testing.T) {
 	}
 }
 
+// TestLogsCommand covers config get/set (same "-1 means unchanged" idiom as
+// stats config), rotate, and status — logs.go had zero CLI-level coverage.
+func TestLogsCommand(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "logs", "config", "get"); r.code != 0 ||
+		!strings.Contains(r.stdout, "enabled:           true") ||
+		!strings.Contains(r.stdout, "retention-days:    14") ||
+		!strings.Contains(r.stdout, "keep-uncompressed: 2") {
+		t.Fatalf("logs config get defaults: %+v", r)
+	}
+	if r := run(t, env, "logs", "config", "set", "-enabled", "off", "-retention-days", "7"); r.code != 0 {
+		t.Fatalf("logs config set: %+v", r)
+	}
+	if r := run(t, env, "logs", "config", "get"); r.code != 0 ||
+		!strings.Contains(r.stdout, "enabled:           false") ||
+		!strings.Contains(r.stdout, "retention-days:    7") ||
+		!strings.Contains(r.stdout, "keep-uncompressed: 2") {
+		t.Fatalf("logs config get after set: %+v", r)
+	}
+	if r := run(t, env, "logs", "rotate"); r.code != 0 || !strings.Contains(r.stdout, "rotated") {
+		t.Fatalf("logs rotate: %+v", r)
+	}
+	if r := run(t, env, "logs", "status"); r.code != 0 || !strings.Contains(r.stdout, "openvpn") ||
+		!strings.Contains(r.stdout, "ovcp") || !strings.Contains(r.stdout, "dnsmasq") {
+		t.Fatalf("logs status: %+v", r)
+	}
+}
+
 func TestSortByFlag(t *testing.T) {
 	type row struct{ name string }
 	rows := []row{{"charlie"}, {"alice"}, {"bob"}}

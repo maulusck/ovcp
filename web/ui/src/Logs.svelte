@@ -93,14 +93,15 @@
       const el = boxes[id]
       fitToContent(el)
       if (autoscroll && el) el.scrollTop = el.scrollHeight
+      err = ''
     } catch (x) { err = x.error }
   }
   async function loadAudit() {
-    try { entries = await api('GET', '/audit'); await tick(); fitToContent(boxes.audit) }
+    try { entries = await api('GET', '/audit'); await tick(); fitToContent(boxes.audit); err = '' }
     catch (x) { err = x.error }
   }
   async function loadDebug() {
-    try { debugOn = (await api('GET', '/debug')).debug } catch (x) { err = x.error }
+    try { debugOn = (await api('GET', '/debug')).debug; err = '' } catch (x) { err = x.error }
   }
   // per-panel refresh (maximized view's own button) — every id already has a loader.
   const refreshOne = (id) => (id === 'audit' ? loadAudit() : loadLog(id))
@@ -139,7 +140,7 @@
 
   async function toggleDebug(e) {
     const want = e.target.checked
-    try { debugOn = (await api('POST', '/debug', { Debug: want })).debug }
+    try { debugOn = (await api('POST', '/debug', { Debug: want })).debug; err = '' }
     catch (x) { err = x.error; e.target.checked = !want }
   }
 

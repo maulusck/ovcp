@@ -8,7 +8,7 @@
   // header pill) and caches the full client list on the shared vpn state.
   async function kill(cn) {
     if (!confirm(`Disconnect ${cn}?`)) return
-    try { await api('POST', '/clients/kill', { CN: cn }); pollOnce() }
+    try { await api('POST', '/clients/kill', { CN: cn }); pollOnce(); err = '' }
     catch (x) { err = x.error }
   }
 

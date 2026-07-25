@@ -1,4 +1,4 @@
-.TH OVCP 8 "2026-07-13" "ovcp" "System Administration"
+.TH OVCP 8 "2026-07-25" "ovcp" "System Administration"
 .SH NAME
 ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for an OpenVPN server
 .SH SYNOPSIS
@@ -75,12 +75,12 @@ self\-clearing once the window passes; a separate, looser limit locks out
 the username alone after 20 attempts in the same window, to catch a brute
 force spread across many source IPs.
 .PP
-\fBconfig set \-extra\fR / \fBconfig edit\fR (server config) and
+\fBvpn config set \-extra\fR / \fBvpn config edit\fR (server config) and
 \fBcertificate export\fR's \fB\-custom\-opts\fR (one client's profile) both
 append raw openvpn directives verbatim, with no parsing or validation.
 Neither needs a role beyond what already gates that surface: server config
-is \fBadmin\fR\-only already (\fBPUT /api/config\fR, same gate \fBconfig
-get|set|preview|edit\fR go through), and whichever role can export a
+is \fBadmin\fR\-only already (\fBPUT /api/vpn/config\fR, same gate \fBvpn
+config get|set|preview|edit\fR go through), and whichever role can export a
 profile at all already chooses its remote host, port, proto, and cipher. A
 bad directive just fails openvpn's next start (server) or that one
 client's next connection attempt (client) \(en never other clients.
@@ -160,7 +160,9 @@ actionable error if
 has not been run.
 .TP
 .B certificate issue \fB\-cn\fR \fINAME\fR [\fB\-kind\fR client|server] [\fB\-days\fR \fIN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR]
-Issue a certificate. Client private keys are printed (or written with
+\fBcert\fR is accepted everywhere as a shorthand for \fBcertificate\fR
+(\fBovcp cert list\fR, \fBovcp cert export ...\fR); the rest of this page
+spells it out in full. Issue a certificate. Client private keys are printed (or written with
 \fB\-out\fR) exactly once and never stored; if lost, revoke and reissue.
 Certificates (public) are kept and can be re\-downloaded anytime with
 \fBcertificate list\fR / the web UI. With \fB\-key\-pass\fR the private key
@@ -193,8 +195,8 @@ Issue a fresh client certificate and print a complete inline
 \fBcertificate issue\fR). \fB\-remote\fR defaults to \fBOVCP_SERVER_CN\fR /
 the server cert's CN, and is only required if neither is set. \fB\-port\fR,
 \fB\-proto\fR, and the data cipher default to the server's configured
-values (see \fBconfig get\fR / \fBconfig set\fR, or the web UI's Settings
-tab \(en both stay in sync); pass \fB\-port\fR or \fB\-proto\fR to override
+values (see \fBvpn config get\fR / \fBvpn config set\fR, or the web UI's
+Settings tab \(en both stay in sync); pass \fB\-port\fR or \fB\-proto\fR to override
 just this one export. \fB\-key\-pass\fR password\-protects the embedded
 key. Same one\-active\-cert\-per\-CN rule and 64\-byte \fB\-cn\fR cap as
 \fBcertificate issue\fR.
@@ -205,7 +207,7 @@ Adds a client\-side \fBpull\-filter\fR that ignores the server's pushed
 \fBredirect\-gateway\fR, so this one client keeps its own default route
 instead of tunneling all traffic; every other pushed option (DNS, explicit
 routes) still applies. Only accepted when the server itself redirects all
-traffic (\fBconfig set \-redirect\-gw\fR / web UI Settings) \(en rejected
+traffic (\fBvpn config set \-redirect\-gw\fR / web UI Settings) \(en rejected
 otherwise, since there is nothing to opt out of. Also available from the
 web UI (Certs tab), shown only when the server redirects.
 .TP
@@ -239,15 +241,15 @@ never restores a server cert (see below). Also available from the web UI
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload its certificate.
 .TP
-.B config get
+.B vpn config get
 Print the persisted server configuration \(en proto, port, subnet,
-cipher, pushed DNS/routes, redirect\-gateway, and the raw extra
-directives \(en the same values \fBGET /api/config\fR (web UI Settings
-tab) reads.
+cipher, pushed DNS/routes, push\-internal\-dns, redirect\-gateway, and the
+raw extra directives \(en the same values \fBGET /api/vpn/config\fR (web UI
+Settings tab) reads.
 .TP
-.B config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR on|off] [\fB\-extra\fR \fIOPTS\fR|\fB\-\fR]
+.B vpn config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-push\-internal\-dns\fR on|off] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR on|off] [\fB\-extra\fR \fIOPTS\fR|\fB\-\fR]
 Change one or more server settings and persist them \(en the CLI/env\-var
-equivalent of the web UI's Settings tab \fBPUT /api/config\fR, for
+equivalent of the web UI's Settings tab \fBPUT /api/vpn/config\fR, for
 containers and non\-attended initialization where there is no browser to
 click Save. Every flag defaults to its zero value, meaning \(lqleave this
 setting unchanged\(rq: only the flags actually passed are applied, on top
@@ -258,29 +260,51 @@ list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
 appending to it. \fB\-extra\fR takes the same three forms as
 \fBcertificate export\fR's \fB\-custom\-opts\fR (comma list, \fB$(cat
 FILE)\fR, or a bare \fB\-\fR for \fB$EDITOR\fR) \(en equivalent to
-\fBconfig edit\fR below, just scriptable inline. \fB\-redirect\-gw\fR
-accepts \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR, or \fB1\fR/\fB0\fR,
-case\-insensitive \(en the same boolean vocabulary as \fBdns
-block\-internet\fR below. Rejects an invalid combination (bad CIDR,
-disallowed cipher, port out of range, an unrecognized \fB\-redirect\-gw\fR
+\fBvpn config edit\fR below, just scriptable inline. \fB\-redirect\-gw\fR and
+\fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
+or \fB1\fR/\fB0\fR, case\-insensitive \(en the same boolean vocabulary as
+\fBdns config set \-block\-internet\fR below. Rejects an invalid combination
+(bad CIDR, disallowed cipher, port out of range, an unrecognized boolean
 value) without writing anything. Takes effect on the next
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload its configuration.
+.RS
 .TP
-.B config preview [\fIsame flags as\fR \fBconfig set\fR]
-Show what \fBconfig set\fR with the same flags would change in
+\fBPush internal DNS\fR
+\fB\-push\-internal\-dns\fR (off by default; \fBovcp init\fR turns it on
+automatically when it finds dnsmasq on \fBPATH\fR) pushes the server's own
+dnsmasq resolver \(en its VPN\-side tun IP, e.g. \fI10.8.0.1\fR \(en to
+clients first, ahead of anything in \fB\-dns\fR. That ordering is what lets
+internal cert\-hostnames (see \fBrecord\fR below, \fIcerts.hosts\fR /
+\fIcustom.hosts\fR) resolve at all: without it, a client only ever asks
+whatever DNS it already had, and never learns those names exist. It
+interacts directly with \fBdns config set \-block\-internet\fR below: that
+setting makes dnsmasq itself refuse to forward upstream, but it's no
+protection at all for a client that was never told to use dnsmasq as its
+resolver in the first place \(en \fB\-push\-internal\-dns\fR is what makes
+that client send queries there. Likewise, manual entries left in
+\fB\-dns\fR alongside \fB\-block\-internet on\fR let a client route around
+the block by falling through to one of those other pushed resolvers.
+\fBvpn config set\fR and \fBdns config set\fR both print a non\-fatal
+warning (CLI: stderr; web UI: inline) when they detect either combination,
+but never block the save \(en it's occasionally the intended setup (e.g. a
+resolver deliberately kept reachable for split\-DNS).
+.RE
+.TP
+.B vpn config preview [\fIsame flags as\fR \fBvpn config set\fR]
+Show what \fBvpn config set\fR with the same flags would change in
 \fIserver.conf\fR (unified \fB+\fR/\fB\-\fR diff lines), without persisting
 or writing anything \(en the CLI twin of the web UI's \fBPreview\fR
-button (\fBPOST /api/config/preview\fR). Safe to run anytime: nothing is
-saved until the same flags are run through \fBconfig set\fR instead \(en
-\fBconfig get\fR right after a \fBpreview\fR still shows the old values.
+button (\fBPOST /api/vpn/config/preview\fR). Safe to run anytime: nothing is
+saved until the same flags are run through \fBvpn config set\fR instead \(en
+\fBvpn config get\fR right after a \fBpreview\fR still shows the old values.
 .TP
-.B config edit
+.B vpn config edit
 Edit the server config's raw extra directives in \fB$EDITOR\fR (falls
 back to \fBvi\fR), same idiom as \fBgit commit\fR / \fBcrontab \-e\fR.
 Saved text is appended verbatim to the next rendered \fIserver.conf\fR,
 unvalidated \(en a bad line fails on the next restart. Equivalent to
-\fBconfig set \-extra \-\fR. Also available from the web UI (Settings,
+\fBvpn config set \-extra \-\fR. Also available from the web UI (Settings,
 admin role, a plain multi\-line field); all three write the same
 persisted value. Takes effect on the next
 .B ovcp vpn restart
@@ -320,15 +344,30 @@ the connected clients \(en both via the control socket, see
 \fBOVCP_CTRL_SOCK\fR. Traffic history and per\-client sessions are
 \fBstats\fR's job, not this command's.
 .TP
-.B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR \fIN\fR] [\fB\-ctrl\fR \fIPATH\fR]
+.B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR|\fB\-int\fR \fIN\fR] [\fB\-ctrl\fR \fIPATH\fR]
+.TQ
+.B stats config get
+.TQ
+.B stats config set [\fB\-sample\-interval\-sec\fR \fIN\fR] [\fB\-retention\-hours\fR \fIN\fR]
 Traffic history: recent throughput/volume and finished client sessions,
 globally or for one client (\fB\-cn\fR), read straight from the database
 \(en works even with \fBserve\fR not running. Same data as the web UI's
 Stats tab. \fB\-follow\fR switches to a live top\-like view instead: polls
 a running \fBserve\fR's control socket (not the database) every
-\fB\-interval\fR seconds (default 2) and redraws in place, sorted
-busiest\-first when global; rejects \fB\-json\fR (a live view, not a single
-result) and needs \fBserve\fR running.
+\fB\-interval\fR (alias \fB\-int\fR) seconds (default 2) and redraws in
+place, sorted busiest\-first when global; rejects \fB\-json\fR (a live
+view, not a single result) and needs \fBserve\fR running.
+.B stats config get\fR/\fBstats config set
+manage the sampler that feeds all of the above, independently of
+\fB\-follow\fR/\fB\-interval\fR (which only control this one invocation's
+polling, not the sampler itself): \fB\-sample\-interval\-sec\fR (default
+60, seeded from \fBOVCP_STATS_SAMPLE_INTERVAL\fR) is how often a sample is
+written per connected client; \fB\-retention\-hours\fR (default 24, seeded
+from \fBOVCP_STATS_RETENTION_HOURS\fR) is how far back samples/sessions
+are kept and queried, by this command and \fBGET /api/stats\fR alike. Both
+must be positive. Same persisted values as \fBGET\fR/\fBPUT
+/api/stats/config\fR (web UI); picked up by the running sampler on its
+next tick, no restart needed.
 .TP
 .B vpn start|stop|restart|reconnect|status [\fB\-ctrl\fR \fIPATH\fR]
 .TQ
@@ -374,11 +413,13 @@ manages openvpn. No
 (dnsmasq has no such signal). If dnsmasq isn't installed, every op
 fails with a clear error.
 .TP
-.B dns block\-internet [on|off|status]
+.B dns config get
+.TQ
+.B dns config set [\fB\-block\-internet\fR on|off]
 Whether dnsmasq also forwards to upstream resolvers, or answers only
 names it knows locally \(en the same persisted setting as the Records
 tab's \(lqBlock internet DNS\(rq toggle
-(\fBGET\fR/\fBPOST /api/dns/block\-internet\fR). Unlike
+(\fBGET\fR/\fBPUT /api/dns/config\fR). Unlike
 .BR start / stop / restart / status
 above, this is a stored setting, not a live control\-socket op \(en it
 works without a running
@@ -387,10 +428,18 @@ and takes effect on dnsmasq's next
 .B start
 or
 .BR restart .
-With no argument, or \fBstatus\fR, prints the current value; \fBon\fR/
-\fBoff\fR sets it, same boolean vocabulary as \fBconfig set
-\-redirect\-gw\fR (\fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR, \fB1\fR/
-\fB0\fR, case\-insensitive).
+Default off, seeded from \fBOVCP_DNS_BLOCK_INTERNET\fR (\fBtrue\fR turns it
+on) only until the first save \(en see \fBvpn config set\fR above for the
+same seed\-once\-then\-persisted pattern.
+.B dns config get
+prints the current value; \fB\-block\-internet\fR on \fBdns config set\fR
+takes the same boolean vocabulary as \fBvpn config set \-redirect\-gw\fR (\fBon\fR/
+\fBoff\fR, \fBtrue\fR/\fBfalse\fR, \fB1\fR/\fB0\fR, case\-insensitive);
+omitting it makes \fBset\fR a no\-op. See \fBPush internal DNS\fR under
+\fBvpn config set\fR above for how this interacts with that setting:
+turning this on without also pushing the internal resolver, or combining
+it with manually pushed DNS servers (\fBvpn config set \-dns\fR), leaves a
+documented leak that both commands warn about on save (non\-fatal).
 .TP
 .B record list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
 .TQ
@@ -405,7 +454,7 @@ include/exclude status, same filters/sort/coloring as \fBcertificate
 list\fR, plus \fIcustom.hosts\fR' raw content.
 .B edit
 opens the custom entries in \fB$EDITOR\fR (fallback vi), same as
-\fBconfig edit\fR.
+\fBvpn config edit\fR.
 .B include
 and
 .B exclude
@@ -422,17 +471,21 @@ included), mirroring \fBuser enable|disable\fR.
 Manage rotation of \fIopenvpn.log\fR/\fIovcp.log\fR/\fIdnsmasq.log\fR (see
 \fBFILES\fR): internal copytruncate, safe with the worker's already\-open
 handle, no reopen or restart needed. Runs once a day by default while
-\fBserve\fR is up.
-.B config set \-enabled\fR
-(default on) toggles that daily pass \(en turn it off to hand rotation to
-an external \fBlogrotate\fR instead (see \fI/var/log/ovcp\fR in
+\fBserve\fR is up. Same persisted setting as \fBGET\fR/\fBPUT
+/api/logs/config\fR (\fBPOST /api/logs/rotate\fR for \fBrotate\fR).
+.B logs config set \-enabled\fR
+(default on, seeded from \fBOVCP_LOG_ROTATE_ENABLED\fR \(en anything but
+\fBfalse\fR means on) toggles that daily pass \(en turn it off to hand
+rotation to an external \fBlogrotate\fR instead (see \fI/var/log/ovcp\fR in
 \fBFILES\fR).
 .B \-retention\-days
-(default 14, \fB0\fR keeps forever) deletes rotated generations older than
-that;
+(default 14, seeded from \fBOVCP_LOG_RETENTION_DAYS\fR; \fB0\fR keeps
+forever) deletes rotated generations older than that;
 .B \-keep\-uncompressed
-(default 2) gzips anything older than the newest N. Stored, like
-\fBdns block\-internet\fR, not an env var.
+(default 2, seeded from \fBOVCP_LOG_KEEP_UNCOMPRESSED\fR) gzips anything
+older than the newest N. Like \fBvpn config\fR's and \fBdns config\fR's env
+vars, these only seed the first, never\-yet\-persisted default \(en once
+saved, \fBlogs config set\fR is the way to change it, not the environment.
 .B rotate
 runs one pass immediately \(en point an external cron at this if
 \fB\-enabled\fR is off \(en and works whether or not \fBserve\fR is
@@ -469,15 +522,23 @@ config changes), newest first.
 Toggle verbose logging on a running \fBserve\fR (over the control socket,
 see \fBOVCP_CTRL_SOCK\fR) \(en no restart, resets to normal on the next one.
 .TP
-.B telegram token \fB\-admin\fR \fIID\-or\-@user\fR
+.B telegram config get
+.TQ
+.B telegram config set [\fB\-token\fR] [\fB\-admin\fR \fIID\-or\-@user\fR]
 .TQ
 .B telegram start|stop|restart|status [\fB\-ctrl\fR \fIPATH\fR]
-Notify\-only Telegram bot, with a narrow control surface. \fBtoken\fR
-saves a bot token (prompted, or \fBOVCP_TELEGRAM_TOKEN\fR; validated
-against Telegram's \fBgetMe\fR before saving) together with the one
-Telegram identity \(en a numeric user id or \fB@username\fR, \fB\-admin\fR
-or \fBOVCP_TELEGRAM_ADMIN\fR \(en the bot will ever respond to; anyone
-else gets a 403 reply and nothing else.
+Notify\-only Telegram bot, with a narrow control surface. \fBtelegram
+config set\fR sets the bot token and the one Telegram identity the bot
+will ever respond to independently \(en pass either or both, at least one
+required. \fB\-token\fR is a boolean flag, not a value (a secret has no
+business on the command line): prompts interactively, or reads
+\fBOVCP_TELEGRAM_TOKEN\fR, validated against Telegram's \fBgetMe\fR before
+saving. \fB\-admin\fR takes the numeric user id or \fB@username\fR
+directly (default \fBOVCP_TELEGRAM_ADMIN\fR if set); anyone else who
+messages the bot gets a 403 reply and nothing else.
+\fBtelegram config get\fR prints whether a token is set and the current admin,
+never the token itself \(en same values as \fBGET\fR/\fBPUT
+/api/telegram/config\fR (web UI).
 \fBstart\fR/\fBstop\fR/\fBrestart\fR/\fBstatus\fR drive the poller inside a
 running \fBserve\fR over the control socket (see \fBOVCP_CTRL_SOCK\fR),
 same as \fBvpn\fR; the poller also auto\-starts with \fBserve\fR if a token
@@ -593,9 +654,9 @@ raw bytes on stdout, or the paths they were written to.
 .B certificate revoke
 \fB{serial, crlPath}\fR.
 .TP
-.B rotate\-ca, config edit, backup restore, telegram token, user del,
+.B rotate\-ca, vpn config edit, backup restore, user del,
 .B user passwd, user totp \-off, record edit|include|exclude, init \-skeleton,
-.B dns block\-internet
+.B logs rotate
 \fB{message}\fR \(en a confirmation string, nothing structured beyond it.
 .TP
 .B certificate renew\-server
@@ -607,21 +668,46 @@ raw bytes on stdout, or the paths they were written to.
 .B certificate list
 array of \fB{status, kind, cn, serial, expires}\fR.
 .TP
-.B config get, config set
+.B vpn config get, vpn config set
 The full persisted server config: \fB{Proto, Port, Subnet, Cipher, DNS,
-Routes, RedirectGW, Extra}\fR plus the \fBovcp\fR\-managed path/runtime
-fields (\fBCACert, ServerCert, ServerKey, CRL, TLSCrypt, MgmtSocket,
-StatusLog, RunAsUser, RunAsGroup, ServerCN\fR). Deliberately \fInot\fR this
-page's usual lowercase field\-name convention \(en it's the same untagged
-Go struct \fBGET\fR/\fBPUT /api/config\fR already return, so a script gets
-byte\-identical shapes from the CLI and the web UI for this one resource.
+PushInternalDNS, Routes, RedirectGW, Extra}\fR plus the \fBovcp\fR\-managed
+path/runtime fields (\fBCACert, ServerCert, ServerKey, CRL, TLSCrypt,
+MgmtSocket, StatusLog, StatusInterval, RunAsUser, RunAsGroup, ServerCN\fR).
+Deliberately \fInot\fR this page's usual lowercase field\-name convention
+\(en it's the same untagged Go struct \fBGET\fR/\fBPUT /api/vpn/config\fR
+already return, so a script gets byte\-identical shapes from the CLI and
+the web UI for this one resource.
 .TP
-.B config preview
+.B vpn config preview
 \fB{diff, changed}\fR: \fBdiff\fR an array of unified \fB+\fR/\fB\-\fR
 \fIserver.conf\fR lines (empty if \fBchanged\fR is \fBfalse\fR).
 .TP
+.B dns config get, dns config set
+\fB{BlockInternet}\fR \(en same untagged\-struct exception as \fBvpn
+config\fR above, for the CLI's own JSON. \fINote:\fR the REST API's
+\fBGET\fR/\fBPUT /api/dns/config\fR instead wrap the same value as
+\fB{"blockInternet": ...}\fR, lowercase \(en unlike \fBvpn config\fR, this
+is the one settings resource where the CLI and the web API don't share a
+byte\-identical shape.
+.TP
+.B logs config get, logs config set
+\fB{Enabled, RetentionDays, KeepUncompressed}\fR, same untagged\-struct
+convention as \fBvpn config\fR above \(en \fBGET\fR/\fBPUT
+/api/logs/config\fR return the identical shape.
+.TP
+.B logs status
+array of \fB{Name, Path, CurrentSize, Generations, Oldest, Newest}\fR, one
+row per log source (see \fBlogs\fR in \fBCOMMANDS\fR).
+.TP
+.B stats config get, stats config set
+\fB{SampleIntervalSec, RetentionHours}\fR, same untagged\-struct convention
+as \fBvpn config\fR above \(en \fBGET\fR/\fBPUT /api/stats/config\fR return
+the identical shape.
+.TP
 .B status
-\fB{running, pid, error, clients}\fR.
+\fB{running, pid, uptime, ovcpUptime, error, clients}\fR \(en \fBpid\fR,
+\fBuptime\fR, \fBovcpUptime\fR, and \fBerror\fR are omitted, not sent as
+empty/zero, when not applicable (e.g. \fBuptime\fR while stopped).
 .TP
 .B stats
 \fB{samples, sessions}\fR (snapshot mode only \(en see \fB\-follow\fR
@@ -630,11 +716,11 @@ above).
 .B vpn kill
 \fB{message}\fR.
 .TP
-.B vpn (other ops), dns (excl. block\-internet), debug
+.B vpn (other ops), dns (excl. config), debug
 \fBvpn\fR/\fBdns\fR lifecycle ops (\fBstart|stop|restart|reconnect|status\fR):
-\fB{pid, changed, startedAt, serveStartedAt}\fR for every op including
-\fBstatus\fR \(en \fBdns block\-internet\fR is \fB{message}\fR instead, see
-above. \fBdebug on\fR/\fBoff\fR: \fB{debug}\fR.
+\fB{Pid, Changed, StartedAt, ServeStartedAt}\fR (untagged, like \fBvpn
+config\fR above) for every op including \fBstatus\fR \(en \fBdns config\fR
+is documented separately above. \fBdebug on\fR/\fBoff\fR: \fB{debug}\fR.
 .TP
 .B record list
 \fB{certs, custom}\fR: \fBcerts\fR an array of \fB{status, kind, cn,
@@ -642,8 +728,9 @@ serial, expires, includeDNS}\fR (same \fBstatus\fR values as
 \fBcertificate list\fR); \fBcustom\fR is \fIcustom.hosts\fR' raw content as
 one string.
 .TP
-.B telegram start|stop|restart|status
-\fB{running, tokenSet, admin}\fR.
+.B telegram config get, telegram config set, telegram start|stop|restart|status
+\fB{running, tokenSet, admin}\fR \(en same shape from every one of these,
+whether or not \fB\-token\fR/\fB\-admin\fR were passed to \fBconfig set\fR.
 .TP
 .B user add
 \fB{username, role}\fR.
@@ -727,13 +814,14 @@ through is still audited as \fBweak_password_accepted\fR. Named for what it
 is, not a setting to reach for by accident.
 .TP
 .B OVCP_TELEGRAM_TOKEN
-Non\-interactive equivalent for \fBtelegram token\fR's bot token. Same
-leak caveat as above; stored in the database afterward regardless (see
-\fBSECURITY\fR).
+Non\-interactive equivalent for \fBtelegram config set \-token\fR's bot
+token. Same leak caveat as above; stored in the database afterward
+regardless (see \fBSECURITY\fR).
 .TP
 .B OVCP_TELEGRAM_ADMIN
-Non\-interactive equivalent for \fBtelegram token\fR's \fB\-admin\fR flag: the
-numeric Telegram id or \fB@username\fR the bot will ever respond to.
+Non\-interactive equivalent for \fBtelegram config set\fR's \fB\-admin\fR
+flag: the numeric Telegram id or \fB@username\fR the bot will ever respond
+to.
 .TP
 .B OVCP_OPENVPN_USER, OVCP_OPENVPN_GROUP
 Unprivileged account openvpn drops to after startup (default \fInobody\fR
@@ -743,20 +831,44 @@ since Alpine has no \fInogroup\fR.
 .B OVCP_OPENVPN_PROTO, OVCP_OPENVPN_PORT, OVCP_OPENVPN_SUBNET,
 .B OVCP_OPENVPN_CIPHER, OVCP_OPENVPN_DNS, OVCP_OPENVPN_ROUTES,
 .B OVCP_OPENVPN_REDIRECT_GW, OVCP_OPENVPN_EXTRA
-Seed every openvpn server setting \fBconfig get\fR/\fBconfig set\fR/the web
-UI's Settings tab can show or change \(en \fIudp\fR, \fI1194\fR,
+Seed every openvpn server setting \fBvpn config get\fR/\fBvpn config set\fR/
+the web UI's Settings tab can show or change \(en \fIudp\fR, \fI1194\fR,
 \fI10.8.0.0/24\fR, \fIAES\-256\-GCM\fR, unset (no pushed DNS), unset (no
 pushed routes), \fItrue\fR (set \fBOVCP_OPENVPN_REDIRECT_GW=false\fR to
 disable), and empty by default, respectively. \fBOVCP_OPENVPN_DNS\fR and
-\fBOVCP_OPENVPN_ROUTES\fR take a comma\-separated list, same as \fBconfig
-set\fR's \fB\-dns\fR/\fB\-routes\fR flags. The one\-shot, non\-attended
+\fBOVCP_OPENVPN_ROUTES\fR take a comma\-separated list, same as \fBvpn
+config set\fR's \fB\-dns\fR/\fB\-routes\fR flags. There is no env var for
+\fB\-push\-internal\-dns\fR \(en it defaults to off, except that \fBinit\fR
+itself turns it on when it finds dnsmasq on \fBPATH\fR (see \fBinit\fR and
+\fBvpn config set\fR in \fBCOMMANDS\fR). The one\-shot, non\-attended
 path for containers and provisioning tools that need a non\-default
 protocol/port/subnet/etc. at \fBinit\fR time without a CLI flag or a
 browser: read once by \fBinit\fR (and any first config load before
 anything has been explicitly saved) \(en once a config is persisted,
-\fBconfig set\fR is the way to change it, not re\-exporting these and
-restarting. See \fBconfig set\fR in \fBCOMMANDS\fR for the flag
+\fBvpn config set\fR is the way to change it, not re\-exporting these and
+restarting. See \fBvpn config set\fR in \fBCOMMANDS\fR for the flag
 equivalents and their exact defaults/validation.
+.TP
+.B OVCP_DNS_BLOCK_INTERNET
+Seeds \fBdns config set \-block\-internet\fR's persisted default: set to
+\fItrue\fR to start with it on. Same one\-shot\-seed\-then\-persisted
+pattern as \fBOVCP_OPENVPN_*\fR above \(en see \fBdns config set\fR in
+\fBCOMMANDS\fR.
+.TP
+.B OVCP_STATS_SAMPLE_INTERVAL, OVCP_STATS_RETENTION_HOURS
+Seed \fBstats config set\fR's \fB\-sample\-interval\-sec\fR/
+\fB\-retention\-hours\fR (default \fB60\fR seconds, \fB24\fR hours). Same
+one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR above \(en
+see \fBstats\fR in \fBCOMMANDS\fR.
+.TP
+.B OVCP_LOG_ROTATE_ENABLED, OVCP_LOG_RETENTION_DAYS, OVCP_LOG_KEEP_UNCOMPRESSED
+Seed \fBlogs config set\fR's \fB\-enabled\fR/\fB\-retention\-days\fR/
+\fB\-keep\-uncompressed\fR (default enabled, \fB14\fR days, \fB2\fR
+generations kept uncompressed). \fBOVCP_LOG_ROTATE_ENABLED\fR follows the
+same \(lqanything but \fBfalse\fR means on\(rq rule as
+\fBOVCP_OPENVPN_REDIRECT_GW\fR; the other two are plain integers. Same
+one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR above \(en
+see \fBlogs\fR in \fBCOMMANDS\fR.
 .TP
 .B OVCP_DNSMASQ_USER, OVCP_DNSMASQ_GROUP
 Same as \fBOVCP_OPENVPN_USER\fR/\fBGROUP\fR, but dnsmasq's own account \(en
@@ -894,17 +1006,26 @@ edit the server's own extra directives:
 .RS
 ovcp certificate export \-cn dana\-phone \-remote vpn.example.com \e
   \-custom\-opts "block\-outside\-dns,ping\-restart 30" > dana\-phone.ovpn
-ovcp config edit
+ovcp vpn config edit
 .RE
 .fi
 Move the server to TCP/443 and stop routing all client traffic through
-the VPN, previewing the \fIserver.conf\fR change first (no CLI equivalent
-before \fBconfig\fR existed \(en this used to require the web UI):
+the VPN, previewing the \fIserver.conf\fR change first:
 .nf
 .RS
-ovcp config preview \-proto tcp \-port 443 \-redirect\-gw off
-ovcp config set \-proto tcp \-port 443 \-redirect\-gw off
+ovcp vpn config preview \-proto tcp \-port 443 \-redirect\-gw off
+ovcp vpn config set \-proto tcp \-port 443 \-redirect\-gw off
 ovcp vpn restart
+.RE
+.fi
+Push the internal dnsmasq resolver to clients and block dnsmasq from
+forwarding anywhere else \(en internal cert\-hostnames still resolve,
+nothing else does:
+.nf
+.RS
+ovcp vpn config set \-push\-internal\-dns on
+ovcp dns config set \-block\-internet on
+ovcp vpn restart && ovcp dns restart
 .RE
 .fi
 Non\-attended container init with a non\-default subnet and DNS, no CLI
