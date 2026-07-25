@@ -128,6 +128,10 @@ func (ctx *cliContext) openStore() *store.Store {
 	die(ensureSkeleton(ctx.dataDir))
 	s, err := store.Open(filepath.Join(ctx.dataDir, "ovcp.db"))
 	die(err)
+	// CLI-triggered audits (ca_rotate has no API path at all) still need to
+	// reach Telegram — Notify() is a bare outbound call, safe here unlike
+	// slog logging, which stays daemon-only to keep -json/automation stderr clean.
+	s.OnAudit(telegram.New(s, nil, nil, nil).OnAudit)
 	return s
 }
 

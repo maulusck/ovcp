@@ -323,10 +323,7 @@ var botCommands = []botCommand{
 	{cmdStop, "bring it down (asks first)"},
 	{cmdRestart, "full bounce (asks first)"},
 	{cmdReconnect, "SIGUSR1: renegotiate, no restart"},
-	{cmdDNS, "dnsmasq status + start/stop/restart"},
-	{cmdDNSStart, "bring dnsmasq up"},
-	{cmdDNSStop, "bring it down (asks first)"},
-	{cmdDNSRestart, "full bounce (asks first)"},
+	{cmdDNS, "dnsmasq status + start|stop|restart"},
 }
 
 type botCommand struct {
@@ -335,6 +332,11 @@ type botCommand struct {
 }
 
 func (p *Poller) handleCommand(ctx context.Context, b *bot, chatID int64, cmd string) {
+	// "/dns start|stop|restart" folds onto the same tokens the inline
+	// keyboard's callback_data already uses — one entry point, not two.
+	if arg, ok := strings.CutPrefix(cmd, "/"+cmdDNS+" "); ok {
+		cmd = "dns_" + strings.TrimSpace(arg)
+	}
 	switch cmd {
 	case "/" + cmdStatus, cmdStatus, lblStatus:
 		b.sendMessage(ctx, chatID, p.statusText(), nil)
@@ -356,12 +358,12 @@ func (p *Poller) handleCommand(ctx context.Context, b *bot, chatID int64, cmd st
 		b.sendMessage(ctx, chatID, resultText("🔄 restarted.", p.vpn.Restart()), nil)
 	case "/" + cmdDNS, cmdDNS, lblDNS:
 		b.sendMessage(ctx, chatID, p.dnsLine(), dnsKeyboard)
-	case "/" + cmdDNSStart, cmdDNSStart:
+	case cmdDNSStart:
 		b.sendMessage(ctx, chatID, resultText("🟢 dns up.", p.dns.Start()), nil)
-	case "/" + cmdDNSStop, cmdDNSStop:
+	case cmdDNSStop:
 		b.sendMessage(ctx, chatID, "stop dns? clients stop resolving internal names.", kb(
 			[]inlineButton{btn("yes, stop", "dns_stop_confirm"), btn("cancel", "cancel")}))
-	case "/" + cmdDNSRestart, cmdDNSRestart:
+	case cmdDNSRestart:
 		b.sendMessage(ctx, chatID, "restart dns? full bounce, clients briefly can't resolve.", kb(
 			[]inlineButton{btn("yes, restart", "dns_restart_confirm"), btn("cancel", "cancel")}))
 	case "dns_stop_confirm":

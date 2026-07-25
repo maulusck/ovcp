@@ -113,3 +113,32 @@ func TestHandleCommandCoversRegisteredSurface(t *testing.T) {
 		}
 	}
 }
+
+// TestDNSArgForm covers "/dns start|stop|restart" folding onto the same
+// tokens the inline keyboard's callback_data uses — not listed in
+// botCommands (no menu clutter), so the surface-coverage test above can't see it.
+func TestDNSArgForm(t *testing.T) {
+	var sent int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/sendMessage") {
+			sent++
+		}
+		w.Write([]byte(`{"ok":true,"result":{}}`))
+	}))
+	defer srv.Close()
+	defer SetAPIBaseForTesting(srv.URL + "/bot")()
+
+	s, _ := store.Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	defer s.Close()
+	p := &Poller{s: s, vpn: fakeLife{}, dns: fakeLife{}}
+	b := newBot("t")
+	ctx := context.Background()
+
+	for _, cmd := range []string{"/dns start", "/dns stop", "/dns restart"} {
+		before := sent
+		p.handleCommand(ctx, b, 1, cmd)
+		if sent == before {
+			t.Errorf("handleCommand(%q) produced no reply", cmd)
+		}
+	}
+}
