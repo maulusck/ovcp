@@ -1,7 +1,7 @@
 <script>
   import { api, apiBlob, downloadBlob, procOp } from './api.js'
-  import { expectRecovery } from './status.svelte.js'
-  let { isAdmin } = $props()
+  import { expectRecovery, expectDnsRecovery } from './status.svelte.js'
+  let { isAdmin, dnsAvailable } = $props()
   let cfg = $state(null)
   let dns = $state('')
   let err = $state('')
@@ -60,6 +60,96 @@
       const r = await api('POST', '/certs/renew-server', { Passphrase: passphrase })
       ok = `Server cert renewed (serial ${r.serial.slice(0, 12)}…). Use Restart to apply.`
     } catch (x) { err = x.error }
+  }
+
+  // DNS: dnsmasq lifecycle + block-internet + custom records, one card, same
+  // shape as the vpn card above (fields, then one row: save/preview/lifecycle).
+  let blockInternet = $state(false)
+  let dnsRecords = $state('')
+  let dnsPreview = $state(null)
+  let dnsErr = $state('')
+  let dnsOk = $state('')
+
+  async function loadDNS() {
+    try {
+      blockInternet = (await api('GET', '/dns/config')).blockInternet
+      dnsRecords = (await api('GET', '/dns/custom')).content
+    } catch (x) { dnsErr = x.error }
+  }
+  $effect(() => { if (dnsAvailable) loadDNS() })
+
+  async function toggleBlockInternet(e) {
+    const want = e.target.checked
+    try { blockInternet = (await api('PUT', '/dns/config', { BlockInternet: want })).blockInternet }
+    catch (x) { dnsErr = x.error; e.target.checked = !want }
+  }
+
+  async function previewDNS() {
+    dnsErr = ''; dnsOk = ''
+    try { dnsPreview = await api('POST', '/dns/custom/preview', { Content: dnsRecords }) }
+    catch (x) { dnsErr = x.error }
+  }
+
+  async function saveDNS(e) {
+    e.preventDefault()
+    dnsErr = ''; dnsOk = ''; dnsPreview = null
+    try {
+      await api('PUT', '/dns/custom', { Content: dnsRecords })
+      dnsOk = 'Saved.'
+    } catch (x) { dnsErr = x.error }
+  }
+
+  async function dnsOp(op, confirmMsg, recoverMs, done, label) {
+    dnsErr = ''; dnsOk = ''
+    try {
+      const r = await procOp('/dns/', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectDnsRecovery(ms, label) })
+      if (r) dnsOk = done
+    } catch (x) { dnsErr = x.error }
+  }
+  const dnsStart   = () => dnsOp('start', null, 10000, 'Started.', 'starting')
+  const dnsStop    = () => dnsOp('stop', 'Stop internal DNS? Connected clients stop resolving local names.', 0, 'Stopped.')
+  const dnsRestart = () => dnsOp('restart', 'Restart internal DNS?', 10000, 'Restarted.', 'restarting')
+
+  // Logs: rotation policy for openvpn.log/ovcp.log/dnsmasq.log.
+  let logsCfg = $state(null)
+  let logsErr = $state('')
+  let logsOk = $state('')
+
+  async function loadLogsCfg() {
+    try { logsCfg = await api('GET', '/logs/config') } catch (x) { logsErr = x.error }
+  }
+  loadLogsCfg()
+
+  async function saveLogsCfg(e) {
+    e.preventDefault()
+    logsErr = ''; logsOk = ''
+    logsCfg.RetentionDays = +logsCfg.RetentionDays
+    logsCfg.KeepUncompressed = +logsCfg.KeepUncompressed
+    try {
+      logsCfg = await api('PUT', '/logs/config', logsCfg)
+      logsOk = 'Saved.'
+    } catch (x) { logsErr = x.error }
+  }
+
+  // Stats: traffic-history sampling/retention policy.
+  let statsCfg = $state(null)
+  let statsErr = $state('')
+  let statsOk = $state('')
+
+  async function loadStatsCfg() {
+    try { statsCfg = await api('GET', '/stats/config') } catch (x) { statsErr = x.error }
+  }
+  loadStatsCfg()
+
+  async function saveStatsCfg(e) {
+    e.preventDefault()
+    statsErr = ''; statsOk = ''
+    statsCfg.SampleIntervalSec = +statsCfg.SampleIntervalSec
+    statsCfg.RetentionHours = +statsCfg.RetentionHours
+    try {
+      statsCfg = await api('PUT', '/stats/config', statsCfg)
+      statsOk = 'Saved.'
+    } catch (x) { statsErr = x.error }
   }
 
   let backupErr = $state('')
@@ -180,6 +270,102 @@
         </div>
       {:else}
         <p class="muted">Read-only: your role can view but not change settings.</p>
+      {/if}
+    </form>
+  {/if}
+</div>
+
+{#if dnsAvailable}
+  <div class="card">
+    <h2>DNS configuration</h2>
+    <p class="muted small">Resolves certificate names for connected clients; optionally blocks all other internet DNS.</p>
+    <form onsubmit={saveDNS}>
+      <div class="grid">
+        <label class="check">
+          <input type="checkbox" checked={blockInternet} disabled={!isAdmin} onchange={toggleBlockInternet} />
+          Block internet DNS (answer only local names; restart to apply)
+        </label>
+        <label class="wide">Custom records
+          <textarea bind:value={dnsRecords} rows="6" placeholder="10.8.0.50 pihole" disabled={!isAdmin}></textarea>
+        </label>
+      </div>
+      {#if dnsErr}<p class="err">{dnsErr}</p>{/if}
+      {#if dnsOk}<p class="ok">{dnsOk}</p>{/if}
+      {#if dnsPreview}
+        {#if dnsPreview.changed}
+          <p class="muted small">Changes to be saved:</p>
+          <pre class="diff">{#each dnsPreview.diff as line}<span class={line[0] === '+' ? 'add' : 'del'}>{line}
+</span>{/each}</pre>
+        {:else}
+          <p class="muted small">No changes.</p>
+        {/if}
+      {/if}
+      {#if isAdmin}
+        <div class="row">
+          <button type="submit">Save</button>
+          <button type="button" class="ghost" onclick={previewDNS}>Preview</button>
+          <button type="button" class="ghost" onclick={dnsStart} title="Launch dnsmasq if it isn't running">Start</button>
+          <button type="button" class="ghost" onclick={dnsStop} title="SIGTERM dnsmasq; clients stop resolving local names">Stop</button>
+          <button type="button" class="ghost" onclick={dnsRestart} title="Full stop + fresh start; applies hosts and config changes">Restart</button>
+        </div>
+      {:else}
+        <p class="muted small">Read-only: your role can view but not change this.</p>
+      {/if}
+    </form>
+  </div>
+{/if}
+
+<div class="card">
+  <h2>Logs configuration</h2>
+  <p class="muted small">Daily rotation for openvpn.log/ovcp.log/dnsmasq.log.</p>
+  {#if !logsCfg}
+    <p class="muted">Loading…</p>
+  {:else}
+    <form onsubmit={saveLogsCfg}>
+      <div class="grid">
+        <label class="check">
+          <input type="checkbox" bind:checked={logsCfg.Enabled} disabled={!isAdmin} />
+          Run daily rotation
+        </label>
+        <label>Retention (days, 0 = forever)
+          <input type="number" bind:value={logsCfg.RetentionDays} min="0" disabled={!isAdmin} />
+        </label>
+        <label>Keep uncompressed (newest N rotations)
+          <input type="number" bind:value={logsCfg.KeepUncompressed} min="0" disabled={!isAdmin} />
+        </label>
+      </div>
+      {#if logsErr}<p class="err">{logsErr}</p>{/if}
+      {#if logsOk}<p class="ok">{logsOk}</p>{/if}
+      {#if isAdmin}
+        <div class="row"><button type="submit">Save configuration</button></div>
+      {:else}
+        <p class="muted small">Read-only: your role can view but not change settings.</p>
+      {/if}
+    </form>
+  {/if}
+</div>
+
+<div class="card">
+  <h2>Stats configuration</h2>
+  <p class="muted small">Traffic-history sampling for the Stats tab's graphs and CLI.</p>
+  {#if !statsCfg}
+    <p class="muted">Loading…</p>
+  {:else}
+    <form onsubmit={saveStatsCfg}>
+      <div class="grid">
+        <label>Sample interval (seconds)
+          <input type="number" bind:value={statsCfg.SampleIntervalSec} min="1" disabled={!isAdmin} />
+        </label>
+        <label>Retention (hours)
+          <input type="number" bind:value={statsCfg.RetentionHours} min="1" disabled={!isAdmin} />
+        </label>
+      </div>
+      {#if statsErr}<p class="err">{statsErr}</p>{/if}
+      {#if statsOk}<p class="ok">{statsOk}</p>{/if}
+      {#if isAdmin}
+        <div class="row"><button type="submit">Save configuration</button></div>
+      {:else}
+        <p class="muted small">Read-only: your role can view but not change settings.</p>
       {/if}
     </form>
   {/if}

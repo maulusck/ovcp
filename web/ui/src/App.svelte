@@ -6,7 +6,6 @@
   import Dashboard from './Dashboard.svelte'
   import Stats from './Stats.svelte'
   import Certs from './Certs.svelte'
-  import Records from './Records.svelte'
   import Settings from './Settings.svelte'
   import Users from './Users.svelte'
   import Logs from './Logs.svelte'
@@ -16,7 +15,6 @@
     ['dashboard', 'Dashboard'],
     ['stats', 'Stats'],
     ['certs', 'Certificates'],
-    ['records', 'Records'],
     ['settings', 'Settings'],
     ['users', 'Users'],
     ['logs', 'Logs'],
@@ -31,12 +29,7 @@
   const REPO_URL = 'https://goldrake.bot.nu/c/maulusck/ovcp.git'
 
   let user = $state(null)
-  // Records only appears once dnsmasq is confirmed on PATH — same
-  // modular, advisory-only gating openvpn itself gets, per the original ask.
-  const tabs = $derived(ALL_TABS.filter(([id]) => id !== 'records' || user?.dnsmasqVersion))
   let verLong = $state(false) // footer: short "ovcp X" vs long "ovcp X · openvpn Y (path)"
-  // validated against ALL_TABS (not the dnsmasq-filtered tabs, whose value
-  // depends on `user` loading first) so restoring "records" isn't racy.
   let tab = $state(ALL_TABS.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
   let navOpen = $state(false)
   let themeOpen = $state(false)
@@ -179,16 +172,16 @@
       </span>
     </div>
     <nav>
-      {#each tabs as [id, label]}
+      {#each ALL_TABS as [id, label]}
         <button class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
       {/each}
     </nav>
     <!-- mobile-only dropdown twin of the nav above; hidden by default so
          desktop CSS/markup above is untouched (see @media max-width:700px) -->
     <details class="nav-mobile" bind:open={navOpen}>
-      <summary>{tabs.find(([id]) => id === tab)?.[1]}</summary>
+      <summary>{ALL_TABS.find(([id]) => id === tab)?.[1]}</summary>
       <div class="nav-menu">
-        {#each tabs as [id, label]}
+        {#each ALL_TABS as [id, label]}
           <button class:active={tab === id} onclick={() => { tab = id; navOpen = false }}>{label}</button>
         {/each}
       </div>
@@ -224,10 +217,8 @@
       <Stats />
     {:else if tab === 'certs'}
       <Certs {canOperate} bind:focusCN />
-    {:else if tab === 'records'}
-      <Records {isAdmin} />
     {:else if tab === 'settings'}
-      <Settings {isAdmin} />
+      <Settings {isAdmin} dnsAvailable={!!user.dnsmasqVersion} />
     {:else if tab === 'users'}
       <Users {isAdmin} me={user.username} minLen={user.minSecretLen} minClasses={user.minSecretClasses} />
     {:else if tab === 'logs'}
@@ -402,7 +393,7 @@
   }
   :global(.row) { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   :global(.small) { font-size: 12px; margin: 8px 0; }
-  /* config-preview diffs (Settings' server.conf, Records' custom.hosts) */
+  /* config-preview diffs (Settings' server.conf and custom.hosts) */
   :global(.diff) { font-family: var(--mono); font-size: 12px; white-space: pre; overflow-x: auto;
     background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
   :global(.diff .add) { color: var(--ok); }
