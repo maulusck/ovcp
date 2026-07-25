@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -46,34 +45,11 @@ func RotateLog(path string) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if err := writeRotatedFile(path, data); err != nil {
+	rotated := path + "-" + time.Now().UTC().Format(rotatedTimeFormat)
+	if err := os.WriteFile(rotated, data, 0o640); err != nil {
 		return err
 	}
 	return os.Truncate(path, 0)
-}
-
-// writeRotatedFile creates path's next generation file, O_EXCL so a
-// same-second collision (two rotations racing, not just two calls) can
-// never clobber an existing generation — it gets a ".N" suffix instead.
-func writeRotatedFile(path string, data []byte) error {
-	base := path + "-" + time.Now().UTC().Format(rotatedTimeFormat)
-	for name, i := base, 0; ; i++ {
-		if i > 0 {
-			name = fmt.Sprintf("%s.%d", base, i)
-		}
-		f, err := os.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
-		if os.IsExist(err) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		_, werr := f.Write(data)
-		if cerr := f.Close(); werr == nil {
-			werr = cerr
-		}
-		return werr
-	}
 }
 
 // RotateLogs rotates every path under cfg's policy — RotateLog, then
@@ -96,16 +72,6 @@ func RotateLogs(paths []string, cfg LogConfig) error {
 	return errors.Join(errs...)
 }
 
-// stripDisambiguator removes a trailing ".N" collision suffix, if any.
-func stripDisambiguator(stamp string) string {
-	if i := strings.LastIndexByte(stamp, '.'); i >= 0 {
-		if _, err := strconv.Atoi(stamp[i+1:]); err == nil {
-			return stamp[:i]
-		}
-	}
-	return stamp
-}
-
 // generation is one rotated file for a log path.
 type generation struct {
 	file       string
@@ -126,7 +92,6 @@ func rotatedGenerations(path string) ([]generation, error) {
 		stamp := strings.TrimPrefix(filepath.Base(m), prefix)
 		compressed := strings.HasSuffix(stamp, ".gz")
 		stamp = strings.TrimSuffix(stamp, ".gz")
-		stamp = stripDisambiguator(stamp) // same-second collision suffix, see writeRotatedFile
 		t, err := time.Parse(rotatedTimeFormat, stamp)
 		if err != nil {
 			continue

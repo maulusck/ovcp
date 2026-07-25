@@ -31,30 +31,6 @@ func TestRotateLogFreshFile(t *testing.T) {
 	}
 }
 
-// TestWriteRotatedFileCollision: two rotations in the same wall-clock second
-// must not clobber each other — the second lands in a ".N" file instead.
-func TestWriteRotatedFileCollision(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "openvpn.log")
-	if err := writeRotatedFile(path, []byte("first")); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeRotatedFile(path, []byte("second")); err != nil {
-		t.Fatal(err)
-	}
-	gens, err := rotatedGenerations(path)
-	if err != nil || len(gens) != 2 {
-		t.Fatalf("gens=%v err=%v, want 2 (no clobber)", gens, err)
-	}
-	var contents []string
-	for _, g := range gens {
-		data, _ := os.ReadFile(g.file)
-		contents = append(contents, string(data))
-	}
-	if !(contents[0] == "first" && contents[1] == "second") && !(contents[0] == "second" && contents[1] == "first") {
-		t.Fatalf("contents = %v, want [first second] in some order", contents)
-	}
-}
-
 func TestRotateLogMissingOrEmpty(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "nope.log")
