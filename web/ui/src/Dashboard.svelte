@@ -1,5 +1,5 @@
 <script>
-  import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus } from './api.js'
+  import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp } from './api.js'
   import { vpn, pollOnce } from './status.svelte.js'
   let { canOperate, goToCert } = $props()
   let err = $state('')
@@ -59,7 +59,7 @@
             <td>{c.VirtualAddress}</td>
             <td>{fmtBytes(c.BytesRecv)}</td>
             <td>{fmtBytes(c.BytesSent)}</td>
-            <td>{new Date(c.ConnectedSince).toLocaleString()}</td>
+            <td>{fmtTimestamp(new Date(c.ConnectedSince))}</td>
             {#if canOperate}
               <td><button class="ghost" onclick={() => kill(c.CN)}
                 title="Kill this session; cert stays valid, client can reconnect immediately">Disconnect</button></td>

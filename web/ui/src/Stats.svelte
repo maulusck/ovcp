@@ -1,6 +1,6 @@
 <script>
   import {
-    api, fmtBytes, fmtRate, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus,
+    api, fmtBytes, fmtRate, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp,
   } from './api.js'
   import { vpn, fmtUptime } from './status.svelte.js'
 
@@ -174,7 +174,7 @@
             <tr>
               <td>{s.CN}{#if revokedCNs.has(s.CN)}<span class="revoked" title="Certificate revoked">revoked</span>{/if}</td>
               <td>{s.RealAddress}</td>
-              <td>{new Date(s.DisconnectedAt).toLocaleString()}</td>
+              <td>{fmtTimestamp(new Date(s.DisconnectedAt))}</td>
               <td>{fmtUptime((new Date(s.DisconnectedAt) - new Date(s.ConnectedAt)) / 1000)}</td>
               <td>{fmtBytes(s.BytesRecv)}</td>
               <td>{fmtBytes(s.BytesSent)}</td>

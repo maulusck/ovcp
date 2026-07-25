@@ -1,14 +1,10 @@
 <script>
   import { tick } from 'svelte'
-  import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus } from './api.js'
+  import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus, fmtTimestamp } from './api.js'
   let { isAdmin, canOperate } = $props()
 
-  // one shared format for every timestamp in this file (audit + both log tables) —
-  // 24h, no AM/PM, date order from the browser's own locale (en-US if it has none).
-  const locale = navigator.language || 'en-US'
-  const fmtTime = (d) => d.toLocaleString(locale, { hour12: false }).replace(',', '')
-  // dnsmasq's syslog line has no year — same shape, just without one.
-  const fmtTimeNoYear = (d) => d.toLocaleString(locale,
+  // dnsmasq's syslog line has no year — same fmtTimestamp shape, just without one.
+  const fmtTimeNoYear = (d) => d.toLocaleString(navigator.language || 'en-US',
     { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(',', '')
 
   // Splits a line into time/level/msg: ovcp's "time=... level=X ..." text, its -log-json
@@ -23,7 +19,7 @@
           .map(k => `${k}=${j[k]}`).join(' ')
         raw = j.time; level = (j.level || 'info').toLowerCase()
         msg = extra ? `${j.msg} ${extra}` : j.msg
-        return { time: fmtTime(new Date(raw)), level, msg }
+        return { time: fmtTimestamp(new Date(raw)), level, msg }
       } catch { /* not JSON after all — fall through to text parsing */ }
     }
     let m = line.match(/^time=(\S+)\s+level=(\w+)\s+(.*)$/)
@@ -43,7 +39,7 @@
         : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
     }
     const d = raw && new Date(raw.replace(' ', 'T'))
-    return { time: d && !isNaN(d) ? fmtTime(d) : '', level, msg }
+    return { time: d && !isNaN(d) ? fmtTimestamp(d) : '', level, msg }
   }
 
   // the two log panels render as a table like the audit panel; audit stays bespoke
@@ -154,7 +150,7 @@
     setTimeout(() => (copied = ''), 1200)
   }
   const auditText = () => filteredEntries.map(e =>
-    `${fmtTime(new Date(e.TS))} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
+    `${fmtTimestamp(new Date(e.TS))} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
 
   // archive download has fixed server-side filenames, no request input — per-log
   // copy/download stays client-side instead of adding a parametrized endpoint.
@@ -267,7 +263,7 @@
           <tbody>
             {#each filteredEntries as e}
               <tr>
-                <td class="muted">{fmtTime(new Date(e.TS))}</td>
+                <td class="muted">{fmtTimestamp(new Date(e.TS))}</td>
                 <td>{e.Actor}</td>
                 <td>{e.Action}</td>
                 <td>{e.Detail}</td>

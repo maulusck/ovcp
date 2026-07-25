@@ -60,6 +60,9 @@ func RenderOVPN(p BundleParams) ([]byte, error) {
 	w("persist-key")
 	w("persist-tun")
 	w("remote-cert-tls server")
+	if p.Proto == "udp" {
+		w("explicit-exit-notify 1") // tells the server we're gone instead of waiting out ping-restart
+	}
 	if p.ServerCN != "" {
 		w("verify-x509-name %s name", p.ServerCN)
 	}

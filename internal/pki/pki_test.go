@@ -187,6 +187,7 @@ func TestRenderOVPN(t *testing.T) {
 		"<ca>", "</ca>", "<cert>", "<key>", "<tls-crypt>",
 		"verify-x509-name vpn.example.com name",
 		"remote-cert-tls server", "auth-nocache", "data-ciphers-fallback AES-256-GCM",
+		"explicit-exit-notify 1",
 	} {
 		if !bytes.Contains(out, []byte(want)) {
 			t.Fatalf("missing %q in bundle", want)
@@ -194,6 +195,13 @@ func TestRenderOVPN(t *testing.T) {
 	}
 	if bytes.Contains(out, []byte("pull-filter")) {
 		t.Fatal("pull-filter must be omitted when SplitTunnel is false")
+	}
+	tcpOut, err := RenderOVPN(BundleParams{Remote: "vpn.example.com", Port: 1194, Proto: "tcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(tcpOut, []byte("explicit-exit-notify")) {
+		t.Fatal("explicit-exit-notify is UDP-only — TCP already detects a dropped peer via the OS")
 	}
 	out, err = RenderOVPN(BundleParams{Remote: "vpn.example.com", Port: 1194, Proto: "udp", SplitTunnel: true})
 	if err != nil {

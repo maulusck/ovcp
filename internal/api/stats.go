@@ -13,6 +13,7 @@ import (
 const (
 	// statsSampleInterval: how often traffic-history rows get written/pruned.
 	// Disconnect detection doesn't wait for this — see RunSampler.
+	// ponytail: fixed 1min/24h, not configurable; add flags/env if graph precision or retention ever needs tuning.
 	statsSampleInterval = time.Minute
 	// bounds DB rows (~1440 samples) and the /api/stats payload; sessions key
 	// by CN not serial, so history survives cert revocation like the audit log does.

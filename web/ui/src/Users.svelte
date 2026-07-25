@@ -1,5 +1,5 @@
 <script>
-  import { api, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus } from './api.js'
+  import { api, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp } from './api.js'
   let { isAdmin, me, minLen, minClasses } = $props()
   let users = $state([])
   let err = $state('')
@@ -146,7 +146,7 @@
               <td>{u.Role}</td>
               <td class={u.Disabled ? 'rv' : ''}>{u.Disabled ? 'disabled' : 'enabled'}</td>
               <td>{u.TOTP ? '2fa' : '-'}</td>
-              <td>{new Date(u.CreatedAt).toLocaleDateString()}</td>
+              <td>{fmtTimestamp(new Date(u.CreatedAt))}</td>
               <td class="actions">
                 <button class="ghost" onclick={() => setPassword(u)}>Set password</button>
                 {#if u.TOTP}

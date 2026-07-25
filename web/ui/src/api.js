@@ -56,6 +56,12 @@ export function downloadBlob(blob, filename) {
   URL.revokeObjectURL(a.href)
 }
 
+// One shared timestamp format for the whole UI: 24h, no AM/PM, date order
+// from the browser's own locale (en-US if it has none).
+export function fmtTimestamp(d) {
+  return d.toLocaleString(navigator.language || 'en-US', { hour12: false }).replace(',', '')
+}
+
 export function fmtBytes(n) {
   if (n < 1024) return n + ' B'
   const u = ['KiB', 'MiB', 'GiB', 'TiB']
