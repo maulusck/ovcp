@@ -203,6 +203,9 @@ func jsonOK(w http.ResponseWriter, v any) {
 }
 
 func jsonErr(w http.ResponseWriter, code int, msg string) {
+	if code >= 500 {
+		slog.Warn("api error", "status", code, "msg", msg)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})

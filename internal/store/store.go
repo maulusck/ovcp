@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -262,8 +263,11 @@ func (s *Store) Audit(actor, action, detail string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO audit_log(ts, actor, action, detail) VALUES (?,?,?,?)`,
 		time.Now().Unix(), actor, action, detail)
-	if err == nil && s.auditHook != nil {
-		s.auditHook(actor, action, detail)
+	if err == nil {
+		slog.Info("audit", "actor", actor, "action", action, "detail", detail)
+		if s.auditHook != nil {
+			s.auditHook(actor, action, detail)
+		}
 	}
 	return err
 }
