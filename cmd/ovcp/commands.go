@@ -48,15 +48,36 @@ func (c command) flagNames() []string {
 	return names
 }
 
-// opArg validates fs's first positional arg against ops, returning it plus
-// the rest. Op-dispatched commands must never register flags on fs itself:
-// main() calls fs.Parse before the op is known, so a flag placed after the op would never be parsed.
-func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []string) {
-	args := fs.Args()
+// opArgList validates args[0] against ops, returning it plus the rest —
+// opArg's shape without needing an already-Parse'd FlagSet, for op-dispatch
+// one level deeper (e.g. "logs config get", where "config"'s own opArg
+// already split "get" off as plain rest).
+func opArgList(name string, ops []string, args []string) (op string, rest []string) {
 	if len(args) < 1 || !slices.Contains(ops, args[0]) {
 		die(fmt.Errorf("usage: ovcp %s %s", name, strings.Join(ops, "|")))
 	}
 	return args[0], args[1:]
+}
+
+// opArg validates fs's first positional arg against ops, returning it plus
+// the rest. Op-dispatched commands must never register flags on fs itself:
+// main() calls fs.Parse before the op is known, so a flag placed after the op would never be parsed.
+func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []string) {
+	return opArgList(name, ops, fs.Args())
+}
+
+// configOp is every "<name> config get|set[|preview|edit]" dispatch: same
+// wiring reused by vpn/dns/logs/stats/telegram instead of five hand-rolled
+// copies. bodies must have one entry per ops.
+func configOp(name string, ops []string, bodies map[string]func(fs *flag.FlagSet) func(ctx *cliContext)) func(ctx *cliContext, rest []string) {
+	return func(ctx *cliContext, rest []string) {
+		op, crest := opArgList(name, ops, rest)
+		ofs := newFlags(name + " " + op)
+		subUsage(ofs, name+" "+op)
+		body := bodies[op](ofs)
+		ofs.Parse(crest)
+		body(ctx)
+	}
 }
 
 // parseBoolArg: the CLI's shared on/off vocabulary for any boolean setting —

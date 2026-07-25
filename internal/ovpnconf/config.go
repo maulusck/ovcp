@@ -81,7 +81,7 @@ func (c Config) ServerTunIP() (net.IP, error) {
 func Default() Config {
 	return Config{
 		Proto:      cmp.Or(os.Getenv("OVCP_OPENVPN_PROTO"), "udp"),
-		Port:       envInt("OVCP_OPENVPN_PORT", 1194),
+		Port:       EnvInt("OVCP_OPENVPN_PORT", 1194),
 		Subnet:     cmp.Or(os.Getenv("OVCP_OPENVPN_SUBNET"), "10.8.0.0/24"),
 		Cipher:     cmp.Or(os.Getenv("OVCP_OPENVPN_CIPHER"), "AES-256-GCM"),
 		DNS:        SplitCSV(os.Getenv("OVCP_OPENVPN_DNS")),
@@ -93,8 +93,9 @@ func Default() Config {
 	}
 }
 
-// envInt reads key as an int, falling back to def if unset or unparseable.
-func envInt(key string, def int) int {
+// EnvInt reads key as an int, falling back to def if unset or unparseable —
+// shared by every package that seeds a Default() from OVCP_* env vars.
+func EnvInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n

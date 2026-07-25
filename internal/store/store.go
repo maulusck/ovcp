@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -303,4 +304,29 @@ func (s *Store) SetSetting(key, value string) error {
 		`INSERT INTO settings(key, value) VALUES (?,?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
+}
+
+// LoadJSON reads key as JSON, falling back to def — missing key or corrupt
+// value, same treatment: every persisted config in ovcp treats "unset" as
+// "use the default", not an error. The one settings-as-JSON round-trip,
+// shared by every admin-tunable config (log rotation, stats sampling, ...).
+func LoadJSON[T any](s *Store, key string, def T) T {
+	raw, _ := s.GetSetting(key)
+	if raw == "" {
+		return def
+	}
+	cfg := def
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return def
+	}
+	return cfg
+}
+
+// SaveJSON is LoadJSON's write side.
+func SaveJSON[T any](s *Store, key string, v T) error {
+	enc, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return s.SetSetting(key, string(enc))
 }
