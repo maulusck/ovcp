@@ -393,8 +393,7 @@ func newDNSSupervisor(pp paths, bin string, s *store.Store) *controller.Supervis
 				slog.Warn("dnsmasq: server tun IP", "err", err)
 				ip = net.IPv4zero
 			}
-			blockInternet, _ := s.GetSetting("dns_block_internet")
-			return buildDnsmasqArgs(dnsRunAsUser(), dnsRunAsGroup(), ip, pp.DNSDir, pp.DnsmasqLog, blockInternet == "true")
+			return buildDnsmasqArgs(dnsRunAsUser(), dnsRunAsGroup(), ip, pp.DNSDir, pp.DnsmasqLog, api.LoadDNSConfig(s).BlockInternet)
 		},
 		LogPath: pp.DnsmasqLog,
 	}

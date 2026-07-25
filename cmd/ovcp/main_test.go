@@ -1142,7 +1142,7 @@ func TestConfigGetSetPreview(t *testing.T) {
 // TestDNSCommand: "dns reconnect" is rejected by arg validation alone
 // (dnsOps has no such op); wire-level routing is covered by
 // TestControlDNSRouting, "no serve running" by TestUnreachableServe above.
-// block-internet is the CLI twin of TestDNSBlockInternetToggle (api package).
+// dns config is the CLI twin of TestDNSBlockInternetToggle (api package).
 func TestDNSCommand(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -1152,24 +1152,24 @@ func TestDNSCommand(t *testing.T) {
 		t.Fatalf("dns reconnect must not exist: %+v", r)
 	}
 
-	if r := run(t, env, "dns", "block-internet"); r.code != 0 || !strings.Contains(r.stdout, "false") {
-		t.Fatalf("block-internet default: %+v", r)
+	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "false") {
+		t.Fatalf("dns config get default: %+v", r)
 	}
 	// on/true/1 (and off/false/0) are all the same boolean vocabulary — exercise both spellings.
-	if r := run(t, env, "dns", "block-internet", "on"); r.code != 0 {
-		t.Fatalf("block-internet on: %+v", r)
+	if r := run(t, env, "dns", "config", "set", "-block-internet", "on"); r.code != 0 {
+		t.Fatalf("dns config set on: %+v", r)
 	}
-	if r := run(t, env, "dns", "block-internet", "status"); r.code != 0 || !strings.Contains(r.stdout, "true") {
-		t.Fatalf("block-internet status after on: %+v", r)
+	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "true") {
+		t.Fatalf("dns config get after on: %+v", r)
 	}
-	if r := run(t, env, "dns", "block-internet", "0"); r.code != 0 {
-		t.Fatalf("block-internet 0: %+v", r)
+	if r := run(t, env, "dns", "config", "set", "-block-internet", "0"); r.code != 0 {
+		t.Fatalf("dns config set 0: %+v", r)
 	}
-	if r := run(t, env, "dns", "block-internet"); r.code != 0 || !strings.Contains(r.stdout, "false") {
-		t.Fatalf("block-internet after 0: %+v", r)
+	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "false") {
+		t.Fatalf("dns config get after 0: %+v", r)
 	}
-	if r := run(t, env, "dns", "block-internet", "bogus"); r.code == 0 {
-		t.Fatalf("block-internet bogus arg must fail: %+v", r)
+	if r := run(t, env, "dns", "config", "set", "-block-internet", "bogus"); r.code == 0 {
+		t.Fatalf("dns config set bogus arg must fail: %+v", r)
 	}
 }
 

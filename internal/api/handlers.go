@@ -745,9 +745,27 @@ func (s *Server) handleDebugSet(w http.ResponseWriter, r *http.Request, u *store
 	jsonOK(w, map[string]bool{"debug": in.Debug})
 }
 
+// DNSConfig is the admin-tunable dnsmasq policy, persisted under dnsConfigKey.
+type DNSConfig struct {
+	BlockInternet bool // dnsmasq --no-resolv/--server=/#/ on next start/restart
+}
+
+// DefaultDNSConfig seeds from OVCP_DNS_BLOCK_INTERNET (container/unattended init).
+func DefaultDNSConfig() DNSConfig {
+	return DNSConfig{BlockInternet: os.Getenv("OVCP_DNS_BLOCK_INTERNET") == "true"}
+}
+
+const dnsConfigKey = "dns_config"
+
+// LoadDNSConfig/SaveDNSConfig: the one read/write path, shared by the CLI
+// (`ovcp dns config`), these handlers, and PreStart's dnsmasq arg build.
+func LoadDNSConfig(s *store.Store) DNSConfig {
+	return store.LoadJSON(s, dnsConfigKey, DefaultDNSConfig())
+}
+func SaveDNSConfig(s *store.Store, cfg DNSConfig) error { return store.SaveJSON(s, dnsConfigKey, cfg) }
+
 func (s *Server) handleDNSBlockGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	v, _ := s.Store.GetSetting("dns_block_internet")
-	jsonOK(w, map[string]bool{"blockInternet": v == "true"})
+	jsonOK(w, map[string]bool{"blockInternet": LoadDNSConfig(s.Store).BlockInternet})
 }
 
 // handleDNSBlockSet toggles whether dnsmasq forwards to upstream resolvers;
@@ -758,14 +776,13 @@ func (s *Server) handleDNSBlockSet(w http.ResponseWriter, r *http.Request, u *st
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	action := "off"
-	value := "false"
-	if in.BlockInternet {
-		action, value = "on", "true"
-	}
-	if err := s.Store.SetSetting("dns_block_internet", value); err != nil {
+	if err := SaveDNSConfig(s.Store, DNSConfig{BlockInternet: in.BlockInternet}); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
+	}
+	action := "off"
+	if in.BlockInternet {
+		action = "on"
 	}
 	s.Store.Audit(u.Username, "dns_block_internet_"+action, "")
 	jsonOK(w, map[string]bool{"blockInternet": in.BlockInternet})

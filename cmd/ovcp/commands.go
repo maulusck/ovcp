@@ -95,7 +95,8 @@ func parseBoolArg(s string) (bool, error) {
 var (
 	vpnOps       = []string{"start", "stop", "restart", "reconnect", "status", "kill", "config"}
 	vpnConfigOps = []string{"get", "set", "preview", "edit"}
-	dnsOps       = []string{"start", "stop", "restart", "status", "block-internet"} // no reconnect: dnsmasq has no such signal
+	dnsOps       = []string{"start", "stop", "restart", "status", "config"} // no reconnect: dnsmasq has no such signal
+	dnsConfigOps = []string{"get", "set"}
 	certOps      = []string{"issue", "list", "revoke", "export", "renew-server"}
 	recordOps    = []string{"list", "edit", "include", "exclude"}
 	userOps      = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
@@ -112,7 +113,7 @@ var commands = []command{
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N]   traffic history, or a live top-like follow view (-follow ignores -json)", run: cmdStats},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill|config   manage the openvpn worker + its config get|set|preview|edit (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
-	{name: "dns", usage: "start|stop|restart|status|block-internet [on|off|status]   manage/inspect the dnsmasq worker", sub: dnsOps, run: cmdDNS},
+	{name: "dns", usage: "start|stop|restart|status|config   manage the dnsmasq worker + its config get|set -block-internet", sub: dnsOps, run: cmdDNS},
 	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
 	{name: "logs", usage: "config get|set | rotate | status   manage log rotation for openvpn.log/ovcp.log/dnsmasq.log", sub: logsOps, run: cmdLogs},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
@@ -880,43 +881,58 @@ func runProcOp(ctx *cliContext, name, op string, rest []string, wirePrefix strin
 	output(r, func(r controller.ControlResult) { printProcText(name, op, r) })
 }
 
-// cmdDNS drives the dnsmasq worker's lifecycle, plus block-internet — a
-// stored setting dnsmasq picks up on its next start/restart, not a live
-// control-socket op — mirrors cmdVPN's kill special-case.
+// dnsConfigBodies wires dns's config sub-ops through configOp — same
+// GET/POST /api/dns/config the web UI's Records tab uses.
+var dnsConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+	"get": cmdDNSConfigGet, "set": cmdDNSConfigSet,
+}
+
+// cmdDNS drives the dnsmasq worker's lifecycle, plus `config` (settings, not
+// a lifecycle op) — mirrors cmdVPN's kill/config special-cases.
 func cmdDNS(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		op, rest := opArg(fs, "dns", dnsOps)
-		if op == "block-internet" {
-			bfs := newFlags("dns block-internet")
-			subUsage(bfs, "dns block-internet [on|off|status]")
-			bfs.Parse(rest)
-			cmdDNSBlockInternet(ctx, bfs.Args())
+		if op == "config" {
+			configOp("dns config", dnsConfigOps, dnsConfigBodies)(ctx, rest)
 			return
 		}
 		runProcOp(ctx, "dns", op, rest, "dns-")
 	}
 }
 
-// cmdDNSBlockInternet prints the current setting (no args, or "status"),
-// otherwise sets it — same GET/POST /api/dns/block-internet the web UI's
-// Records tab uses.
-func cmdDNSBlockInternet(ctx *cliContext, args []string) {
-	s := ctx.openStore()
-	defer s.Close()
-	if len(args) == 0 || args[0] == "status" {
-		v, _ := s.GetSetting("dns_block_internet")
-		output(msg("block-internet: %v", v == "true"), printMsg)
-		return
+func cmdDNSConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		output(api.LoadDNSConfig(s), func(c api.DNSConfig) {
+			fmt.Println("block-internet:", c.BlockInternet)
+		})
 	}
-	on, err := parseBoolArg(args[0])
-	die(err)
-	label, value := "off", "false"
-	if on {
-		label, value = "on", "true"
+}
+
+// cmdDNSConfigSet: same "empty means unchanged" idiom every config set uses.
+func cmdDNSConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
+	blockInternet := fs.String("block-internet", "", "on|off (unchanged if omitted)")
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		cfg := api.LoadDNSConfig(s)
+		if *blockInternet != "" {
+			on, err := parseBoolArg(*blockInternet)
+			die(err)
+			cfg.BlockInternet = on
+		}
+		die(api.SaveDNSConfig(s, cfg))
+		action := "off"
+		if cfg.BlockInternet {
+			action = "on"
+		}
+		s.Audit("cli", "dns_block_internet_"+action, "")
+		output(cfg, func(c api.DNSConfig) {
+			fmt.Println("block-internet:", c.BlockInternet, "(restart dns to apply)")
+			fmt.Println("saved")
+		})
 	}
-	die(s.SetSetting("dns_block_internet", value))
-	s.Audit("cli", "dns_block_internet_"+label, "")
-	output(msg("block-internet: %s (restart dns to apply)", label), printMsg)
 }
 
 // vpnConfigBodies wires vpn's config sub-ops through configOp — get/set
