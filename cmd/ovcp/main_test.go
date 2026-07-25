@@ -556,7 +556,7 @@ func TestExportFollowsConfig(t *testing.T) {
 	cfg := ovpnconf.Default()
 	cfg.Port, cfg.Proto, cfg.Cipher = 51820, "tcp", "CHACHA20-POLY1305"
 	raw, _ := json.Marshal(cfg)
-	if err := s.SetSetting("server_config", string(raw)); err != nil {
+	if err := s.SetSetting("vpn_config", string(raw)); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -596,7 +596,7 @@ func TestExportSplitTunnel(t *testing.T) {
 	cfg := ovpnconf.Default()
 	cfg.RedirectGW = false
 	raw, _ := json.Marshal(cfg)
-	if err := s.SetSetting("server_config", string(raw)); err != nil {
+	if err := s.SetSetting("vpn_config", string(raw)); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -959,7 +959,7 @@ func TestDNSSupervisorPreStart(t *testing.T) {
 		cfg := ovpnconf.Default()
 		cfg.Subnet = subnet
 		raw, _ := json.Marshal(cfg)
-		s.SetSetting("server_config", string(raw))
+		s.SetSetting("vpn_config", string(raw))
 	}
 
 	saveSubnet(firstSubnet)
@@ -1070,7 +1070,7 @@ func TestCustomOptsNoChange(t *testing.T) {
 	if err := os.WriteFile(noop, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if r := run(t, withEnv(env, "EDITOR="+noop), "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "no change") {
+	if r := run(t, withEnv(env, "EDITOR="+noop), "vpn", "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "no change") {
 		t.Fatalf("no-op editor should report 'no change': %+v", r)
 	}
 
@@ -1078,7 +1078,7 @@ func TestCustomOptsNoChange(t *testing.T) {
 	if err := os.WriteFile(touch, []byte("#!/bin/sh\necho 'client-to-client' >> \"$1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if r := run(t, withEnv(env, "EDITOR="+touch), "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "saved") {
+	if r := run(t, withEnv(env, "EDITOR="+touch), "vpn", "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "saved") {
 		t.Fatalf("an editor that changed content should report 'saved': %+v", r)
 	}
 }
@@ -1093,27 +1093,27 @@ func TestConfigGetSetPreview(t *testing.T) {
 	}
 
 	// defaults, unmodified
-	get := run(t, env, "config", "get")
+	get := run(t, env, "vpn", "config", "get")
 	if get.code != 0 || !strings.Contains(get.stdout, "proto:       udp") || !strings.Contains(get.stdout, "port:        1194") {
 		t.Fatalf("config get (defaults): %+v", get)
 	}
 
 	// preview must show the diff without persisting anything
-	pv := run(t, env, "config", "preview", "-proto", "tcp", "-port", "51820")
+	pv := run(t, env, "vpn", "config", "preview", "-proto", "tcp", "-port", "51820")
 	if pv.code != 0 || !strings.Contains(pv.stdout, "-proto udp") || !strings.Contains(pv.stdout, "+proto tcp") {
 		t.Fatalf("config preview: %+v", pv)
 	}
-	if get2 := run(t, env, "config", "get"); !strings.Contains(get2.stdout, "proto:       udp") {
+	if get2 := run(t, env, "vpn", "config", "get"); !strings.Contains(get2.stdout, "proto:       udp") {
 		t.Fatalf("config preview must not persist: %+v", get2)
 	}
 
 	// set persists; flags left at zero value must leave those fields untouched
-	set := run(t, env, "config", "set", "-proto", "tcp", "-port", "51820",
+	set := run(t, env, "vpn", "config", "set", "-proto", "tcp", "-port", "51820",
 		"-dns", "1.1.1.1, 9.9.9.9", "-routes", "192.168.5.0/24", "-redirect-gw", "false")
 	if set.code != 0 || !strings.Contains(set.stdout, "saved") {
 		t.Fatalf("config set: %+v", set)
 	}
-	got := run(t, withEnv(env, "OVCP_JSON=1"), "config", "get")
+	got := run(t, withEnv(env, "OVCP_JSON=1"), "vpn", "config", "get")
 	var cfg ovpnconf.Config
 	if err := json.Unmarshal([]byte(got.stdout), &cfg); err != nil {
 		t.Fatalf("config get -json: %v: %+v", err, got)
@@ -1131,10 +1131,10 @@ func TestConfigGetSetPreview(t *testing.T) {
 		t.Fatalf("server.conf not updated by config set: %v\n%s", err, conf)
 	}
 
-	if r := run(t, env, "config", "set", "-redirect-gw", "bogus"); r.code == 0 {
+	if r := run(t, env, "vpn", "config", "set", "-redirect-gw", "bogus"); r.code == 0 {
 		t.Fatalf("-redirect-gw must reject anything but true/false: %+v", r)
 	}
-	if r := run(t, env, "config", "set", "-cipher", "DES"); r.code == 0 {
+	if r := run(t, env, "vpn", "config", "set", "-cipher", "DES"); r.code == 0 {
 		t.Fatalf("config set must validate, not persist a bogus cipher: %+v", r)
 	}
 }

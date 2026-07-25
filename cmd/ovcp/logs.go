@@ -43,7 +43,7 @@ func logPaths(dataDir string) []string {
 
 // loadLogConfig/saveLogConfig round-trip controller.LogConfig through the
 // store's settings table under "log_config" — schema-free like
-// server_config, so an install without that key yet just gets DefaultLogConfig.
+// vpn_config, so an install without that key yet just gets DefaultLogConfig.
 func loadLogConfig(s *store.Store) controller.LogConfig {
 	raw, _ := s.GetSetting("log_config")
 	if raw == "" {

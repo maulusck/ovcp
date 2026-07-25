@@ -223,11 +223,11 @@ func clientIP(r *http.Request) string {
 
 // LoadConfig reads persisted server config (settings key) or defaults.
 func (s *Server) LoadConfig() ovpnconf.Config {
-	raw, _ := s.Store.GetSetting("server_config")
+	raw, _ := s.Store.GetSetting("vpn_config")
 	return ovpnconf.Load(raw)
 }
 
 func (s *Server) saveConfig(cfg ovpnconf.Config) error {
 	raw, _ := json.Marshal(cfg)
-	return s.Store.SetSetting("server_config", string(raw))
+	return s.Store.SetSetting("vpn_config", string(raw))
 }

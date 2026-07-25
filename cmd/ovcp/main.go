@@ -233,7 +233,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	cfg := srv.LoadConfig()
 	fillPaths(&cfg, dataDir, sock)
 	raw, _ := json.Marshal(cfg)
-	die(s.SetSetting("server_config", string(raw)))
+	die(s.SetSetting("vpn_config", string(raw)))
 	die(cfg.WriteAtomic(srv.ConfigPath))
 
 	crt, key, err := api.EnsureAdminTLS(filepath.Join(dataDir, "admin-tls"), adminCertCN(dataDir))
@@ -387,7 +387,7 @@ func newDNSSupervisor(pp paths, bin string, s *store.Store) *controller.Supervis
 		Name: "dnsmasq",
 		Bin:  bin,
 		PreStart: func() []string {
-			raw, _ := s.GetSetting("server_config")
+			raw, _ := s.GetSetting("vpn_config")
 			ip, err := ovpnconf.Load(raw).ServerTunIP()
 			if err != nil {
 				slog.Warn("dnsmasq: server tun IP", "err", err)

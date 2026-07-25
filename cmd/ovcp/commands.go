@@ -93,26 +93,25 @@ func parseBoolArg(s string) (bool, error) {
 }
 
 var (
-	vpnOps      = []string{"start", "stop", "restart", "reconnect", "status", "kill"}
-	dnsOps      = []string{"start", "stop", "restart", "status", "block-internet"} // no reconnect: dnsmasq has no such signal
-	certOps     = []string{"issue", "list", "revoke", "export", "renew-server"}
-	configOps   = []string{"get", "set", "preview", "edit"}
-	recordOps   = []string{"list", "edit", "include", "exclude"}
-	userOps     = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
-	backupOps   = []string{"create", "restore"}
-	debugOps    = []string{"on", "off"}
-	telegramOps = []string{"token", "start", "stop", "restart", "status"}
+	vpnOps       = []string{"start", "stop", "restart", "reconnect", "status", "kill", "config"}
+	vpnConfigOps = []string{"get", "set", "preview", "edit"}
+	dnsOps       = []string{"start", "stop", "restart", "status", "block-internet"} // no reconnect: dnsmasq has no such signal
+	certOps      = []string{"issue", "list", "revoke", "export", "renew-server"}
+	recordOps    = []string{"list", "edit", "include", "exclude"}
+	userOps      = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
+	backupOps    = []string{"create", "restore"}
+	debugOps     = []string{"on", "off"}
+	telegramOps  = []string{"token", "start", "stop", "restart", "status"}
 )
 
 var commands = []command{
 	{name: "init", usage: "-server-cn HOST [-admin NAME]   one-shot setup: CA, server cert, tls-crypt, config, admin user", run: cmdInit},
 	{name: "certificate", alias: "cert", usage: "issue|list|revoke|export|renew-server   manage certificates", sub: certOps, run: cmdCertificate},
-	{name: "config", usage: "get|set|preview|edit   view/change openvpn server settings", sub: configOps, run: cmdConfig},
 	{name: "rotate-ca", usage: "re-encrypt the CA key under a new passphrase", run: cmdRotateCA},
 	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
 	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N]   traffic history, or a live top-like follow view (-follow ignores -json)", run: cmdStats},
-	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill   manage/inspect the openvpn worker (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
+	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill|config   manage the openvpn worker + its config get|set|preview|edit (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
 	{name: "dns", usage: "start|stop|restart|status|block-internet [on|off|status]   manage/inspect the dnsmasq worker", sub: dnsOps, run: cmdDNS},
 	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
 	{name: "logs", usage: "config get|set | rotate | status   manage log rotation for openvpn.log/ovcp.log/dnsmasq.log", sub: logsOps, run: cmdLogs},
@@ -489,7 +488,7 @@ func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("server_config")
+		raw, _ := s.GetSetting("vpn_config")
 		cfg := ovpnconf.Load(raw)
 		if *port != 0 {
 			cfg.Port = *port
@@ -612,7 +611,7 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 		cfg := ovpnconf.Default()
 		fillPaths(&cfg, ctx.dataDir, *mgmt)
 		raw, _ := json.Marshal(cfg)
-		die(s.SetSetting("server_config", string(raw)))
+		die(s.SetSetting("vpn_config", string(raw)))
 		die(cfg.WriteAtomic(pp.ServerConf))
 		progress("[4/5] server config: %s\n", pp.ServerConf)
 
@@ -920,21 +919,32 @@ func cmdDNSBlockInternet(ctx *cliContext, args []string) {
 	output(msg("block-internet: %s (restart dns to apply)", label), printMsg)
 }
 
+// vpnConfigBodies wires vpn's config sub-ops through configOp — get/set
+// mirror the web UI's GET/PUT /api/vpn/config exactly (same ovpnconf.Config,
+// same wire shape); edit is the raw-directives $EDITOR flow.
+var vpnConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+	"get": cmdVPNConfigGet, "set": cmdVPNConfigSet,
+	"preview": cmdVPNConfigPreview, "edit": cmdVPNConfigEdit,
+}
+
 // cmdVPN drives the openvpn worker's lifecycle, plus `kill` (disconnect one
-// client) — the one vpn op that isn't a plain lifecycle transition, so it
-// keeps its own flags (-cn) via the unchanged cmdKill body.
+// client) and `config` (settings, not a lifecycle op) — both keep their own
+// flags/sub-dispatch instead of runProcOp's plain start/stop/restart shape.
 func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		op, rest := opArg(fs, "vpn", vpnOps)
-		if op == "kill" {
+		switch op {
+		case "kill":
 			kfs := newFlags("vpn kill")
 			subUsage(kfs, "vpn kill")
 			body := cmdKill(kfs)
 			kfs.Parse(rest)
 			body(ctx)
-			return
+		case "config":
+			configOp("vpn config", vpnConfigOps, vpnConfigBodies)(ctx, rest)
+		default:
+			runProcOp(ctx, "vpn", op, rest, "")
 		}
-		runProcOp(ctx, "vpn", op, rest, "")
 	}
 }
 
@@ -1023,37 +1033,12 @@ func editText(initial string) (out string, changed bool) {
 	return out, out != initial
 }
 
-// cmdConfig wraps the server-config ops: get/set/preview mirror the web UI's
-// GET/PUT/POST-preview /api/config exactly (same ovpnconf.Config, same wire
-// shape), so a script can drive either equally; edit is the raw-directives
-// $EDITOR flow that used to be the standalone `custom-opts` command.
-func cmdConfig(fs *flag.FlagSet) func(ctx *cliContext) {
-	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "config", configOps)
-		cfs := newFlags("config " + op)
-		subUsage(cfs, "config "+op)
-		var body func(ctx *cliContext)
-		switch op {
-		case "get":
-			body = cmdConfigGet(cfs)
-		case "set":
-			body = cmdConfigSet(cfs)
-		case "preview":
-			body = cmdConfigPreview(cfs)
-		case "edit":
-			body = cmdConfigEdit(cfs)
-		}
-		cfs.Parse(rest)
-		body(ctx)
-	}
-}
-
-// cmdConfigGet prints the persisted server config — GET /api/config's CLI twin.
-func cmdConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
+// cmdVPNConfigGet prints the persisted server config — GET /api/vpn/config's CLI twin.
+func cmdVPNConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("server_config")
+		raw, _ := s.GetSetting("vpn_config")
 		output(ovpnconf.Load(raw), printConfigText)
 	}
 }
@@ -1122,32 +1107,32 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 	}
 }
 
-// cmdConfigSet applies flag overrides and persists — PUT /api/config's CLI twin.
-func cmdConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
+// cmdVPNConfigSet applies flag overrides and persists — PUT /api/vpn/config's CLI twin.
+func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	apply := configFlags(fs)
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("server_config")
+		raw, _ := s.GetSetting("vpn_config")
 		cfg, err := apply(ovpnconf.Load(raw))
 		die(err)
 		die(cfg.Validate())
 		enc, _ := json.Marshal(cfg)
-		die(s.SetSetting("server_config", string(enc)))
+		die(s.SetSetting("vpn_config", string(enc)))
 		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
 		s.Audit("cli", "config_change", "")
 		output(cfg, func(c ovpnconf.Config) { fmt.Println("saved; run `ovcp vpn restart` to apply") })
 	}
 }
 
-// cmdConfigPreview applies flag overrides without persisting, showing the
-// server.conf diff — POST /api/config/preview's CLI twin.
-func cmdConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
+// cmdVPNConfigPreview applies flag overrides without persisting, showing the
+// server.conf diff — POST /api/vpn/config/preview's CLI twin.
+func cmdVPNConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
 	apply := configFlags(fs)
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("server_config")
+		raw, _ := s.GetSetting("vpn_config")
 		cur := ovpnconf.Load(raw)
 		cfg, err := apply(cur)
 		die(err)
@@ -1174,13 +1159,13 @@ type previewOut struct {
 	Changed bool     `json:"changed"`
 }
 
-// cmdConfigEdit edits the server config's raw extra directives in $EDITOR —
+// cmdVPNConfigEdit edits the server config's raw extra directives in $EDITOR —
 // unchanged behavior from the old standalone `custom-opts` command.
-func cmdConfigEdit(_ *flag.FlagSet) func(ctx *cliContext) {
+func cmdVPNConfigEdit(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("server_config")
+		raw, _ := s.GetSetting("vpn_config")
 		cfg := ovpnconf.Load(raw)
 		extra, changed := editText(cfg.Extra)
 		if !changed {
@@ -1189,7 +1174,7 @@ func cmdConfigEdit(_ *flag.FlagSet) func(ctx *cliContext) {
 		}
 		cfg.Extra = extra
 		enc, _ := json.Marshal(cfg)
-		die(s.SetSetting("server_config", string(enc)))
+		die(s.SetSetting("vpn_config", string(enc)))
 		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
 		s.Audit("cli", "config_change", "custom options")
 		output(msg("saved; run `ovcp vpn restart` to apply"), printMsg)
