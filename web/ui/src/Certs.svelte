@@ -133,7 +133,7 @@
         <input type="password" bind:value={form.keypass} />
       </label>
       {#if redirectGW}
-        <label class="check">
+        <label class="check wide">
           <input type="checkbox" bind:checked={form.splitTunnel} />
           Split tunnel (keep client's own default route)
         </label>

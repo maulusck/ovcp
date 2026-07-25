@@ -244,9 +244,9 @@
           Route all client traffic through the VPN
         </label>
         {#if dnsAvailable}
-          <label class="check">
+          <label class="check" title="pushed ahead of the DNS entries above">
             <input type="checkbox" bind:checked={cfg.PushInternalDNS} disabled={!isAdmin} />
-            Also push internal DNS (dnsmasq), ahead of the entries above
+            Push internal DNS
           </label>
         {/if}
         <label class="wide">Custom options
@@ -296,7 +296,7 @@
     <p class="muted small">Resolves certificate names for connected clients; optionally blocks all other internet DNS.</p>
     <form onsubmit={saveDNS}>
       <div class="grid">
-        <label class="check">
+        <label class="check wide">
           <input type="checkbox" checked={blockInternet} disabled={!isAdmin} onchange={toggleBlockInternet} />
           Block internet DNS (answer only local names; restart to apply)
         </label>
@@ -339,7 +339,7 @@
   {:else}
     <form onsubmit={saveLogsCfg}>
       <div class="grid">
-        <label class="check">
+        <label class="check wide">
           <input type="checkbox" bind:checked={logsCfg.Enabled} disabled={!isAdmin} />
           Run daily rotation
         </label>
@@ -394,7 +394,7 @@
     {#if tgErr}<p class="err">{tgErr}</p>{/if}
     {#if tgOk}<p class="ok">{tgOk}</p>{/if}
     {#if tg}
-      <p class="tg-status"><span class="status-dot {tgState}"></span> {tgLabel}</p>
+      <p class="tg-status" title={tgLabel}><span class="status-dot {tgState}"></span> {tgLabel}</p>
     {/if}
     <div class="row">
       <button type="button" class="ghost" onclick={setTelegramToken}

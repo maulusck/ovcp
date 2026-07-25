@@ -296,6 +296,7 @@
     --amber: #e619e6; --ok: #33ff66; --bad: #ff3333;
   }
   :global(*) { box-sizing: border-box; }
+  :global(p) { margin: 6px 0; } /* browser default is ~1em; too loose after a form grid */
   :global(body) {
     margin: 0; background: var(--ink); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, sans-serif;
@@ -384,14 +385,15 @@
      in, stacking atop the grid's own `gap` and misaligning columns once 2+ fit per row. */
   :global(.logs-grid > .card), :global(.stats-grid > .card) { margin-top: 0; }
   /* shared by Certs/Settings/Users' forms: a non-stretching checkbox, full-width
-     textarea, button row, and small print. */
-  :global(.check) { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+     textarea, button row, and small print. Not full-width by default — pair
+     with .wide when a label is too long to sit two-up. */
+  :global(.check) { display: flex; align-items: center; gap: 8px; }
   :global(.check input) { width: auto; }
   :global(.wide) { grid-column: 1 / -1; }
   :global(.wide textarea) {
     width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
     background: var(--ink); color: var(--text); border: 1px solid var(--line);
-    border-radius: 4px; padding: 7px 10px;
+    border-radius: 4px; padding: 7px 10px; min-height: 2.4em;
   }
   :global(.row) { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   :global(.small) { font-size: 12px; margin: 8px 0; }
