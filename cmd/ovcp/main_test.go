@@ -837,15 +837,16 @@ func TestPasswordYOLOCLI(t *testing.T) {
 }
 
 // TestUnreachableServe: remote-control commands must fail cleanly, not hang, when no `serve` process is up.
-// TestTelegramTokenValidation covers what's reachable without a real
-// Telegram API call: -admin required, unknown op errors. Success path is covered in internal/telegram's own tests (mocked API).
-func TestTelegramTokenValidation(t *testing.T) {
+// TestTelegramConfigValidation covers what's reachable without a real
+// Telegram API call: neither -token nor -admin errors, unknown op errors.
+// Success path (and independent token/admin setting) is covered in internal/telegram's own tests (mocked API).
+func TestTelegramConfigValidation(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	if r := run(t, env, "telegram", "token"); r.code == 0 {
-		t.Fatalf("telegram token without -admin should fail: %+v", r)
+	if r := run(t, env, "telegram", "config", "set"); r.code == 0 {
+		t.Fatalf("telegram config set with neither -token nor -admin should fail: %+v", r)
 	}
 	if r := run(t, env, "telegram", "bogus"); r.code == 0 {
 		t.Fatalf("telegram bogus should fail: %+v", r)

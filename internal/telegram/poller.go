@@ -46,9 +46,10 @@ func New(s *store.Store, vpn controller.Lifecycle, mgmt *controller.Client) *Pol
 	return &Poller{s: s, vpn: vpn, mgmt: mgmt}
 }
 
-// SetCredentials validates token against getMe, then saves token+admin
-// together and forgets any previously-learned chat (new admin, new chat).
-func SetCredentials(s *store.Store, token, admin string) error {
+// SetToken validates token against getMe, then saves it — independently of
+// SetAdmin, so changing one never requires re-supplying the other. Forgets
+// any previously-learned chat: a new bot identity invalidates it.
+func SetToken(s *store.Store, token string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := newBot(token).getMe(ctx); err != nil {
@@ -57,22 +58,35 @@ func SetCredentials(s *store.Store, token, admin string) error {
 	if err := s.SetSetting(keyToken, token); err != nil {
 		return err
 	}
+	slog.Info("telegram: token updated")
+	return s.SetSetting(keyChat, "")
+}
+
+// SetAdmin saves the admin identity — forgets any previously-learned chat:
+// a different admin means a different authorized chat.
+func SetAdmin(s *store.Store, admin string) error {
 	if err := s.SetSetting(keyAdmin, admin); err != nil {
 		return err
 	}
-	if err := s.SetSetting(keyChat, ""); err != nil {
-		return err
-	}
-	slog.Info("telegram: credentials updated", "admin", admin)
-	return nil
+	slog.Info("telegram: admin updated", "admin", admin)
+	return s.SetSetting(keyChat, "")
+}
+
+// ConfigStatus reads token/admin presence directly from the store — no
+// running Poller needed, the same shape (*Poller).Status serves over the
+// control socket. Shared by that and `ovcp telegram config get`.
+func ConfigStatus(s *store.Store) controller.TelegramStatus {
+	token, _ := s.GetSetting(keyToken)
+	admin, _ := s.GetSetting(keyAdmin)
+	return controller.TelegramStatus{TokenSet: token != "", Admin: admin}
 }
 
 func (p *Poller) Status() controller.TelegramStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	token, _ := p.s.GetSetting(keyToken)
-	admin, _ := p.s.GetSetting(keyAdmin)
-	return controller.TelegramStatus{Running: p.running, TokenSet: token != "", Admin: admin}
+	st := ConfigStatus(p.s)
+	st.Running = p.running
+	return st
 }
 
 // acquireOp claims mu for one Start/Stop/Restart — held for the op's real

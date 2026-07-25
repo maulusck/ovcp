@@ -673,16 +673,20 @@ func TestTelegramEndpoints(t *testing.T) {
 		t.Fatalf("want unconfigured, got status=%d %+v", r.StatusCode, st)
 	}
 
-	if r := e.req("PUT", "/api/telegram", `{"Token":"good-token"}`, true); r.StatusCode != 400 {
-		t.Fatal("missing admin must 400, got", r.Status)
-	}
-	if r := e.req("PUT", "/api/telegram", `{"Token":"bad-token","Admin":"@alice"}`, true); r.StatusCode != 400 {
+	if r := e.req("PUT", "/api/telegram", `{"Token":"bad-token"}`, true); r.StatusCode != 400 {
 		t.Fatal("rejected token must 400, got", r.Status)
 	}
-	r = e.req("PUT", "/api/telegram", `{"Token":"good-token","Admin":"@alice"}`, true)
+	// token and admin are independently settable — setting one must never
+	// require resupplying the other.
+	r = e.req("PUT", "/api/telegram", `{"Token":"good-token"}`, true)
+	json.NewDecoder(r.Body).Decode(&st)
+	if r.StatusCode != 200 || !st.TokenSet || st.Admin != "" {
+		t.Fatalf("token alone: status=%d %+v", r.StatusCode, st)
+	}
+	r = e.req("PUT", "/api/telegram", `{"Admin":"@alice"}`, true)
 	json.NewDecoder(r.Body).Decode(&st)
 	if r.StatusCode != 200 || !st.TokenSet || st.Admin != "@alice" {
-		t.Fatalf("want configured, got status=%d %+v", r.StatusCode, st)
+		t.Fatalf("admin alone: status=%d %+v", r.StatusCode, st)
 	}
 
 	r = e.req("POST", "/api/telegram/start", "", true)

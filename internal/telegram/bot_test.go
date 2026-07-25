@@ -30,20 +30,33 @@ func mockAPI(t *testing.T) {
 	t.Cleanup(SetAPIBaseForTesting(srv.URL + "/bot"))
 }
 
-func TestSetCredentials(t *testing.T) {
+// TestSetTokenAndAdmin covers both independently — setting one must never
+// require (or touch) the other.
+func TestSetTokenAndAdmin(t *testing.T) {
 	mockAPI(t)
 	s, _ := store.Open(filepath.Join(t.TempDir(), "ovcp.db"))
 	defer s.Close()
 
-	if err := SetCredentials(s, badToken, testAdmin); err == nil {
+	if err := SetToken(s, badToken); err == nil {
 		t.Fatal("bad token should be rejected")
 	}
-	if err := SetCredentials(s, goodToken, testAdmin); err != nil {
+	if err := SetToken(s, goodToken); err != nil {
 		t.Fatalf("good token should be accepted: %v", err)
+	}
+	if err := SetAdmin(s, testAdmin); err != nil {
+		t.Fatalf("SetAdmin: %v", err)
 	}
 	token, _ := s.GetSetting(keyToken)
 	admin, _ := s.GetSetting(keyAdmin)
 	if token != goodToken || admin != testAdmin {
 		t.Fatalf("token=%q admin=%q, want %s/%s", token, admin, goodToken, testAdmin)
+	}
+
+	// changing the token alone must leave admin untouched, and vice versa.
+	if err := SetToken(s, goodToken); err != nil {
+		t.Fatalf("SetToken again: %v", err)
+	}
+	if admin2, _ := s.GetSetting(keyAdmin); admin2 != testAdmin {
+		t.Fatalf("SetToken must not touch admin, got %q", admin2)
 	}
 }

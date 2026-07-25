@@ -93,16 +93,17 @@ func parseBoolArg(s string) (bool, error) {
 }
 
 var (
-	vpnOps       = []string{"start", "stop", "restart", "reconnect", "status", "kill", "config"}
-	vpnConfigOps = []string{"get", "set", "preview", "edit"}
-	dnsOps       = []string{"start", "stop", "restart", "status", "config"} // no reconnect: dnsmasq has no such signal
-	dnsConfigOps = []string{"get", "set"}
-	certOps      = []string{"issue", "list", "revoke", "export", "renew-server"}
-	recordOps    = []string{"list", "edit", "include", "exclude"}
-	userOps      = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
-	backupOps    = []string{"create", "restore"}
-	debugOps     = []string{"on", "off"}
-	telegramOps  = []string{"token", "start", "stop", "restart", "status"}
+	vpnOps            = []string{"start", "stop", "restart", "reconnect", "status", "kill", "config"}
+	vpnConfigOps      = []string{"get", "set", "preview", "edit"}
+	dnsOps            = []string{"start", "stop", "restart", "status", "config"} // no reconnect: dnsmasq has no such signal
+	dnsConfigOps      = []string{"get", "set"}
+	certOps           = []string{"issue", "list", "revoke", "export", "renew-server"}
+	recordOps         = []string{"list", "edit", "include", "exclude"}
+	userOps           = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
+	backupOps         = []string{"create", "restore"}
+	debugOps          = []string{"on", "off"}
+	telegramOps       = []string{"config", "start", "stop", "restart", "status"}
+	telegramConfigOps = []string{"get", "set"}
 )
 
 var commands = []command{
@@ -117,7 +118,7 @@ var commands = []command{
 	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
 	{name: "logs", usage: "config get|set | rotate | status   manage log rotation for openvpn.log/ovcp.log/dnsmasq.log", sub: logsOps, run: cmdLogs},
 	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
-	{name: "telegram", usage: "token -admin ID|@user | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
+	{name: "telegram", usage: "config get|set [-token] [-admin ID|@user] | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
 	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
 	{name: "audit", usage: "last 50 audit entries", run: cmdAudit},
 	{name: "serve", usage: "[-listen ADDR] [-mgmt PATH] [-ctrl PATH]   run admin UI + API", run: cmdServe},
@@ -1277,27 +1278,58 @@ func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// telegramConfigBodies wires telegram's config sub-ops through configOp —
+// same GET/PUT /api/telegram/config the web UI uses.
+var telegramConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+	"get": cmdTelegramConfigGet, "set": cmdTelegramConfigSet,
+}
+
+func cmdTelegramConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		output(telegram.ConfigStatus(s), func(st controller.TelegramStatus) {
+			fmt.Println("token-set:", st.TokenSet)
+			fmt.Println("admin:    ", st.Admin)
+		})
+	}
+}
+
+// cmdTelegramConfigSet: token and admin are independently optional, so
+// changing one never requires re-supplying the other — -token is a flag
+// (not a value) since a secret has no business appearing on the command line.
+func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
+	setToken := fs.Bool("token", false, "prompt for (or read $OVCP_TELEGRAM_TOKEN) a new bot token")
+	admin := fs.String("admin", os.Getenv("OVCP_TELEGRAM_ADMIN"),
+		"admin Telegram numeric id or @username (unchanged if omitted; env: OVCP_TELEGRAM_ADMIN)")
+	return func(ctx *cliContext) {
+		if !*setToken && *admin == "" {
+			die(fmt.Errorf("nothing to set: pass -token and/or -admin"))
+		}
+		s := ctx.openStore()
+		defer s.Close()
+		if *setToken {
+			token := readSecret("Telegram bot token", "OVCP_TELEGRAM_TOKEN", false)
+			die(telegram.SetToken(s, string(token)))
+			s.Audit("cli", "telegram_token_change", "")
+		}
+		if *admin != "" {
+			die(telegram.SetAdmin(s, *admin))
+			s.Audit("cli", "telegram_admin_change", "admin="+*admin)
+		}
+		output(telegram.ConfigStatus(s), func(st controller.TelegramStatus) {
+			fmt.Println("token-set:", st.TokenSet)
+			fmt.Println("admin:    ", st.Admin)
+			fmt.Println("saved; run 'ovcp telegram start' (or restart serve) to bring the bot up")
+		})
+	}
+}
+
 func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		op, rest := opArg(fs, "telegram", telegramOps)
-
-		if op == "token" {
-			tfs := newFlags("telegram token")
-			admin := tfs.String("admin", os.Getenv("OVCP_TELEGRAM_ADMIN"),
-				"admin Telegram numeric id or @username (required; env: OVCP_TELEGRAM_ADMIN)")
-			tfs.Parse(rest)
-			if *admin == "" {
-				die(fmt.Errorf("-admin required (the only Telegram identity the bot will ever respond to)"))
-			}
-			token := readSecret("Telegram bot token", "OVCP_TELEGRAM_TOKEN", false)
-			s := ctx.openStore()
-			defer s.Close()
-			die(telegram.SetCredentials(s, string(token), *admin))
-			s.Audit("cli", "telegram_configure", "admin="+*admin)
-			output(msg("telegram: token saved, admin set to %s", *admin), func(o outcome) {
-				fmt.Println(o.Message)
-				fmt.Println("run 'ovcp telegram start' (or restart serve) to bring the bot up")
-			})
+		if op == "config" {
+			configOp("telegram config", telegramConfigOps, telegramConfigBodies)(ctx, rest)
 			return
 		}
 
@@ -1325,7 +1357,7 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		output(st, func(st controller.TelegramStatus) {
 			if !st.TokenSet {
-				fmt.Println("telegram: not configured (run 'ovcp telegram token -admin ...')")
+				fmt.Println("telegram: not configured (run 'ovcp telegram config set -token -admin ...')")
 				return
 			}
 			state := "stopped"

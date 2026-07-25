@@ -431,19 +431,28 @@ func (s *Server) handleTelegramGet(w http.ResponseWriter, r *http.Request, u *st
 	jsonOK(w, s.Telegram.Status())
 }
 
-// handleTelegramPut sets token+admin together (SetCredentials validates the
-// token against getMe first) — matches "ovcp telegram token -admin".
+// handleTelegramPut sets token and/or admin independently — empty means
+// unchanged for that field; SetToken validates against getMe when given.
 func (s *Server) handleTelegramPut(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Token, Admin string }
-	if !decode(r, &in) || in.Token == "" || in.Admin == "" {
-		jsonErr(w, 400, "token and admin are both required")
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := telegram.SetCredentials(s.Store, in.Token, in.Admin); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
+	if in.Token != "" {
+		if err := telegram.SetToken(s.Store, in.Token); err != nil {
+			jsonErr(w, 400, err.Error())
+			return
+		}
+		s.Store.Audit(u.Username, "telegram_token_change", "")
 	}
-	s.Store.Audit(u.Username, "telegram_configure", "admin="+in.Admin)
+	if in.Admin != "" {
+		if err := telegram.SetAdmin(s.Store, in.Admin); err != nil {
+			jsonErr(w, 500, err.Error())
+			return
+		}
+		s.Store.Audit(u.Username, "telegram_admin_change", "admin="+in.Admin)
+	}
 	jsonOK(w, s.Telegram.Status())
 }
 
