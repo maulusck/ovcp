@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/store"
@@ -17,7 +18,7 @@ func TestSamplerTickSkipsOnMgmtDown(t *testing.T) {
 	srv := &Server{Mgmt: controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")), VPN: &fakeVPN{}}
 	prev := map[string]controller.VPNClient{"alice": {CN: "alice"}}
 
-	got := srv.samplerTick(true, prev)
+	got := srv.samplerTick(true, 24*time.Hour, prev)
 
 	if len(got) != 1 || got["alice"].CN != "alice" {
 		t.Fatalf("samplerTick with mgmt down = %v, want prev unchanged", got)
@@ -53,13 +54,13 @@ func TestSamplerTickShortSessionNotLost(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	srv := &Server{Store: s, VPN: &fakeVPN{}, Mgmt: controller.NewClient("", writeStatus(t, "alice"))}
 
-	prev := srv.samplerTick(false, map[string]controller.VPNClient{})
+	prev := srv.samplerTick(false, 24*time.Hour, map[string]controller.VPNClient{})
 	if len(prev) != 1 {
 		t.Fatalf("want alice tracked after connect tick, got %v", prev)
 	}
 
 	srv.Mgmt = controller.NewClient("", writeStatus(t, ""))
-	srv.samplerTick(false, prev) // sampleStats=false — the tick that used to drop the disconnect
+	srv.samplerTick(false, 24*time.Hour, prev) // sampleStats=false — the tick that used to drop the disconnect
 
 	sessions, err := s.Sessions(10)
 	if err != nil || len(sessions) != 1 || sessions[0].CN != "alice" {

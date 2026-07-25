@@ -6,26 +6,52 @@ import (
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 )
 
-const (
-	// statsSampleInterval: how often traffic-history rows get written/pruned.
-	// Disconnect detection doesn't wait for this — see RunSampler.
-	// ponytail: fixed 1min/24h, not configurable; add flags/env if graph precision or retention ever needs tuning.
-	statsSampleInterval = time.Minute
-	// bounds DB rows (~1440 samples) and the /api/stats payload; sessions key
-	// by CN not serial, so history survives cert revocation like the audit log does.
-	StatsRetention = 24 * time.Hour
-)
+// StatsConfig is the admin-tunable traffic-history sampling/retention
+// policy, persisted under statsConfigKey.
+type StatsConfig struct {
+	SampleIntervalSec int // how often a traffic-history row is written/pruned
+	RetentionHours    int // how far back samples/sessions are kept and queried
+}
+
+// DefaultStatsConfig seeds from OVCP_STATS_* env vars (container/unattended
+// init), same pattern as ovpnconf.Default.
+func DefaultStatsConfig() StatsConfig {
+	return StatsConfig{
+		SampleIntervalSec: ovpnconf.EnvInt("OVCP_STATS_SAMPLE_INTERVAL", 60),
+		RetentionHours:    ovpnconf.EnvInt("OVCP_STATS_RETENTION_HOURS", 24),
+	}
+}
+
+func (c StatsConfig) SampleInterval() time.Duration {
+	return time.Duration(c.SampleIntervalSec) * time.Second
+}
+func (c StatsConfig) Retention() time.Duration { return time.Duration(c.RetentionHours) * time.Hour }
+
+const statsConfigKey = "stats_config"
+
+// LoadStatsConfig/SaveStatsConfig: the one read/write path, shared by the
+// CLI (`ovcp stats config`) and Server.StatsConfig below.
+func LoadStatsConfig(s *store.Store) StatsConfig {
+	return store.LoadJSON(s, statsConfigKey, DefaultStatsConfig())
+}
+func SaveStatsConfig(s *store.Store, cfg StatsConfig) error {
+	return store.SaveJSON(s, statsConfigKey, cfg)
+}
+
+// StatsConfig reads the live persisted config — RunSampler re-reads it every
+// tick, so `stats config set` takes effect without restarting serve.
+func (s *Server) StatsConfig() StatsConfig { return LoadStatsConfig(s.Store) }
 
 // RunSampler polls on PollInterval (OVCP_STATUS_INTERVAL): every tick
-// refreshes certs.hosts + detects disconnects, every statsSampleInterval'th
+// refreshes certs.hosts + detects disconnects, every SampleIntervalSec'th
 // tick also records a traffic sample. ponytail: CN-keyed, so a same-tick reconnect is invisible.
 func (s *Server) RunSampler(stop <-chan struct{}) {
 	prev := map[string]controller.VPNClient{}
-	ticksPerSample := max(1, int(statsSampleInterval/s.PollInterval))
 	tick := 0
 	t := time.NewTicker(s.PollInterval)
 	defer t.Stop()
@@ -35,12 +61,14 @@ func (s *Server) RunSampler(stop <-chan struct{}) {
 			return
 		case <-t.C:
 			tick++
-			prev = s.samplerTick(tick%ticksPerSample == 0, prev)
+			cfg := s.StatsConfig()
+			ticksPerSample := max(1, int(cfg.SampleInterval()/s.PollInterval))
+			prev = s.samplerTick(tick%ticksPerSample == 0, cfg.Retention(), prev)
 		}
 	}
 }
 
-func (s *Server) samplerTick(sampleStats bool, prev map[string]controller.VPNClient) (next map[string]controller.VPNClient) {
+func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map[string]controller.VPNClient) (next map[string]controller.VPNClient) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("sampler tick panicked, skipping", "err", r)
@@ -88,7 +116,7 @@ func (s *Server) samplerTick(sampleStats bool, prev map[string]controller.VPNCli
 			slog.Warn("stats sample write failed", "cn", c.CN, "err", err)
 		}
 	}
-	if err := s.Store.PruneStats(now.Add(-StatsRetention)); err != nil {
+	if err := s.Store.PruneStats(now.Add(-retention)); err != nil {
 		slog.Warn("stats prune failed", "err", err)
 	}
 	return curByCN
@@ -102,7 +130,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, u *store.Us
 		jsonErr(w, 400, "cn too long")
 		return
 	}
-	since := time.Now().Add(-StatsRetention)
+	since := time.Now().Add(-s.StatsConfig().Retention())
 	var samples []store.Sample
 	var err error
 	if cn != "" {

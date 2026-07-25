@@ -23,6 +23,13 @@ type statsSnapshot struct {
 	Sessions []store.ClientSession `json:"sessions"`
 }
 
+var (
+	statsConfigOps    = []string{"get", "set"}
+	statsConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+		"get": cmdStatsConfigGet, "set": cmdStatsConfigSet,
+	}
+)
+
 func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 	cn := fs.String("cn", "", "client CN (default: global aggregate)")
 	follow := fs.Bool("follow", false, "live top-like view, via a running serve's control socket (ignores -json)")
@@ -31,6 +38,10 @@ func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 	fs.IntVar(interval, "int", 2, "alias for -interval")
 	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket, -follow only")
 	return func(ctx *cliContext) {
+		if args := fs.Args(); len(args) > 0 && args[0] == "config" {
+			configOp("stats config", statsConfigOps, statsConfigBodies)(ctx, args[1:])
+			return
+		}
 		if *follow {
 			if jsonOut {
 				die(fmt.Errorf("-json is not supported with -follow"))
@@ -40,7 +51,7 @@ func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		s := ctx.openStore()
 		defer s.Close()
-		since := time.Now().Add(-api.StatsRetention)
+		since := time.Now().Add(-api.LoadStatsConfig(s).Retention())
 		var samples []store.Sample
 		var err error
 		if *cn != "" {
@@ -61,6 +72,41 @@ func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 			sessions = []store.ClientSession{}
 		}
 		output(statsSnapshot{samples, sessions}, func(o statsSnapshot) { printStatsText(o, *cn) })
+	}
+}
+
+func printStatsConfigText(c api.StatsConfig) {
+	fmt.Println("sample-interval-sec:", c.SampleIntervalSec)
+	fmt.Println("retention-hours:    ", c.RetentionHours)
+}
+
+func cmdStatsConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		output(api.LoadStatsConfig(s), printStatsConfigText)
+	}
+}
+
+// cmdStatsConfigSet: same "-1 means unchanged" idiom cmdLogsConfigSet uses.
+func cmdStatsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
+	sampleInterval := fs.Int("sample-interval-sec", -1, "seconds between traffic-history samples (unchanged if omitted)")
+	retentionHours := fs.Int("retention-hours", -1, "hours of history kept/queried (unchanged if omitted)")
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		cfg := api.LoadStatsConfig(s)
+		if *sampleInterval != -1 {
+			requirePositive(*sampleInterval, "sample-interval-sec")
+			cfg.SampleIntervalSec = *sampleInterval
+		}
+		if *retentionHours != -1 {
+			requirePositive(*retentionHours, "retention-hours")
+			cfg.RetentionHours = *retentionHours
+		}
+		die(api.SaveStatsConfig(s, cfg))
+		s.Audit("cli", "stats_config_change", "")
+		output(cfg, func(c api.StatsConfig) { printStatsConfigText(c); fmt.Println("saved") })
 	}
 }
 

@@ -111,7 +111,7 @@ var commands = []command{
 	{name: "rotate-ca", usage: "re-encrypt the CA key under a new passphrase", run: cmdRotateCA},
 	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
 	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
-	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N]   traffic history, or a live top-like follow view (-follow ignores -json)", run: cmdStats},
+	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N] | config get|set   traffic history, live follow view, or sampling config", run: cmdStats},
 	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill|config   manage the openvpn worker + its config get|set|preview|edit (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
 	{name: "dns", usage: "start|stop|restart|status|config   manage the dnsmasq worker + its config get|set -block-internet", sub: dnsOps, run: cmdDNS},
 	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},

@@ -374,6 +374,29 @@ func TestCertAlias(t *testing.T) {
 	}
 }
 
+// TestStatsConfigCommand covers the config get/set path added alongside the
+// snapshot/-follow flags — same "-1 means unchanged" idiom as logs config.
+func TestStatsConfigCommand(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "stats", "config", "get"); r.code != 0 ||
+		!strings.Contains(r.stdout, "sample-interval-sec: 60") || !strings.Contains(r.stdout, "retention-hours:     24") {
+		t.Fatalf("stats config get defaults: %+v", r)
+	}
+	if r := run(t, env, "stats", "config", "set", "-retention-hours", "48"); r.code != 0 {
+		t.Fatalf("stats config set: %+v", r)
+	}
+	if r := run(t, env, "stats", "config", "get"); r.code != 0 ||
+		!strings.Contains(r.stdout, "retention-hours:     48") || !strings.Contains(r.stdout, "sample-interval-sec: 60") {
+		t.Fatalf("stats config get after set: %+v", r)
+	}
+	if r := run(t, env, "stats", "config", "set", "-sample-interval-sec", "0"); r.code == 0 {
+		t.Fatalf("stats config set 0 must be rejected: %+v", r)
+	}
+}
+
 func TestSortByFlag(t *testing.T) {
 	type row struct{ name string }
 	rows := []row{{"charlie"}, {"alice"}, {"bob"}}
