@@ -363,6 +363,17 @@ func TestStatsIntervalAlias(t *testing.T) {
 	}
 }
 
+// TestCertAlias covers "cert" dispatching identically to "certificate".
+func TestCertAlias(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "cert", "list"); r.code != 0 {
+		t.Fatalf("cert list: %+v", r)
+	}
+}
+
 func TestSortByFlag(t *testing.T) {
 	type row struct{ name string }
 	rows := []row{{"charlie"}, {"alice"}, {"bob"}}
