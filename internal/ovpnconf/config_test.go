@@ -108,6 +108,7 @@ func TestServerTunIP(t *testing.T) {
 func TestDomainSearchPush(t *testing.T) {
 	c := valid()
 	c.ServerCN = "ovcp.example.com"
+	c.PushInternalDNS = true
 	out := string(c.Render())
 	if !strings.Contains(out, `push "dhcp-option DOMAIN example.com"`) {
 		t.Fatalf("expected DOMAIN push for a dotted CN\n%s", out)
@@ -120,6 +121,15 @@ func TestDomainSearchPush(t *testing.T) {
 	out = string(c.Render())
 	if strings.Contains(out, "DOMAIN") {
 		t.Fatalf("bare shortname CN must not push DOMAIN/DOMAIN-SEARCH\n%s", out)
+	}
+
+	// PushInternalDNS off: pushing the domain would leak internal hostnames
+	// to a resolver clients were never told to use for DNS.
+	c.ServerCN = "ovcp.example.com"
+	c.PushInternalDNS = false
+	out = string(c.Render())
+	if strings.Contains(out, "DOMAIN") {
+		t.Fatalf("PushInternalDNS off must not push DOMAIN/DOMAIN-SEARCH\n%s", out)
 	}
 }
 

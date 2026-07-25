@@ -392,7 +392,8 @@ func (s *Server) handleVPNConfigPreview(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	diff := ovpnconf.Diff(cur.Render(), in.Render())
-	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0})
+	warning := DNSLeakWarning(in, LoadDNSConfig(s.Store))
+	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0, "warning": warning})
 }
 
 // handleProc drives a supervised worker's lifecycle (start|stop|restart,
@@ -788,7 +789,8 @@ func DNSLeakWarning(vpn ovpnconf.Config, dns DNSConfig) string {
 }
 
 func (s *Server) handleDNSConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, map[string]bool{"blockInternet": LoadDNSConfig(s.Store).BlockInternet})
+	dns := LoadDNSConfig(s.Store)
+	jsonOK(w, map[string]any{"blockInternet": dns.BlockInternet, "warning": DNSLeakWarning(s.LoadConfig(), dns)})
 }
 
 // handleDNSConfigSet toggles whether dnsmasq forwards to upstream resolvers;
@@ -799,7 +801,8 @@ func (s *Server) handleDNSConfigSet(w http.ResponseWriter, r *http.Request, u *s
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := SaveDNSConfig(s.Store, DNSConfig{BlockInternet: in.BlockInternet}); err != nil {
+	dns := DNSConfig{BlockInternet: in.BlockInternet}
+	if err := SaveDNSConfig(s.Store, dns); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}
@@ -808,7 +811,7 @@ func (s *Server) handleDNSConfigSet(w http.ResponseWriter, r *http.Request, u *s
 		action = "on"
 	}
 	s.Store.Audit(u.Username, "dns_block_internet_"+action, "")
-	jsonOK(w, map[string]bool{"blockInternet": in.BlockInternet})
+	jsonOK(w, map[string]any{"blockInternet": in.BlockInternet, "warning": DNSLeakWarning(s.LoadConfig(), dns)})
 }
 
 func (s *Server) handleLogsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {

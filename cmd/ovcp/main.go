@@ -201,7 +201,12 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	dnsSup := newDNSSupervisor(pp, dnsPath, s)
 	mgmt := controller.NewClient(sock, statusPath(sock))
 	tg := telegram.New(s, sup, mgmt)
-	s.OnAudit(tg.OnAudit)
+	// audits fire for CLI commands too, but only the running daemon owns
+	// ovcp.log/Telegram — logging/notifying there would just hit a bare CLI's stderr.
+	s.OnAudit(func(actor, action, detail string) {
+		slog.Info("audit", "actor", actor, "action", action, "detail", detail)
+		tg.OnAudit(actor, action, detail)
+	})
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
 		Mgmt:            mgmt,

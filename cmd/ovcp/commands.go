@@ -920,6 +920,7 @@ func cmdDNSConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 		output(api.LoadDNSConfig(s), func(c api.DNSConfig) {
 			fmt.Println("block-internet:", c.BlockInternet)
 		})
+		warnDNSLeak(s)
 	}
 }
 
@@ -1070,6 +1071,7 @@ func cmdVPNConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		raw, _ := s.GetSetting("vpn_config")
 		output(ovpnconf.Load(raw), printConfigText)
+		warnDNSLeak(s)
 	}
 }
 
@@ -1191,6 +1193,9 @@ func cmdVPNConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
 				}
 			}
 		})
+		if w := api.DNSLeakWarning(cfg, api.LoadDNSConfig(s)); w != "" {
+			fmt.Fprintln(os.Stderr, "warning:", w)
+		}
 	}
 }
 

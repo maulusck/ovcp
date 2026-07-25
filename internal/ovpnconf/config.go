@@ -210,16 +210,15 @@ func (c *Config) Render() []byte {
 	for _, d := range c.DNS {
 		w(`push "dhcp-option DNS %s"`, d)
 	}
-	// bare shortname ServerCN (no dot) has no domain to search — resolve it
-	// directly instead, nothing to push. Both DOMAIN and DOMAIN-SEARCH are
-	// pushed together: Windows applies DOMAIN reliably but not DOMAIN-SEARCH,
-	// while NetworkManager's bundled openvpn helper only understands DOMAIN
-	// (not DOMAIN-SEARCH at all) — pushing both is OpenVPN's own documented
-	// way to cover every client.
-	if i := strings.Index(c.ServerCN, "."); i >= 0 {
-		domain := c.ServerCN[i+1:]
-		w(`push "dhcp-option DOMAIN %s"`, domain)
-		w(`push "dhcp-option DOMAIN-SEARCH %s"`, domain)
+	// Gated on PushInternalDNS: without it a client's search suffix would still
+	// gain our domain, leaking internal hostnames to its own resolver. Both
+	// DOMAIN+DOMAIN-SEARCH pushed: no single option covers every client.
+	if c.PushInternalDNS {
+		if i := strings.Index(c.ServerCN, "."); i >= 0 {
+			domain := c.ServerCN[i+1:]
+			w(`push "dhcp-option DOMAIN %s"`, domain)
+			w(`push "dhcp-option DOMAIN-SEARCH %s"`, domain)
+		}
 	}
 	for _, r := range c.Routes {
 		rip, rnet, _ := net.ParseCIDR(r)
