@@ -47,7 +47,8 @@ second-class citizen.
 
 Linux with `/dev/net/tun`, and [`openvpn`](https://openvpn.net/) on `PATH`.
 OVCP runs as root — it owns the PKI and starts openvpn itself as a
-supervised child process.
+supervised child process. [`dnsmasq`](https://thekelleys.org.uk/dnsmasq/doc.html)
+on `PATH` is optional, for internal DNS — ovcp starts it itself when found.
 
 This is sufficient to run ovcp. Building it from source has its own
 toolchain requirements — see [`docs/BUILD.md`](docs/BUILD.md).
