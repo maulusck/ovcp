@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -42,26 +41,18 @@ func logPaths(dataDir string) []string {
 }
 
 // loadLogConfig/saveLogConfig round-trip controller.LogConfig through the
-// store's settings table under "log_config" — schema-free like
-// vpn_config, so an install without that key yet just gets DefaultLogConfig.
+// store's settings table under "log_config" — schema-free, so an install
+// without that key yet just gets DefaultLogConfig.
 func loadLogConfig(s *store.Store) controller.LogConfig {
-	raw, _ := s.GetSetting("log_config")
-	if raw == "" {
-		return controller.DefaultLogConfig()
-	}
-	cfg := controller.DefaultLogConfig()
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return controller.DefaultLogConfig()
-	}
-	return cfg
+	return store.LoadJSON(s, "log_config", controller.DefaultLogConfig())
 }
 
 func saveLogConfig(s *store.Store, cfg controller.LogConfig) error {
-	enc, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return s.SetSetting("log_config", string(enc))
+	return store.SaveJSON(s, "log_config", cfg)
+}
+
+var logConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+	"get": cmdLogsConfigGet, "set": cmdLogsConfigSet,
 }
 
 // cmdLogs wraps config get/set, a one-shot rotate (what cron should call),
@@ -72,19 +63,7 @@ func cmdLogs(fs *flag.FlagSet) func(ctx *cliContext) {
 		op, rest := opArg(fs, "logs", logsOps)
 		switch op {
 		case "config":
-			cfs := newFlags("logs config")
-			cfs.Parse(rest)
-			subOp, crest := opArg(cfs, "logs config", logConfigOps)
-			sfs := newFlags("logs config " + subOp)
-			subUsage(sfs, "logs config "+subOp)
-			var body func(ctx *cliContext)
-			if subOp == "get" {
-				body = cmdLogsConfigGet(sfs)
-			} else {
-				body = cmdLogsConfigSet(sfs)
-			}
-			sfs.Parse(crest)
-			body(ctx)
+			configOp("logs config", logConfigOps, logConfigBodies)(ctx, rest)
 		case "rotate":
 			rfs := newFlags("logs rotate")
 			subUsage(rfs, "logs rotate")

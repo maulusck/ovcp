@@ -10,21 +10,28 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ovcp/ovcp/internal/ovpnconf"
 )
 
 // LogConfig is the admin-tunable rotation policy for ovcp's own 3 flat log
-// files (openvpn.log, ovcp.log, dnsmasq.log) — persisted as JSON under the
-// store's "log_config" key (see `ovcp logs config`), not env vars.
+// files (openvpn.log, ovcp.log, dnsmasq.log) — persisted under "log_config"
+// (see `ovcp logs config`).
 type LogConfig struct {
 	Enabled          bool
 	RetentionDays    int
 	KeepUncompressed int
 }
 
-// DefaultLogConfig applies when the store has no "log_config" key yet
-// (fresh install).
+// DefaultLogConfig seeds from OVCP_LOG_* env vars (container/unattended
+// init), same pattern as ovpnconf.Default. Only consulted while nothing's
+// persisted yet — after the first save, `ovcp logs config set` takes over.
 func DefaultLogConfig() LogConfig {
-	return LogConfig{Enabled: true, RetentionDays: 14, KeepUncompressed: 2}
+	return LogConfig{
+		Enabled:          os.Getenv("OVCP_LOG_ROTATE_ENABLED") != "false",
+		RetentionDays:    ovpnconf.EnvInt("OVCP_LOG_RETENTION_DAYS", 14),
+		KeepUncompressed: ovpnconf.EnvInt("OVCP_LOG_KEEP_UNCOMPRESSED", 2),
+	}
 }
 
 // rotatedTimeFormat: zero-padded so a lexical sort of filenames is also a
