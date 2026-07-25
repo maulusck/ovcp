@@ -116,12 +116,12 @@ build: check-cross ui ## build bin/ovcp (CGO for sqlite; see help for TARGET= to
 		CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
 
 completions: ui ## generate shell completion scripts into dist/completion
-	@mkdir -p dist/completion; \
-	go build -ldflags '$(LDFLAGS)' -o bin/.completions-helper ./cmd/ovcp; \
-	bin/.completions-helper completion bash > dist/completion/ovcp.bash; \
-	bin/.completions-helper completion zsh  > dist/completion/ovcp.zsh; \
+	@mkdir -p dist/completion && \
+	go build -ldflags '$(LDFLAGS)' -o bin/.completions-helper ./cmd/ovcp && \
+	bin/.completions-helper completion bash > dist/completion/ovcp.bash && \
+	bin/.completions-helper completion zsh  > dist/completion/ovcp.zsh && \
 	bin/.completions-helper completion fish > dist/completion/ovcp.fish; \
-	rm -f bin/.completions-helper
+	st=$$?; rm -f bin/.completions-helper; exit $$st
 
 test: ui ## run all tests
 	go test ./...
