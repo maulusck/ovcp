@@ -1,13 +1,16 @@
 <script>
   import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
-  import { vpn, pollOnce } from './status.svelte.js'
+  import { vpn, dns, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { canOperate, goToCert, dnsAvailable, caCN, caNotAfter, caStatus } = $props()
   let err = $state('')
 
-  // At-a-glance health: cert count/warnings and the DNS leak check both
-  // already exist server-side (Status()/DNSLeakWarning) — this just surfaces
-  // them here instead of only in Certificates/Settings.
+  // Server status card: cert count/warnings, the DNS leak check, and
+  // telegram config all already exist server-side — this just surfaces them
+  // here too, one-shot on mount (like Settings' own tg fetch), not part of
+  // the app-wide vpn/dns poll since none of these change more than once in
+  // a while. vpn/dns process state itself is already polled app-wide
+  // (status.svelte.js) — reused here, not re-fetched.
   let certSummary = $state({ total: 0, warn: 0 })
   api('GET', '/certs').then((certs) => {
     certSummary = { total: certs.length, warn: certs.filter((c) => c.Status === 'expiring' || c.Status === 'expired').length }
@@ -18,6 +21,9 @@
     if (!dnsAvailable) return
     api('GET', '/dns/config').then((d) => (dnsWarning = d.warning || '')).catch(() => {})
   })
+
+  let tg = $state(null) // {running, tokenSet, admin, chatLinked}
+  api('GET', '/telegram/config').then((r) => (tg = r)).catch(() => {})
 
   // no local poll loop: App.svelte already polls status app-wide (for the
   // header pill) and caches the full client list on the shared vpn state.
@@ -39,12 +45,20 @@
   })
 </script>
 
-<div class="health">
-  <span class="pill mono">📜 {certSummary.total} cert{certSummary.total === 1 ? '' : 's'}{certSummary.warn ? ` · ${certSummary.warn} need attention` : ''}</span>
+<div class="card">
+  <h2>Server status</h2>
+  <p class="status-line" class:warn={certSummary.warn > 0}>{certSummary.total} cert{certSummary.total === 1 ? '' : 's'}{certSummary.warn ? ` · ${certSummary.warn} need attention` : ''}</p>
   {#if caCN}
-    <span class="pill mono" class:warn={caStatus !== 'valid'}>🔏 CA "{caCN}" until {new Date(caNotAfter).toISOString().slice(0, 10)}</span>
+    <p class="status-line" class:warn={caStatus !== 'valid'}>CA "{caCN}" — {caStatus}, expires {new Date(caNotAfter).toISOString().slice(0, 10)}</p>
   {/if}
-  {#if dnsWarning}<span class="pill mono warn">⚠️ {dnsWarning}</span>{/if}
+  <p class="status-line"><span class="status-dot {vpn.up ? 'ok' : 'down'}"></span> vpn {vpn.up ? `up · ${vpn.uptime}` : 'down'}</p>
+  {#if dnsAvailable}
+    <p class="status-line"><span class="status-dot {dns.up ? 'ok' : 'down'}"></span> dns {dns.up ? `up · ${dns.uptime}` : 'down'}</p>
+  {/if}
+  {#if tg}
+    <p class="status-line"><span class="status-dot {!tg.tokenSet ? 'na' : tg.running ? 'ok' : 'down'}"></span> telegram: {!tg.tokenSet ? 'not configured' : tg.running ? 'running' : 'stopped'}</p>
+  {/if}
+  {#if dnsWarning}<p class="status-line warn">{dnsWarning}</p>{/if}
 </div>
 
 <div class="card">
@@ -93,9 +107,3 @@
     </table>
   {/if}
 </div>
-
-<style>
-  .health { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-  .pill.mono { font-family: var(--mono); }
-  .pill.warn { border-color: var(--amber); color: var(--amber); }
-</style>

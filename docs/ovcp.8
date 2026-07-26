@@ -385,10 +385,12 @@ server. Follow with \fBcertificate renew\fR (the archive has
 no server cert) and \fBovcp vpn start\fR.
 .TP
 .B status [\fB\-ctrl\fR \fIPATH\fR]
-Overview: whether the openvpn worker is running (with its pid) and, if so,
-the connected clients \(en both via the control socket, see
-\fBOVCP_CTRL_SOCK\fR. Traffic history and per\-client sessions are
-\fBstats\fR's job, not this command's.
+Full\-system overview: whether the openvpn worker is running (pid, connected
+clients, via the control socket, see \fBOVCP_CTRL_SOCK\fR), cert counts
+(total/expiring, same classification as \fBcertificate list\fR), and the
+Telegram bot's state \(en everything \fBovcp vpn|dns|telegram status\fR and
+\fBcertificate list\fR each report individually, in one place. Traffic
+history and per\-client sessions are \fBstats\fR's job, not this command's.
 .TP
 .B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR \fIN\fR] [\fB\-ctrl\fR \fIPATH\fR]
 .TQ
@@ -631,7 +633,8 @@ path in \fBFILES\fR below is relative to. Must come before the command
 .TP
 .B \-no\-color
 Disable ANSI color: the status words in \fBcertificate list\fR/\fBstatus\fR/
-\fBuser list\fR's text output, and the level tag in \fBovcp\fR's own log lines.
+\fBvpn status\fR/\fBdns status\fR/\fBtelegram status\fR/\fBuser list\fR's
+text output, and the level tag in \fBovcp\fR's own log lines.
 Same effect as \fB$NO_COLOR\fR. Color is already off automatically when the
 relevant stream (stdout for table output, stderr for logs) isn't a
 terminal \(en piped, journal, redirected to a file. Must come before the
@@ -773,9 +776,12 @@ as \fBvpn config\fR above \(en \fBGET\fR/\fBPUT /api/stats/config\fR return
 the identical shape.
 .TP
 .B status
-\fB{running, pid, uptime, ovcpUptime, error, clients}\fR \(en \fBpid\fR,
-\fBuptime\fR, \fBovcpUptime\fR, and \fBerror\fR are omitted, not sent as
-empty/zero, when not applicable (e.g. \fBuptime\fR while stopped).
+\fB{running, pid, uptime, ovcpUptime, error, clients, dnsRunning, dnsPid,
+dnsUptime, certsTotal, certsExpiring, telegram}\fR \(en \fBpid\fR,
+\fBuptime\fR, \fBovcpUptime\fR, \fBerror\fR, \fBdnsPid\fR, \fBdnsUptime\fR,
+and \fBtelegram\fR are omitted, not sent as empty/zero, when not applicable
+(e.g. \fBuptime\fR while stopped, \fBtelegram\fR if \fBserve\fR is
+unreachable).
 .TP
 .B stats
 \fB{samples, sessions}\fR (snapshot mode only \(en see \fB\-follow\fR
@@ -951,8 +957,8 @@ web UI); this only gates the boot\-time launch.
 .TP
 .B NO_COLOR
 Same as \fB\-no\-color\fR: disable ANSI color in \fBcertificate list\fR/
-\fBstatus\fR/\fBuser list\fR's table output and in \fBovcp\fR's own log
-lines. Color is
+\fBstatus\fR/\fBvpn status\fR/\fBdns status\fR/\fBtelegram status\fR/
+\fBuser list\fR's table output and in \fBovcp\fR's own log lines. Color is
 already off automatically when the relevant stream isn't a terminal
 (piped, journal, redirected to a file).
 .TP

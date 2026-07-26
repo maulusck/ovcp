@@ -235,6 +235,24 @@ func TestCertStatus(t *testing.T) {
 	}
 }
 
+func TestCertCounts(t *testing.T) {
+	now := time.Now()
+	revoked := now.Add(-time.Hour)
+	certs := []Cert{
+		{NotAfter: now.AddDate(1, 0, 0)},                      // valid
+		{NotAfter: now.Add(24 * time.Hour)},                   // expiring
+		{NotAfter: now.Add(-time.Hour)},                       // expired, still live (not revoked)
+		{NotAfter: now.AddDate(1, 0, 0), RevokedAt: &revoked}, // revoked, excluded entirely
+	}
+	live, expiring := CertCounts(certs)
+	if live != 3 {
+		t.Fatalf("live = %d, want 3 (excludes the revoked one)", live)
+	}
+	if expiring != 1 {
+		t.Fatalf("expiring = %d, want 1", expiring)
+	}
+}
+
 func TestAllCertsFoldsInCA(t *testing.T) {
 	p := pki.New(t.TempDir())
 	if err := p.InitCA("Test CA", 10, []byte("pw")); err != nil {

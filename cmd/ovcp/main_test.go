@@ -1072,7 +1072,11 @@ func TestUnreachableServe(t *testing.T) {
 		t.Fatalf("telegram status with no serve running should fail: %+v", r)
 	}
 	// status is deliberately soft: no worker to report on isn't a CLI error.
-	if r := run(t, env, "status"); r.code != 0 || !strings.Contains(r.stdout, "OpenVPN: unknown") {
+	// certs still come from the store directly (no serve needed) — 2 here:
+	// the server cert plus AllCerts' synthetic CA row. Telegram is silently
+	// omitted rather than failing the whole command.
+	if r := run(t, env, "status"); r.code != 0 || !strings.Contains(r.stdout, "OpenVPN: unknown") ||
+		!strings.Contains(r.stdout, "Certs: 2") || strings.Contains(r.stdout, "Telegram:") {
 		t.Fatalf("status with no serve running: %+v", r)
 	}
 

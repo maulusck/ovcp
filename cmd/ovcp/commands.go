@@ -745,15 +745,22 @@ func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// statusOut is what `status -json` prints: process state + connected
-// clients in one object, since scripts want both without screen-scraping.
+// statusOut is what `status -json` prints: the whole system in one object —
+// everything vpn|dns|telegram status and certificate list report
+// individually, without stitching four commands together.
 type statusOut struct {
-	Running    bool                   `json:"running"`
-	Pid        int                    `json:"pid,omitempty"`
-	Uptime     string                 `json:"uptime,omitempty"`     // openvpn child, empty if not running
-	OvcpUptime string                 `json:"ovcpUptime,omitempty"` // serve process, empty if unreachable
-	Error      string                 `json:"error,omitempty"`
-	Clients    []controller.VPNClient `json:"clients"`
+	Running       bool                       `json:"running"`
+	Pid           int                        `json:"pid,omitempty"`
+	Uptime        string                     `json:"uptime,omitempty"`     // openvpn child, empty if not running
+	OvcpUptime    string                     `json:"ovcpUptime,omitempty"` // serve process, empty if unreachable
+	Error         string                     `json:"error,omitempty"`
+	Clients       []controller.VPNClient     `json:"clients"`
+	DNSRunning    bool                       `json:"dnsRunning"`
+	DNSPid        int                        `json:"dnsPid,omitempty"`
+	DNSUptime     string                     `json:"dnsUptime,omitempty"`
+	CertsTotal    int                        `json:"certsTotal"`
+	CertsExpiring int                        `json:"certsExpiring"`
+	Telegram      *controller.TelegramStatus `json:"telegram,omitempty"` // nil: serve unreachable, couldn't ask
 }
 
 // fmtUptime renders a Go duration string ("3h2m1s"), or "" for the zero
@@ -785,8 +792,27 @@ func printStatusText(st statusOut) {
 				c.ConnectedSince.Format(time.RFC3339))
 		}
 	}
+	if st.DNSRunning {
+		fmt.Println(green(fmt.Sprintf("DNS: running (pid %d, up %s)", st.DNSPid, st.DNSUptime)))
+	} else {
+		fmt.Println(red("DNS: stopped"))
+	}
 	if st.OvcpUptime != "" {
 		fmt.Println("ovcp: up", st.OvcpUptime)
+	}
+	if st.CertsExpiring == 0 {
+		fmt.Printf("Certs: %d\n", st.CertsTotal)
+	} else {
+		fmt.Printf("Certs: %d, %d expiring\n", st.CertsTotal, st.CertsExpiring)
+	}
+	switch {
+	case st.Telegram == nil:
+	case !st.Telegram.TokenSet:
+		fmt.Println("Telegram: not configured")
+	case st.Telegram.Running:
+		fmt.Println(green("Telegram: running"))
+	default:
+		fmt.Println(red("Telegram: stopped"))
 	}
 }
 
@@ -816,6 +842,21 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 				st.Clients = cl
 			}
 		}
+
+		if dr, err := controller.Control(*ctrl, "dns-status"); err == nil && dr.Pid != 0 {
+			st.DNSRunning, st.DNSPid = true, dr.Pid
+			st.DNSUptime = fmtUptime(dr.StartedAt)
+		}
+
+		s := ctx.openStore()
+		defer s.Close()
+		if certs, err := s.AllCerts(ctx.p); err == nil {
+			st.CertsTotal, st.CertsExpiring = store.CertCounts(certs)
+		}
+		if tg, err := controller.TelegramGetStatus(*ctrl); err == nil {
+			st.Telegram = &tg
+		}
+
 		output(st, printStatusText)
 	}
 }
@@ -1053,14 +1094,16 @@ func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// printProcText renders a lifecycle op's ControlResult — the human phrasing
-// vpn's ops already had, generalized to any worker name ("vpn"/"dns").
+// printProcText renders a lifecycle op's ControlResult, uppercased to match
+// `ovcp status`'s "VPN:"/"DNS:" labels — audit events (runProcOp, before
+// this runs) keep the original lowercase name.
 func printProcText(name, op string, r controller.ControlResult) {
+	name = strings.ToUpper(name)
 	switch {
 	case op == "status" && r.Pid == 0:
-		fmt.Println(name, "stopped")
+		fmt.Println(red(name + " stopped"))
 	case op == "status":
-		fmt.Printf("%s running (pid %d, up %s)\n", name, r.Pid, fmtUptime(r.StartedAt))
+		fmt.Println(green(fmt.Sprintf("%s running (pid %d, up %s)", name, r.Pid, fmtUptime(r.StartedAt))))
 	case op == "start" && !r.Changed:
 		fmt.Printf("%s already started (pid %d)\n", name, r.Pid)
 	case op == "start":
@@ -1542,14 +1585,14 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		output(st, func(st controller.TelegramStatus) {
 			if !st.TokenSet {
-				fmt.Println("telegram: not configured (run 'ovcp telegram config set -token -admin ...')")
+				fmt.Println("Telegram: not configured (run 'ovcp telegram config set -token -admin ...')")
 				return
 			}
-			state := "stopped"
+			state, color := "stopped", red
 			if st.Running {
-				state = "running"
+				state, color = "running", green
 			}
-			fmt.Printf("telegram: %s, admin %s\n", state, st.Admin)
+			fmt.Println(color(fmt.Sprintf("Telegram: %s, admin %s", state, st.Admin)))
 		})
 	}
 }

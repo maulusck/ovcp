@@ -368,7 +368,7 @@ func (p *Poller) handleCommand(ctx context.Context, b *bot, chatID int64, cmd st
 	case "/" + cmdMenu, cmdMenu:
 		b.sendMessage(ctx, chatID, menuText, opsKeyboard)
 	case "/" + cmdStart, cmdStart, lblStart: // also Telegram's own greeting trigger — matches unix `start` semantics, no confirmation needed
-		b.sendMessage(ctx, chatID, resultText("▶ up.", p.vpn.Start()), nil)
+		b.sendMessage(ctx, chatID, resultText("🟢 up.", p.vpn.Start()), nil)
 	case "/" + cmdStop, cmdStop, lblStop:
 		b.sendMessage(ctx, chatID, "stop the tunnel? every client drops.", kb(
 			[]inlineButton{btn("yes, stop", "vpn_stop_confirm"), btn("cancel", "cancel")}))
@@ -378,7 +378,7 @@ func (p *Poller) handleCommand(ctx context.Context, b *bot, chatID int64, cmd st
 	case "/" + cmdReconnect, cmdReconnect, lblReconnect:
 		b.sendMessage(ctx, chatID, resultText("🔌 reconnect signal sent (SIGUSR1).", p.vpn.Reconnect()), nil)
 	case "vpn_stop_confirm":
-		b.sendMessage(ctx, chatID, resultText("⏹ down.", p.vpn.Stop()), nil)
+		b.sendMessage(ctx, chatID, resultText("🔴 down.", p.vpn.Stop()), nil)
 	case "vpn_restart_confirm":
 		b.sendMessage(ctx, chatID, resultText("🔄 restarted.", p.vpn.Restart()), nil)
 	case "/" + cmdDNS, cmdDNS, lblDNS:
@@ -435,16 +435,7 @@ func (p *Poller) dnsLine() string {
 // certLine: live cert count + how many are expiring, CA included.
 func (p *Poller) certLine() string {
 	certs, _ := p.s.AllCerts(p.p)
-	live, soon := 0, 0
-	for _, c := range certs {
-		if c.Status() == "revoked" {
-			continue
-		}
-		live++
-		if c.Status() == "expiring" {
-			soon++
-		}
-	}
+	live, soon := store.CertCounts(certs)
 	if soon == 0 {
 		return fmt.Sprintf("📜 %d cert(s)", live)
 	}

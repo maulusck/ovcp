@@ -333,6 +333,8 @@
     border-radius: 6px; padding: 18px; overflow-x: auto;
   }
   :global(h2) { font-size: 15px; font-weight: 600; margin: 0 0 12px; letter-spacing: .02em; }
+  /* was the raw browser default (~1em/16px) everywhere — no rule existed */
+  :global(p) { margin: 8px 0; }
   /* min-width, not width: a floor so a narrow table still fills its card,
      never a cap that force-compresses a wide one (Certs' 8 columns with real
      controls) into overlapping cells — let it overflow into the card's own
@@ -444,6 +446,9 @@
     font-family: var(--mono); font-size: 11px; color: var(--dim);
     border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
   }
+  /* one monospace status row — Settings' Telegram line, Dashboard's server-status card */
+  :global(.status-line) { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  :global(.status-line.warn) { color: var(--amber); }
   /* ok/down/na/reloading dot — shared with Settings.svelte's Telegram status line */
   :global(.status-dot) { width: 8px; height: 8px; border-radius: 50%; }
   :global(.status-dot.ok) { background: var(--ok); box-shadow: 0 0 6px 1px var(--ok); }

@@ -405,7 +405,7 @@
     <Msg type="err" text={tgErr} />
     <Msg type="ok" text={tgOk} />
     {#if tg}
-      <p class="tg-status" title={tgLabel}><span class="status-dot {tgState}"></span> {tgLabel}</p>
+      <p class="status-line"><span class="status-dot {tgState}"></span> {tgLabel}</p>
     {/if}
     <div class="row">
       <button type="button" class="ghost" onclick={setTelegramToken}
@@ -424,7 +424,7 @@
     <h2>Backup</h2>
     <p class="muted small">Encrypted export of the CA, CRL, tls-crypt key, config, and database.
       Never includes the openvpn server certificate or key — restoring reissues those fresh
-      from the CA (<code>ovcp certificate renew -kind server</code>). Restoring is CLI-only:
+      from the CA (<code>ovcp certificate renew</code>). Restoring is CLI-only:
       <code>ovcp backup restore FILE</code>.</p>
     <Msg type="err" text={backupErr} />
     <Msg type="ok" text={backupOk} />
@@ -433,6 +433,3 @@
   </div>
 {/if}
 
-<style>
-  .tg-status { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
-</style>

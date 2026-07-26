@@ -73,6 +73,22 @@ func (c Cert) Status() string {
 	}
 }
 
+// CertCounts tallies live (non-revoked) and expiring certs — the one loop
+// every "how's the server doing" report (CLI status, telegram /status)
+// repeats otherwise.
+func CertCounts(certs []Cert) (live, expiring int) {
+	for _, c := range certs {
+		if c.RevokedAt != nil {
+			continue
+		}
+		live++
+		if c.Status() == "expiring" {
+			expiring++
+		}
+	}
+	return live, expiring
+}
+
 // AllCerts returns every stored cert plus a synthetic CA row — the CA is
 // never a certs-table row (see schema's kind CHECK), but expiry reporting
 // (the sweep ticker, telegram's /certs) needs it folded into the same list
