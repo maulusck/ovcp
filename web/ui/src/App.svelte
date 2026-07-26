@@ -1,5 +1,6 @@
 <script>
-  import { api } from './api.js'
+  import { api, flash } from './api.js'
+  import Msg from './Msg.svelte'
   import { vpn, dns, pollOnce } from './status.svelte.js'
   import { theme, setTheme, THEMES } from './theme.svelte.js'
   import Logo from './Logo.svelte'
@@ -81,7 +82,7 @@
       login = { username: '', password: '', totp: '' }; step = 'creds'
     } catch (x) {
       if (x.error === 'totp required') { step = 'totp'; return }
-      err = 'sign-in failed'
+      flash(v => err = v, 'sign-in failed')
       step = 'creds'
       login = { ...login, password: '', totp: '' }
     }
@@ -151,7 +152,7 @@
             autocomplete="one-time-code" placeholder="000000" required autofocus />
         </label>
       {/if}
-      {#if err}<p class="err" role="alert">{err}</p>{/if}
+      <Msg type="err" text={err} role="alert" />
       <button type="submit">{step === 'creds' ? 'Sign in' : 'Verify'}</button>
     </form>
   </main>
@@ -212,11 +213,12 @@
   </header>
   <main class:wide={tab === 'logs'}>
     {#if tab === 'dashboard'}
-      <Dashboard {canOperate} {goToCert} />
+      <Dashboard {canOperate} {goToCert} dnsAvailable={!!user.dnsmasqVersion}
+        caCN={user.caCN} caNotAfter={user.caNotAfter} caStatus={user.caStatus} />
     {:else if tab === 'stats'}
       <Stats />
     {:else if tab === 'certs'}
-      <Certs {canOperate} bind:focusCN />
+      <Certs {canOperate} {isAdmin} bind:focusCN />
     {:else if tab === 'settings'}
       <Settings {isAdmin} dnsAvailable={!!user.dnsmasqVersion} />
     {:else if tab === 'users'}
@@ -331,7 +333,11 @@
     border-radius: 6px; padding: 18px; overflow-x: auto;
   }
   :global(h2) { font-size: 15px; font-weight: 600; margin: 0 0 12px; letter-spacing: .02em; }
-  :global(table) { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
+  /* min-width, not width: a floor so a narrow table still fills its card,
+     never a cap that force-compresses a wide one (Certs' 8 columns with real
+     controls) into overlapping cells — let it overflow into the card's own
+     overflow-x:auto instead of fighting table-layout:auto for space. */
+  :global(table) { min-width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
   :global(th) {
     text-align: left; color: var(--dim); font-weight: 500;
     padding: 6px 10px; border-bottom: 1px solid var(--line);
@@ -347,6 +353,17 @@
   /* row-action buttons (Certs/Users/Dashboard) — same "operator button" family as
      Settings' Start/Stop/Restart/Backup, just shorter to fit a table row. */
   :global(td button.ghost) { padding: 4px 14px; }
+  /* the one action-cell layout every table with row buttons uses (Certs, Users) —
+     defined once here, never per-component, so they can't drift apart. */
+  :global(.actions) { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* a CN (or similar identity) that's itself the row's primary action trigger —
+     Dashboard's jump-to-cert, Certs' click-to-renew. */
+  :global(.cn-link) {
+    background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer;
+  }
+  :global(.cn-link:hover) { color: var(--amber); text-decoration: underline dotted; }
+  /* a destructive row action (Revoke, Delete) — same --bad token as .err/.rv/status-dot.down. */
+  :global(button.ghost.danger:hover:not(:disabled)) { background: var(--bad); color: var(--ink); border-color: var(--bad); }
   :global(.muted) { color: var(--dim); }
   /* inline "Label [control]" pairs — filter dropdowns (Certs/Users), Logs tab's own options */
   :global(.poll-pick) { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; }
@@ -471,7 +488,12 @@
     header { padding: 8px 12px; gap: 10px; }
     main { padding: 12px; }
     :global(.grid) { grid-template-columns: 1fr; } /* auto-fit alone could still pack 2 narrow columns here */
-    .brand :global(.glyph), .brand strong, .acct-name, .avatar, .pill-text { display: none; } /* status dot, role pill still identify things */
+    /* hide the whole brand-link, not just its children — an empty-but-present
+       flex item still eats a gap, which is what was shoving the status pills
+       away from the left edge instead of them starting flush after header's own padding. */
+    .brand-link, .acct-name, .avatar, .pill-text { display: none; } /* status dot, role pill still identify things */
+    /* stacked action buttons span the full row instead of staying short and ragged. */
+    :global(.actions) { flex-direction: column; align-items: stretch; }
     nav { display: none; }
     .nav-mobile, .theme-mobile { display: block; position: relative; }
     .theme-pick { display: none; }

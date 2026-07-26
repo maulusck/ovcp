@@ -2,9 +2,10 @@
   import { tick } from 'svelte'
   import {
     api, apiBlob, downloadBlob, copyToClipboard, sortRows, matchesQuery,
-    toggleSort, sortMark, toggleSearch, autofocus,
+    toggleSort, sortMark, toggleSearch, autofocus, flash,
   } from './api.js'
-  let { canOperate, focusCN = $bindable('') } = $props()
+  import Msg from './Msg.svelte'
+  let { canOperate, isAdmin, focusCN = $bindable('') } = $props()
   let certs = $state([])
   let err = $state('')
   let ok = $state('')
@@ -31,9 +32,18 @@
     return sort.key ? sortRows(out, SORT_GETTERS[sort.key], sort.desc) : out
   })
 
+  // The one signal for "this submit renews instead of issuing": does the
+  // typed/pre-filled CN already match a live client cert? No separate flag
+  // to set or reset — whether you got here by clicking a cert's name or just
+  // typed an existing CN yourself, the form behaves identically either way.
+  // Same rule the backend's AddCert enforces (one active row per CN+kind),
+  // so a revoked-only CN is free to reissue, an active one can only renew.
+  const hasActiveClient = (cn) => certs.some((c) => c.CN === cn && c.Kind === 'client' && !c.Revoked)
+  const willRenew = $derived(hasActiveClient(form.cn))
+
   async function refresh() {
     try { certs = await api('GET', '/certs'); err = '' }
-    catch (x) { err = x.error }
+    catch (x) { flash(v => err = v, x.error) }
   }
   refresh()
   api('GET', '/vpn/config').then(c => (redirectGW = c.RedirectGW)).catch(() => {})
@@ -58,15 +68,16 @@
   async function exportBundle(e) {
     e.preventDefault()
     err = ''; ok = ''
+    const renewing = willRenew
     try {
       const { blob } = await apiBlob('POST', '/certs/export', { CN: form.cn, Remote: form.remote,
         Passphrase: form.passphrase, Days: +form.days, KeyPassphrase: form.keypass,
-        SplitTunnel: form.splitTunnel, Extra: form.customOpts })
+        SplitTunnel: form.splitTunnel, Extra: form.customOpts, Renew: renewing })
       downloadBlob(blob, form.cn + '.ovpn')
-      ok = `Issued ${form.cn} and downloaded the profile.`
+      flash(v => ok = v, `${renewing ? 'Renewed' : 'Issued'} ${form.cn} and downloaded the profile.`)
       form.cn = ''; form.passphrase = ''; form.keypass = ''
       refresh()
-    } catch (x) { err = x.error || 'export failed' }
+    } catch (x) { flash(v => err = v, x.error || 'export failed') }
   }
 
   let copied = $state('')
@@ -82,9 +93,9 @@
     err = ''; ok = ''
     try {
       await api('POST', '/certs/revoke', { Serial: serial, Passphrase: passphrase })
-      ok = `Revoked ${cn}. CRL updated.`
+      flash(v => ok = v, `Revoked ${cn}. CRL updated.`)
       refresh()
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
   async function toggleDNS(serial, include) {
@@ -92,24 +103,42 @@
     try {
       await api('PATCH', `/certs/${serial}/dns`, { IncludeDNS: include })
       refresh()
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
-  const EXPIRY_WARN_DAYS = 30
-
+  // c.Status is the API's classification (store.Cert.Status(), the one
+  // place the expiry threshold lives) — this only turns it into display text.
   function status(c) {
-    if (c.Revoked) return { text: 'revoked', cls: 'rv' }
-    const days = Math.ceil((new Date(c.NotAfter) - Date.now()) / 86400000)
-    if (days < 0) return { text: 'expired', cls: 'rv' }
-    if (days <= EXPIRY_WARN_DAYS) return { text: `expires in ${days}d`, cls: 'soon' }
+    if (c.Status === 'revoked') return { text: 'revoked', cls: 'rv' }
+    if (c.Status === 'expired') return { text: 'expired', cls: 'rv' }
+    if (c.Status === 'expiring') {
+      const days = Math.ceil((new Date(c.NotAfter) - Date.now()) / 86400000)
+      return { text: `expires in ${days}d`, cls: 'soon' }
+    }
     return { text: 'valid', cls: '' }
   }
 
-  // Renewal is just reissuing under the same CN (no escrow, so there's
-  // nothing to "renew" server-side) — this just pre-fills the form above.
-  function renewCN(cn) {
+  // Client renewal is just export, aimed at a CN that already has an active
+  // cert (willRenew, above) — the passphrase field right there in the form
+  // is the only prompt involved, so clicking a CN only ever pre-fills and
+  // scrolls; nothing is revoked until the form is actually submitted.
+  function prefillRenew(cn) {
     form.cn = cn
     document.querySelector('.issue')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  // Server renewal is the opposite of client: the key never leaves the
+  // machine, so there's nothing to hand back — one call, done. Only ever
+  // one server cert (this row), so this replaces it in place.
+  async function renewServer(cn) {
+    const passphrase = prompt(`CA passphrase to renew the server certificate (${cn}):`)
+    if (!passphrase) return
+    err = ''; ok = ''
+    try {
+      const r = await api('POST', '/certs/renew', { Passphrase: passphrase })
+      flash(v => ok = v, `Server cert renewed (serial ${r.serial.slice(0, 12)}…). Restart openvpn (Settings) to apply.`)
+      refresh()
+    } catch (x) { flash(v => err = v, x.error) }
   }
 </script>
 
@@ -142,10 +171,11 @@
         <textarea bind:value={form.customOpts} rows="2" placeholder="e.g. block-outside-dns"></textarea>
       </label>
     </div>
+    <Msg type="err" text={willRenew ? `${form.cn} already exists — this revokes it and issues a replacement.` : ''} />
     <div class="row">
-      <button type="submit">Issue and download .ovpn</button>
+      <button type="submit">{willRenew ? 'Renew and download .ovpn' : 'Issue and download .ovpn'}</button>
     </div>
-    <p class="muted small">The private key exists only in this download — it is never stored on the server. Lost profile? Revoke and reissue. With a profile password set, OpenVPN asks for it on connect.</p>
+    <p class="muted small">The private key exists only in this download — it is never stored on the server. With a profile password set, OpenVPN asks for it on connect.</p>
   </form>
 {/if}
 
@@ -172,8 +202,8 @@
       </select>
     </label>
   </div>
-  {#if err}<p class="err">{err}</p>{/if}
-  {#if ok}<p class="ok">{ok}</p>{/if}
+  <Msg type="err" text={err} />
+  <Msg type="ok" text={ok} />
   {#if certs.length === 0}
     <p class="muted">No certificates yet.</p>
   {:else if filtered.length === 0}
@@ -191,7 +221,18 @@
       <tbody>
         {#each filtered as c}
           <tr data-cn={c.CN}>
-            <td>{c.CN}</td>
+            <td>
+              {#if canOperate && c.Kind === 'client' && (!c.Revoked || !hasActiveClient(c.CN))}
+                <button type="button" class="cn-link" onclick={() => prefillRenew(c.CN)}
+                  title={c.Revoked ? 'Reissue: previous certificate was revoked, this issues a new one'
+                                    : 'Renew: revokes the current cert, issues a fresh one'}>{c.CN}</button>
+              {:else if !c.Revoked && canOperate && isAdmin && c.Kind === 'server'}
+                <button type="button" class="cn-link" onclick={() => renewServer(c.CN)}
+                  title="Renew: revokes the current cert, issues a fresh one (needs a restart to apply)">{c.CN}</button>
+              {:else}
+                {c.CN}
+              {/if}
+            </td>
             <td>{c.Kind}</td>
             <td class={status(c).cls}>{status(c).text}</td>
             <td>{new Date(c.NotAfter).toISOString().slice(0, 10)}</td>
@@ -210,12 +251,11 @@
               {/if}
             </td>
             {#if canOperate}
+              <!-- plain td, same as Download beside it: this cell only ever holds
+                   one button (or none, revoked) — .actions' flex/wrap exists for
+                   Users' four-button row, not a fit here, don't force it. -->
               <td>{#if !c.Revoked}
-                {#if c.Kind === 'client' && status(c).cls !== ''}
-                  <button class="ghost" onclick={() => renewCN(c.CN)}
-                    title="Pre-fill the issue form with this CN to reissue it">Renew</button>
-                {/if}
-                <button class="ghost" onclick={() => revoke(c.Serial, c.CN)}
+                <button class="ghost danger" onclick={() => revoke(c.Serial, c.CN)}
                   title="Revoke this certificate and regenerate the CRL">Revoke</button>
               {/if}</td>
             {/if}

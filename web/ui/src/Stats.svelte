@@ -1,8 +1,9 @@
 <script>
   import {
-    api, fmtBytes, fmtRate, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp,
+    api, fmtBytes, fmtRate, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash,
   } from './api.js'
   import { vpn, fmtUptime } from './status.svelte.js'
+  import Msg from './Msg.svelte'
 
   // globalSamples backs "Connected clients" and is Rate/Volume's fallback for scope === '';
   // scopeSamples only diverges when a CN is picked, same /api/stats?cn= shape either way.
@@ -39,12 +40,12 @@
       sessions = d.sessions || []
       revokedCNs = new Set(certs.filter(c => c.Revoked).map(c => c.CN))
       err = ''
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
   async function loadScoped() {
     if (!scope) { scopeSamples = globalSamples; return }
     try { scopeSamples = (await api('GET', '/stats?cn=' + encodeURIComponent(scope))).samples || []; err = '' }
-    catch (x) { err = x.error }
+    catch (x) { flash(v => err = v, x.error) }
   }
   loadGlobal()
   $effect(() => { loadScoped() }) // re-runs on scope change and on every globalSamples refresh alike
@@ -83,7 +84,7 @@
 </script>
 
 <div class="stats-head">
-  {#if err}<p class="err">{err}</p>{/if}
+  <Msg type="err" text={err} />
   <label class="poll-pick">Scope
     <select bind:value={scope}>
       <option value="">Global</option>

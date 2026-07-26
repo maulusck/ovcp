@@ -1,5 +1,6 @@
 <script>
-  import { api, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp } from './api.js'
+  import { api, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
+  import Msg from './Msg.svelte'
   let { isAdmin, me, minLen, minClasses } = $props()
   let users = $state([])
   let err = $state('')
@@ -19,7 +20,7 @@
 
   async function refresh() {
     try { users = await api('GET', '/users'); err = '' }
-    catch (x) { err = x.error }
+    catch (x) { flash(v => err = v, x.error) }
   }
   $effect(() => { if (isAdmin) refresh() })
 
@@ -28,10 +29,10 @@
     err = ''; ok = ''
     try {
       await api('POST', '/users', { Username: form.username, Password: form.password, Role: form.role })
-      ok = `Added ${form.username}.`
+      flash(v => ok = v, `Added ${form.username}.`)
       form = { username: '', password: '', role: 'operator' }
       refresh()
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
   async function toggleDisabled(u) {
@@ -39,7 +40,7 @@
     try {
       await api('PATCH', `/users/${u.Username}`, { Disabled: !u.Disabled })
       refresh()
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
   async function remove(u) {
@@ -47,9 +48,9 @@
     err = ''; ok = ''
     try {
       await api('DELETE', `/users/${u.Username}`)
-      ok = `Deleted ${u.Username}.`
+      flash(v => ok = v, `Deleted ${u.Username}.`)
       refresh()
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
   async function setPassword(u) {
@@ -58,8 +59,8 @@
     err = ''; ok = ''
     try {
       await api('POST', `/users/${u.Username}/password`, { Password: pw })
-      ok = `Password updated for ${u.Username}.`
-    } catch (x) { err = x.error }
+      flash(v => ok = v, `Password updated for ${u.Username}.`)
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
   async function enrollTOTP(u) {
@@ -68,7 +69,7 @@
       const r = await api('POST', `/users/${u.Username}/totp`)
       enrolled = { username: u.Username, ...r }
       refresh()
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
   async function disableTOTP(u) {
@@ -76,9 +77,9 @@
     err = ''; ok = ''
     try {
       await api('DELETE', `/users/${u.Username}/totp`)
-      ok = `2FA disabled for ${u.Username}.`
+      flash(v => ok = v, `2FA disabled for ${u.Username}.`)
       refresh()
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 </script>
 
@@ -106,8 +107,8 @@
     <button type="submit">Add user</button>
   </form>
 
-  {#if err}<p class="err">{err}</p>{/if}
-  {#if ok}<p class="ok">{ok}</p>{/if}
+  <Msg type="err" text={err} />
+  <Msg type="ok" text={ok} />
 
   {#if enrolled}
     <div class="card">
@@ -158,7 +159,7 @@
                 <button class="ghost" onclick={() => toggleDisabled(u)}
                   disabled={u.Username === me}
                   title={u.Disabled ? 'Restore login access' : 'Block login; account and its certs stay intact'}>{u.Disabled ? 'Enable' : 'Disable'}</button>
-                <button class="ghost" onclick={() => remove(u)}
+                <button class="ghost danger" onclick={() => remove(u)}
                   disabled={u.Username === me}
                   title="Remove the account permanently; VPN certs are unaffected">Delete</button>
               </td>
@@ -171,7 +172,6 @@
 {/if}
 
 <style>
-  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .qr { background: #fff; padding: 8px; border-radius: 4px; }
   .secret { font-family: var(--mono); font-size: 13px; }
 </style>

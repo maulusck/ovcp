@@ -53,16 +53,6 @@
   const restart   = () => vpn('restart', 'Restart OpenVPN? Connected clients will briefly drop.', 30000, 'Restarting. Applies all configuration changes.', 'restarting')
   const reconnect = () => vpn('reconnect', null, 15000, 'Reconnect signal sent. Live sessions reset.', 'reconnecting')
 
-  async function renewServer() {
-    const passphrase = prompt('CA passphrase to renew the server certificate:')
-    if (!passphrase) return
-    err = ''; ok = ''
-    try {
-      const r = await api('POST', '/certs/renew-server', { Passphrase: passphrase })
-      flash(v => ok = v, `Server cert renewed (serial ${r.serial.slice(0, 12)}…). Use Restart to apply.`)
-    } catch (x) { flash(v => err = v, x.error) }
-  }
-
   // DNS: dnsmasq lifecycle + block-internet + custom records, one card, same
   // shape as the vpn card above (fields, then one row: save/preview/lifecycle).
   let blockInternet = $state(false)
@@ -301,10 +291,6 @@
           <button type="button" class="ghost" onclick={reconnect}
             title="Soft session reset (SIGUSR1); keeps the process running">Reconnect</button>
         </div>
-        <div class="row row-secondary">
-          <button type="button" class="ghost" onclick={renewServer}
-            title="Issue a fresh server certificate from the CA; needs Restart to apply">Renew server cert</button>
-        </div>
       {:else}
         <p class="muted">Read-only: your role can view but not change settings.</p>
       {/if}
@@ -438,7 +424,7 @@
     <h2>Backup</h2>
     <p class="muted small">Encrypted export of the CA, CRL, tls-crypt key, config, and database.
       Never includes the openvpn server certificate or key — restoring reissues those fresh
-      from the CA (<code>ovcp renew-server</code>). Restoring is CLI-only:
+      from the CA (<code>ovcp certificate renew -kind server</code>). Restoring is CLI-only:
       <code>ovcp backup restore FILE</code>.</p>
     <Msg type="err" text={backupErr} />
     <Msg type="ok" text={backupOk} />
@@ -448,6 +434,5 @@
 {/if}
 
 <style>
-  .row-secondary { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
   .tg-status { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
 </style>

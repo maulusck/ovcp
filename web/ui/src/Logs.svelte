@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte'
-  import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus, fmtTimestamp } from './api.js'
+  import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
+  import Msg from './Msg.svelte'
   let { isAdmin, canOperate } = $props()
 
   // dnsmasq's syslog line has no year — same fmtTimestamp shape, just without one.
@@ -94,14 +95,14 @@
       fitToContent(el)
       if (autoscroll && el) el.scrollTop = el.scrollHeight
       err = ''
-    } catch (x) { err = x.error }
+    } catch (x) { flash(v => err = v, x.error) }
   }
   async function loadAudit() {
     try { entries = await api('GET', '/audit'); await tick(); fitToContent(boxes.audit); err = '' }
-    catch (x) { err = x.error }
+    catch (x) { flash(v => err = v, x.error) }
   }
   async function loadDebug() {
-    try { debugOn = (await api('GET', '/debug')).debug; err = '' } catch (x) { err = x.error }
+    try { debugOn = (await api('GET', '/debug')).debug; err = '' } catch (x) { flash(v => err = v, x.error) }
   }
   // per-panel refresh (maximized view's own button) — every id already has a loader.
   const refreshOne = (id) => (id === 'audit' ? loadAudit() : loadLog(id))
@@ -141,7 +142,7 @@
   async function toggleDebug(e) {
     const want = e.target.checked
     try { debugOn = (await api('POST', '/debug', { Debug: want })).debug; err = '' }
-    catch (x) { err = x.error; e.target.checked = !want }
+    catch (x) { flash(v => err = v, x.error); e.target.checked = !want }
   }
 
   let copied = $state('')
@@ -219,7 +220,7 @@
 {/snippet}
 
 <div class="logs-head">
-  {#if err}<p class="err">{err}</p>{/if}
+  <Msg type="err" text={err} />
   <label class="poll-pick" title={isAdmin ? 'Verbose logging for troubleshooting' : 'Admin only'}>
     Debug logging
     <input type="checkbox" checked={debugOn} disabled={!isAdmin} onchange={toggleDebug} />

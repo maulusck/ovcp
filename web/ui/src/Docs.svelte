@@ -1,22 +1,25 @@
 <script>
+  import { flash } from './api.js'
+  import Msg from './Msg.svelte'
   let html = $state('')
   let err = $state('')
+  let failed = $state(false)
 
   async function load() {
     try {
       const res = await fetch('/docs.html')
       if (!res.ok) throw new Error()
       html = await res.text()
-    } catch { err = 'Could not load documentation.' }
+    } catch { failed = true; flash(v => err = v, 'Could not load documentation.') }
   }
   load()
 </script>
 
 <div class="card docs">
-  {#if err}<p class="err">{err}</p>{/if}
+  <Msg type="err" text={err} />
   {#if html}
     {@html html}
-  {:else if !err}
+  {:else if !failed}
     <p class="muted">Loading…</p>
   {/if}
 </div>
