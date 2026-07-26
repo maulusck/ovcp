@@ -30,29 +30,20 @@ func runExpirySweepTicker(s *store.Store, p *pki.PKI, tg *telegram.Poller, stop 
 }
 
 func sweepExpiring(s *store.Store, p *pki.PKI, tg *telegram.Poller) {
-	certs, err := s.ListCerts()
+	certs, err := s.AllCerts(p)
 	if err != nil {
 		slog.Warn("expiry sweep failed to list certs", "err", err)
 		return
-	}
-	// the CA itself is never a certs-table row (client/server only, see
-	// schema's kind CHECK) — fold it into the same loop as a synthetic entry
-	// instead of duplicating the day-math/dedup logic for one more cert.
-	if ca, err := p.CACert(); err == nil {
-		certs = append(certs, store.Cert{Serial: "ca", CN: ca.Subject.CommonName, Kind: "ca", NotAfter: ca.NotAfter})
 	}
 	warned := store.LoadJSON(s, certExpiryWarnedKey, map[string]bool{})
 	live := map[string]bool{}
 	changed := false
 	for _, c := range certs {
 		live[c.Serial] = true
-		if c.RevokedAt != nil {
+		if c.Status() != "expiring" || warned[c.Serial] {
 			continue
 		}
 		days := time.Until(c.NotAfter).Hours() / 24
-		if days < 0 || days > store.ExpiryWarnDays || warned[c.Serial] {
-			continue
-		}
 		warned[c.Serial] = true
 		changed = true
 		slog.Warn("cert expiring", "cn", c.CN, "kind", c.Kind, "serial", c.Serial, "days", int(days))

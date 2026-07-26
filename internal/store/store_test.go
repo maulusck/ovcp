@@ -136,6 +136,141 @@ func TestReplaceCert(t *testing.T) {
 	}
 }
 
+// TestReplaceCertServerRename: a server cert under a new CN still replaces
+// the outgoing one — server identity is kind-only, not CN-keyed, so this is
+// a rename, not a second cert alongside the first.
+func TestReplaceCertServerRename(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	srv := func(serial, cn string) Cert {
+		return Cert{Serial: serial, CN: cn, Kind: "server",
+			CertPEM: []byte("PEM"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}
+	}
+	if err := s.ReplaceCert(srv("srv1", "old.example")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceCert(srv("srv2", "new.example")); err != nil {
+		t.Fatalf("rename should retire the outgoing cert under its old CN: %v", err)
+	}
+	old, err := s.GetCert("srv1")
+	if err != nil || old.RevokedAt == nil {
+		t.Fatalf("outgoing cert (old CN) should be revoked: %+v err=%v", old, err)
+	}
+	cur, err := s.GetCert("srv2")
+	if err != nil || cur.RevokedAt != nil || cur.CN != "new.example" {
+		t.Fatalf("new cert (new CN) should be active: %+v err=%v", cur, err)
+	}
+}
+
+// TestRequireActiveCert: renewal's precondition, checked separately from
+// ReplaceCert — a CN/kind with nothing active must error rather than
+// ReplaceCert quietly falling back to a plain issue. Regression for
+// `certificate renew`/handleRenew silently creating a cert under a CN that
+// never had one.
+func TestRequireActiveCert(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.RequireActiveCert("ghost", "client"); !errors.Is(err, ErrNoActiveCert) {
+		t.Fatalf("want ErrNoActiveCert, got %v", err)
+	}
+
+	now := time.Now()
+	if err := s.AddCert(Cert{Serial: "c1", CN: "alice", Kind: "client",
+		CertPEM: []byte("PEM"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RequireActiveCert("alice", "client"); err != nil {
+		t.Fatalf("active client cert should satisfy the check: %v", err)
+	}
+	// client and server are independently keyed by (CN, kind) — the same CN
+	// having a client cert must not satisfy a server-kind check.
+	if err := s.RequireActiveCert("alice", "server"); !errors.Is(err, ErrNoActiveCert) {
+		t.Fatalf("client cert must not satisfy a server-kind check, got %v", err)
+	}
+
+	if err := s.Revoke("c1", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RequireActiveCert("alice", "client"); !errors.Is(err, ErrNoActiveCert) {
+		t.Fatalf("a revoked cert must not count as active, got %v", err)
+	}
+
+	// server is kind-only, not CN-keyed — an active server cert satisfies the
+	// check under ANY cn (a rename target included), unlike client.
+	if err := s.AddCert(Cert{Serial: "s1", CN: "vpn.example", Kind: "server",
+		CertPEM: []byte("PEM"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RequireActiveCert("some.new.name", "server"); err != nil {
+		t.Fatalf("active server cert should satisfy the check under any cn: %v", err)
+	}
+}
+
+func TestCertStatus(t *testing.T) {
+	now := time.Now()
+	revoked := now.Add(-time.Hour)
+	cases := []struct {
+		name string
+		c    Cert
+		want string
+	}{
+		{"revoked wins over expiry", Cert{NotAfter: now.AddDate(1, 0, 0), RevokedAt: &revoked}, "revoked"},
+		{"past NotAfter", Cert{NotAfter: now.Add(-time.Hour)}, "expired"},
+		{"inside warn window", Cert{NotAfter: now.Add(24 * time.Hour)}, "expiring"},
+		{"exactly at the threshold", Cert{NotAfter: now.Add(ExpiryWarnDays * 24 * time.Hour)}, "expiring"},
+		{"well beyond the window", Cert{NotAfter: now.AddDate(1, 0, 0)}, "valid"},
+	}
+	for _, c := range cases {
+		if got := c.c.Status(); got != c.want {
+			t.Errorf("%s: Status() = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAllCertsFoldsInCA(t *testing.T) {
+	p := pki.New(t.TempDir())
+	if err := p.InitCA("Test CA", 10, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	if err := s.AddCert(Cert{Serial: "c1", CN: "alice", Kind: "client",
+		CertPEM: []byte("PEM"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.AllCerts(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("AllCerts = %d entries, want 2 (1 stored + synthetic CA)", len(all))
+	}
+	var sawCA bool
+	for _, c := range all {
+		if c.Kind == "ca" {
+			sawCA = true
+			if c.Serial != "ca" || c.CN != "Test CA" {
+				t.Errorf("CA row = %+v, want serial=ca cn=Test CA", c)
+			}
+		}
+	}
+	if !sawCA {
+		t.Fatal("AllCerts did not fold in the CA row")
+	}
+}
+
 // TestClientSamples: bob disconnects between t0 and t1; the global rate must
 // reflect only alice's delta, not dip because bob dropped out.
 func TestClientSamples(t *testing.T) {

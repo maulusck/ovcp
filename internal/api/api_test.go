@@ -44,6 +44,13 @@ func setup(t *testing.T) *env {
 	if err := p.InitCA("T", 1, []byte(pass)); err != nil {
 		t.Fatal(err)
 	}
+	// a real `init` always issues+records the server cert alongside the CA
+	// (cmd/ovcp's cmdInit); handleRenew now requires an active row to renew,
+	// so this fixture needs one too, not just the CA.
+	serverIC, err := p.Issue(pki.KindServer, "vpn.example.com", 825, []byte(pass))
+	if err != nil {
+		t.Fatal(err)
+	}
 	// backup.Create needs these to exist at their real relative layout.
 	os.WriteFile(filepath.Join(dir, "pki", "tls-crypt.key"), []byte("fake-tls-crypt"), 0o600)
 	os.WriteFile(filepath.Join(dir, "server.conf"), []byte("fake-server-conf"), 0o644)
@@ -57,7 +64,7 @@ func setup(t *testing.T) *env {
 		Mgmt:            controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")),
 		VPN:             &fakeVPN{},
 		DNS:             &fakeVPN{},
-		Telegram:        telegram.New(s, &fakeVPN{}, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log"))),
+		Telegram:        telegram.New(s, p, &fakeVPN{}, &fakeVPN{}, controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log"))),
 		DataDir:         dir,
 		ConfigPath:      filepath.Join(dir, "server.conf"),
 		TLSCrypt:        filepath.Join(dir, "pki", "tls-crypt.key"),
@@ -68,6 +75,9 @@ func setup(t *testing.T) *env {
 		CertsHostsPath:  filepath.Join(dir, "dns", "certs.hosts"),
 		CustomHostsPath: filepath.Join(dir, "dns", "custom.hosts"),
 		DNSGroupGID:     -1,
+	}
+	if err := srv.WriteServerCert(serverIC); err != nil {
+		t.Fatal(err)
 	}
 	return &env{ts: httptest.NewServer(srv.Handler()), t: t, dir: dir}
 }
@@ -157,7 +167,7 @@ func TestRBAC(t *testing.T) {
 		{"POST", "/api/clients/kill"},
 		{"POST", "/api/certs"},
 		{"POST", "/api/certs/revoke"},
-		{"POST", "/api/certs/renew-server"},
+		{"POST", "/api/certs/renew"},
 		{"POST", "/api/backup"},
 		{"POST", "/api/certs/export"},
 		{"PUT", "/api/vpn/config"},
@@ -205,10 +215,10 @@ func TestIssueRevokeWrongPass(t *testing.T) {
 func TestRenewServer(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
-	if r := e.req("POST", "/api/certs/renew-server", `{"Passphrase":"wrong"}`, true); r.StatusCode != 403 {
+	if r := e.req("POST", "/api/certs/renew", `{"Passphrase":"wrong"}`, true); r.StatusCode != 403 {
 		t.Fatal("wrong passphrase must 403, got", r.Status)
 	}
-	r := e.req("POST", "/api/certs/renew-server", `{"Passphrase":"`+pass+`"}`, true)
+	r := e.req("POST", "/api/certs/renew", `{"Passphrase":"`+pass+`"}`, true)
 	if r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
@@ -216,6 +226,76 @@ func TestRenewServer(t *testing.T) {
 	json.NewDecoder(r.Body).Decode(&out)
 	if out.Serial == "" {
 		t.Fatal("expected a serial in the response")
+	}
+}
+
+// TestCAInfoIsReadOnly: /api/me still reports CA cn/expiry/status (Settings'
+// status line needs it), but there is no HTTP path to renew or rotate the
+// CA — that's CLI-only, on purpose (see docs/ovcp.8's `ca renew`).
+func TestCAInfoIsReadOnly(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	r := e.req("GET", "/api/me", "", false)
+	var out struct{ CaCN, CaNotAfter, CaStatus string }
+	json.NewDecoder(r.Body).Decode(&out)
+	if out.CaCN != "T" || out.CaStatus != "valid" || out.CaNotAfter == "" {
+		t.Fatalf("/api/me CA fields = %+v, want cn=T status=valid notAfter set", out)
+	}
+
+	if r := e.req("POST", "/api/certs/renew-ca", `{"Passphrase":"`+pass+`"}`, true); r.StatusCode != 404 {
+		t.Fatalf("renew-ca must not exist as an HTTP route, got %d", r.StatusCode)
+	}
+}
+
+// TestExportRenew: client renewal is export with Renew:true — one atomic
+// call (issue the replacement, only then revoke the outgoing cert and
+// regen the CRL), not two separate requests a caller could abandon
+// half-done. Plain export without Renew must still 400 on an active CN
+// (ErrDuplicateCN) — that's the signal a caller meant to issue, not renew.
+func TestExportRenew(t *testing.T) {
+	e := setup(t)
+	e.login("admin")
+	r := e.req("POST", "/api/certs", `{"CN":"alice","Passphrase":"`+pass+`"}`, true)
+	if r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	var issued struct{ Serial string }
+	json.NewDecoder(r.Body).Decode(&issued)
+
+	if r := e.req("POST", "/api/certs/export", `{"CN":"alice","Passphrase":"`+pass+`"}`, true); r.StatusCode != 400 {
+		t.Fatalf("plain export over an active CN should 400 (ErrDuplicateCN), got %d", r.StatusCode)
+	}
+
+	if r := e.req("POST", "/api/certs/export", `{"CN":"alice","Passphrase":"`+pass+`","Renew":true}`, true); r.StatusCode != 200 {
+		t.Fatalf("export with Renew:true should succeed atomically, got %d: %s", r.StatusCode, r.Status)
+	}
+
+	rows := e.req("GET", "/api/certs", "", false)
+	var certs []struct{ CN, Serial string; Revoked bool }
+	json.NewDecoder(rows.Body).Decode(&certs)
+	var outgoingRevoked, replacementActive bool
+	for _, c := range certs {
+		if c.CN != "alice" {
+			continue
+		}
+		if c.Serial == issued.Serial {
+			outgoingRevoked = c.Revoked
+		} else {
+			replacementActive = !c.Revoked
+		}
+	}
+	if !outgoingRevoked {
+		t.Fatal("renewal must revoke the outgoing cert")
+	}
+	if !replacementActive {
+		t.Fatal("renewal must leave an active replacement")
+	}
+
+	// Renew:true on a CN with nothing active must error, not silently issue
+	// — same RequireActiveCert guard certificate renew (CLI) and the
+	// server-cert renew endpoint already use.
+	if r := e.req("POST", "/api/certs/export", `{"CN":"ghost","Passphrase":"`+pass+`","Renew":true}`, true); r.StatusCode != 400 {
+		t.Fatalf("Renew:true on a never-issued CN should 400, got %d", r.StatusCode)
 	}
 }
 

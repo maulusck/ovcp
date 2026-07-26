@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 )
 
@@ -20,7 +22,9 @@ const (
 )
 
 // sensitive audit actions worth a push notification.
-var notifyActions = map[string]bool{"revoke": true, "user_add": true, "user_del": true, "ca_rotate": true}
+var notifyActions = map[string]bool{
+	"revoke": true, "user_add": true, "user_del": true, "ca_rotate": true, "renew_ca": true,
+}
 
 // unauthorizedBlockThreshold: an unrecognized sender gets this many 403s,
 // then goes silent for the process's life, capping the sendMessage burst a spam wave would trigger.
@@ -29,6 +33,7 @@ const unauthorizedBlockThreshold = 3
 
 type Poller struct {
 	s    *store.Store
+	p    *pki.PKI
 	vpn  controller.Lifecycle
 	dns  controller.Lifecycle
 	mgmt *controller.Client
@@ -42,8 +47,8 @@ type Poller struct {
 	blocked  map[int64]bool
 }
 
-func New(s *store.Store, vpn, dns controller.Lifecycle, mgmt *controller.Client) *Poller {
-	return &Poller{s: s, vpn: vpn, dns: dns, mgmt: mgmt}
+func New(s *store.Store, p *pki.PKI, vpn, dns controller.Lifecycle, mgmt *controller.Client) *Poller {
+	return &Poller{s: s, p: p, vpn: vpn, dns: dns, mgmt: mgmt}
 }
 
 // isNumericID reports whether s is a Telegram numeric id rather than a
@@ -85,13 +90,15 @@ func SetAdmin(s *store.Store, admin string) error {
 	if admin == old {
 		return nil
 	}
-	warnOldAdmin(s, old)
+	warnOldAdmin(s, old, admin)
 	return s.SetSetting(keyChat, "")
 }
 
 // warnOldAdmin best-effort notifies the chat being replaced, before it's
 // unlinked — the one line of defense against a hijacked admin reassignment.
-func warnOldAdmin(s *store.Store, old string) {
+// Names newAdmin (whatever form it was set in, numeric id or @username) so
+// the outgoing admin knows who to investigate if this wasn't them.
+func warnOldAdmin(s *store.Store, old, newAdmin string) {
 	token, _ := s.GetSetting(keyToken)
 	chatID, err := chatIDFor(s, old)
 	if old == "" || token == "" || err != nil {
@@ -99,7 +106,8 @@ func warnOldAdmin(s *store.Store, old string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	newBot(token).sendMessage(ctx, chatID, "🚨 admin identity changed — if this wasn't you, investigate now.", nil)
+	text := fmt.Sprintf("🚨 admin identity changed to %s — if this wasn't you, investigate now.", newAdmin)
+	newBot(token).sendMessage(ctx, chatID, text, nil)
 }
 
 // ConfigStatus reads token/admin presence directly from the store — no
@@ -300,6 +308,7 @@ const (
 	cmdDNSStart   = "dns_start"
 	cmdDNSStop    = "dns_stop"
 	cmdDNSRestart = "dns_restart"
+	cmdCerts      = "certs"
 )
 
 // Reply-keyboard labels double as the tap-back text (no callback_data on a
@@ -311,15 +320,17 @@ const (
 	lblReconnect = "🔌 reconnect"
 	lblStatus    = "📊 status"
 	lblDNS       = "🌐 dns"
+	lblCerts     = "📜 certs"
 )
 
 // opsKeyboard is the persistent reply keyboard /menu (and /start) hands out.
-// Status/dns get their own wide rows: they're what you check, not act on directly.
+// Status/dns/certs get their own wide rows: they're what you check, not act on directly.
 var opsKeyboard = rkb(
 	[]string{lblStart, lblStop},
 	[]string{lblRestart, lblReconnect},
 	[]string{lblStatus},
 	[]string{lblDNS},
+	[]string{lblCerts},
 )
 
 // dnsKeyboard: dns's own start/stop/restart, handed out under /dns — no
@@ -337,6 +348,7 @@ var botCommands = []botCommand{
 	{cmdRestart, "full bounce (asks first)"},
 	{cmdReconnect, "SIGUSR1: renegotiate, no restart"},
 	{cmdDNS, "dnsmasq status + start|stop|restart"},
+	{cmdCerts, "list certs: expiring, expired, revoked, valid"},
 }
 
 type botCommand struct {
@@ -371,6 +383,8 @@ func (p *Poller) handleCommand(ctx context.Context, b *bot, chatID int64, cmd st
 		b.sendMessage(ctx, chatID, resultText("🔄 restarted.", p.vpn.Restart()), nil)
 	case "/" + cmdDNS, cmdDNS, lblDNS:
 		b.sendMessage(ctx, chatID, p.dnsLine(), dnsKeyboard)
+	case "/" + cmdCerts, cmdCerts, lblCerts:
+		b.sendMessage(ctx, chatID, p.certsText(), nil)
 	case cmdDNSStart:
 		b.sendMessage(ctx, chatID, resultText("🟢 dns up.", p.dns.Start()), nil)
 	case cmdDNSStop:
@@ -418,16 +432,16 @@ func (p *Poller) dnsLine() string {
 	return "🔴 dns down"
 }
 
-// certLine: live cert count + how many are within store.ExpiryWarnDays.
+// certLine: live cert count + how many are expiring, CA included.
 func (p *Poller) certLine() string {
-	certs, _ := p.s.ListCerts()
+	certs, _ := p.s.AllCerts(p.p)
 	live, soon := 0, 0
 	for _, c := range certs {
-		if c.RevokedAt != nil {
+		if c.Status() == "revoked" {
 			continue
 		}
 		live++
-		if d := time.Until(c.NotAfter).Hours() / 24; d >= 0 && d <= store.ExpiryWarnDays {
+		if c.Status() == "expiring" {
 			soon++
 		}
 	}
@@ -435,6 +449,64 @@ func (p *Poller) certLine() string {
 		return fmt.Sprintf("📜 %d cert(s)", live)
 	}
 	return fmt.Sprintf("📜 %d cert(s) · %d expiring ≤%dd", live, soon, store.ExpiryWarnDays)
+}
+
+// certStatusSections is certsText's status-to-heading order, most urgent
+// first — one place both the grouping loop and the ordering read from.
+var certStatusSections = []struct{ status, label string }{
+	{"expiring", "⏳ Expiring"},
+	{"expired", "❌ Expired"},
+	{"revoked", "🚫 Revoked"},
+	{"valid", "✅ Valid"},
+}
+
+// certDetail is certsText's one-line "what's the number that matters" per
+// status: days left, days overdue, or the expiry date for a merely valid cert.
+func certDetail(c store.Cert) string {
+	switch c.Status() {
+	case "expiring":
+		return fmt.Sprintf("%dd left", int(time.Until(c.NotAfter).Hours()/24))
+	case "expired":
+		return fmt.Sprintf("expired %dd ago", int(time.Since(c.NotAfter).Hours()/24))
+	case "revoked":
+		return "revoked"
+	default:
+		return "until " + c.NotAfter.Format("2006-01-02")
+	}
+}
+
+// certsText: every cert (client, server, and the CA), grouped by status —
+// report-only, same as the rest of this bot; renewing/revoking stays
+// CLI/web-UI-only.
+// ponytail: no length cap on the message (Telegram's own 4096-char limit is
+// the only ceiling) — fine at this tool's per-admin cert-count scale, add
+// pagination if a deployment ever grows past it.
+func (p *Poller) certsText() string {
+	certs, err := p.s.AllCerts(p.p)
+	if err != nil {
+		return "⚠️ " + err.Error()
+	}
+	groups := map[string][]store.Cert{}
+	for _, c := range certs {
+		st := c.Status()
+		groups[st] = append(groups[st], c)
+	}
+	for _, g := range groups {
+		slices.SortFunc(g, func(a, b store.Cert) int { return a.NotAfter.Compare(b.NotAfter) })
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "📜 Certificates (%d total)", len(certs))
+	for _, sec := range certStatusSections {
+		g := groups[sec.status]
+		if len(g) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n%s (%d)", sec.label, len(g))
+		for _, c := range g {
+			fmt.Fprintf(&b, "\n  · %s (%s) — %s", c.CN, c.Kind, certDetail(c))
+		}
+	}
+	return b.String()
 }
 
 // statusText: the full report — every worker plus certs, not just the vpn.

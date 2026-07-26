@@ -57,6 +57,37 @@ func CertFrom(ic *pki.IssuedCert, kind string) Cert {
 		CertPEM: ic.CertPEM, IssuedAt: time.Now(), NotAfter: ic.NotAfter, IncludeDNS: true}
 }
 
+// Status classifies c: the one place CLI, web UI (via the API), and the
+// telegram bot all get "revoked"/"expired"/"expiring"/"valid" from, so the
+// ExpiryWarnDays threshold only ever lives in one branch of Go.
+func (c Cert) Status() string {
+	switch {
+	case c.RevokedAt != nil:
+		return "revoked"
+	case time.Now().After(c.NotAfter):
+		return "expired"
+	case time.Until(c.NotAfter) <= ExpiryWarnDays*24*time.Hour:
+		return "expiring"
+	default:
+		return "valid"
+	}
+}
+
+// AllCerts returns every stored cert plus a synthetic CA row — the CA is
+// never a certs-table row (see schema's kind CHECK), but expiry reporting
+// (the sweep ticker, telegram's /certs) needs it folded into the same list
+// instead of duplicating this three-line join at each call site.
+func (s *Store) AllCerts(p *pki.PKI) ([]Cert, error) {
+	certs, err := s.ListCerts()
+	if err != nil {
+		return nil, err
+	}
+	if ca, err := p.CACert(); err == nil {
+		certs = append(certs, Cert{Serial: "ca", CN: ca.Subject.CommonName, Kind: "ca", NotAfter: ca.NotAfter})
+	}
+	return certs, nil
+}
+
 type AuditEntry struct {
 	ID     int64
 	TS     time.Time
@@ -119,8 +150,9 @@ func (s *Store) BackupTo(path string) error {
 // --- certs ---
 
 // ErrDuplicateCN: one active (non-revoked) cert per CN+kind — client or
-// server. Revoke the old one first (renewal does this automatically).
-var ErrDuplicateCN = errors.New("an active cert already exists for this CN — revoke it first")
+// server. Renewal (ReplaceCert) revokes the outgoing one first; the exact
+// recovery instruction differs per caller, so callers wrap this themselves.
+var ErrDuplicateCN = errors.New("an active cert already exists for this CN")
 
 // activeCertSerial returns the non-revoked cert's serial for cn+kind, or ""
 // if there isn't one.
@@ -132,6 +164,42 @@ func (s *Store) activeCertSerial(cn, kind string) (string, error) {
 		return "", nil
 	}
 	return serial, err
+}
+
+// activeServerCertSerial returns the active server cert's serial, regardless
+// of CN — unlike client certs, a server isn't CN-keyed: there's only ever
+// one, so renewing it and renaming it (a new -cn) are the same lookup.
+func (s *Store) activeServerCertSerial() (string, error) {
+	var serial string
+	err := s.db.QueryRow(
+		`SELECT serial FROM certs WHERE kind = 'server' AND revoked_at IS NULL LIMIT 1`).Scan(&serial)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return serial, err
+}
+
+// ErrNoActiveCert: renewal needs something active to replace — client certs
+// are keyed by (CN, kind) so a renew must target the exact one that already
+// exists; the server cert has no such ambiguity (there's only ever one).
+var ErrNoActiveCert = errors.New("no active cert found for this cn+kind")
+
+// RequireActiveCert is ReplaceCert's precondition — fail fast before signing
+// anything, instead of ReplaceCert falling back to a plain issue. cn is
+// ignored for kind "server" (see activeServerCertSerial).
+func (s *Store) RequireActiveCert(cn, kind string) error {
+	lookup := func() (string, error) { return s.activeCertSerial(cn, kind) }
+	if kind == "server" {
+		lookup = s.activeServerCertSerial
+	}
+	serial, err := lookup()
+	if err != nil {
+		return err
+	}
+	if serial == "" {
+		return fmt.Errorf("store: %s (%s): %w", cn, kind, ErrNoActiveCert)
+	}
+	return nil
 }
 
 // boolInt converts a Go bool to the 0/1 SQLite stores it as.
@@ -163,10 +231,15 @@ func (s *Store) SetCertDNS(serial string, include bool) error {
 	return s.mustAffect(res, err, "store: no such cert")
 }
 
-// ReplaceCert retires c's outgoing active cert (same CN+kind), if any, then
-// adds c — server-cert renewal in one call, shared by the CLI and the API.
+// ReplaceCert retires the outgoing active cert, if any, then adds c — one
+// call for client or server renewal. Client match is CN+kind; server match
+// is kind alone (see activeServerCertSerial), so a differing c.CN there renames.
 func (s *Store) ReplaceCert(c Cert) error {
-	prev, err := s.activeCertSerial(c.CN, c.Kind)
+	lookup := func() (string, error) { return s.activeCertSerial(c.CN, c.Kind) }
+	if c.Kind == "server" {
+		lookup = s.activeServerCertSerial
+	}
+	prev, err := lookup()
 	if err != nil {
 		return err
 	}

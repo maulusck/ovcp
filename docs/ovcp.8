@@ -1,4 +1,4 @@
-.TH OVCP 8 "2026-07-25" "ovcp" "System Administration"
+.TH OVCP 8 "2026-07-26" "ovcp" "System Administration"
 .SH NAME
 ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for an OpenVPN server
 .SH SYNOPSIS
@@ -45,8 +45,10 @@ Tier\-2 CA model: the CA private key is encrypted at rest (argon2id +
 AES\-256\-GCM); every signing operation (\fBcertificate issue\fR,
 \fBcertificate revoke\fR) requires
 the operator passphrase, used in memory and never persisted.
-\fBrotate\-ca\fR re\-encrypts it under a new passphrase without reissuing
-anything.
+\fBca rotate\fR re\-encrypts it under a new passphrase without reissuing
+anything; \fBca renew\fR is the opposite axis \(en it reissues the CA
+certificate itself (new serial, extended validity) under the unchanged key,
+so every already\-issued cert stays valid without reissuing.
 .PP
 Every operator secret \(en the CA passphrase, admin/user passwords \(en
 must be at least 8 characters and mix at least 2 of upper/lower/digit/
@@ -76,7 +78,7 @@ the username alone after 20 attempts in the same window, to catch a brute
 force spread across many source IPs.
 .PP
 \fBvpn config set \-extra\fR / \fBvpn config edit\fR (server config) and
-\fBcertificate export\fR's \fB\-custom\-opts\fR (one client's profile) both
+\fBcertificate issue \-export\fR's \fB\-custom\-opts\fR (one client's profile) both
 append raw openvpn directives verbatim, with no parsing or validation.
 Neither needs a role beyond what already gates that surface: server config
 is \fBadmin\fR\-only already (\fBPUT /api/vpn/config\fR, same gate \fBvpn
@@ -96,14 +98,16 @@ checked against exactly one configured Telegram identity (numeric id or
 \fB@username\fR); every other sender gets a 403 reply and the message is
 otherwise ignored \(en for the first 3 attempts. Past that, the sender is
 blocked for the rest of the process's life: no more 403s, no API call, no
-log line. The bot's own command surface is deliberately narrow
+log line. The bot's own command surface is deliberately narrow and
+report\-only for anything PKI\-related
 (\fB/status\fR reports openvpn and dnsmasq state plus a cert\-expiry
 summary; \fB/menu\fR hands out openvpn's Start/Stop/Restart/Reconnect;
 \fB/dns\fR hands out dnsmasq's own Start/Stop/Restart \(en Stop and
-Restart always behind a confirm step, for both) \(en revoke, user
-management, CA rotation, config, and backup are unreachable from Telegram
-at any privilege. Its buttons call the same openvpn/dnsmasq lifecycle
-methods
+Restart always behind a confirm step, for both; \fB/certs\fR lists every
+certificate grouped by status) \(en renewing or revoking any certificate
+(client, server, or the CA), user management, CA rotation, config, and
+backup are all unreachable from Telegram at any privilege, CLI/web\-login
+only. Its buttons call the same openvpn/dnsmasq lifecycle methods
 .B vpn
 and
 .B dns
@@ -119,7 +123,7 @@ ovcp init \-server\-cn vpn.example.com
 ovcp serve
 
 # 3. hand out a client profile
-ovcp certificate export \-cn alice \-remote vpn.example.com > alice.ovpn
+ovcp certificate issue \-cn alice \-export \-remote vpn.example.com > alice.ovpn
 .RE
 .fi
 .SH COMMANDS
@@ -164,48 +168,40 @@ actionable error if
 .B ovcp init
 has not been run.
 .TP
-.B certificate issue \fB\-cn\fR \fINAME\fR [\fB\-kind\fR client|server] [\fB\-days\fR \fIN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR]
+.B certificate issue \fB\-cn\fR \fINAME\fR [\fB\-renew\fR] [\fB\-days\fR \fIN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR]
+.TQ
+.B certificate issue \fB\-cn\fR \fINAME\fR \fB\-export\fR [\fB\-renew\fR] [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR] [\fB\-split\-tunnel\fR] [\fB\-custom\-opts\fR \fIOPTS\fR|\fB\-\fR]
 \fBcert\fR is accepted everywhere as a shorthand for \fBcertificate\fR
-(\fBovcp cert list\fR, \fBovcp cert export ...\fR); the rest of this page
-spells it out in full. Issue a certificate. Client private keys are printed (or written with
-\fB\-out\fR) exactly once and never stored; if lost, revoke and reissue.
-Certificates (public) are kept and can be re\-downloaded anytime with
-\fBcertificate list\fR / the web UI. With \fB\-key\-pass\fR the private key
-is AES\-256 encrypted; OpenVPN prompts for the password on connect \(en
-client certs only, rejected for \fB\-kind\fR \fIserver\fR (openvpn cannot
-unlock an encrypted key non\-interactively at startup). \fB\-days\fR must
-be positive. \fB\-cn\fR is capped at 64 bytes (RFC 5280's CommonName
-limit). Only one certificate per CN may be active (non\-revoked) at a
-time \(en \fBcertificate revoke\fR the existing one first to reissue under
-the same CN.
-.TP
-.B certificate list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
-List issued certificates with status (valid, expiring, REVOKED, expired;
-expiring is anything within 30 days of \fBNotAfter\fR, matching the web
-UI's Certs tab), colored accordingly (see \fB\-no\-color\fR).
-\fB\-status\fR/\fB\-kind\fR filter before
-printing (default \fBall\fR, today's behavior). \fB\-sort\fR reorders the
-filtered list (default: issued order); \fB\-desc\fR reverses it. Same
-filters/sort as the web UI's Certs tab. \fB\-json\fR prints the same rows
-as JSON instead (see \fBMACHINE\-READABLE OUTPUT\fR).
-.TP
-.B certificate revoke \fB\-serial\fR \fIHEX\fR
-Revoke a certificate and regenerate the CRL. OpenVPN rejects the client
-on its next handshake (\fBcrl\-verify\fR is always configured).
-.TP
-.B certificate export \fB\-cn\fR \fINAME\fR [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR] [\fB\-split\-tunnel\fR] [\fB\-custom\-opts\fR \fIOPTS\fR|\fB\-\fR]
-Issue a fresh client certificate and print a complete inline
-\fI.ovpn\fR profile (CA, cert, key, tls\-crypt) on stdout, or write it to
-\fIPREFIX\fR\fI.ovpn\fR with \fB\-out\fR (same convention as
-\fBcertificate issue\fR). \fB\-remote\fR defaults to \fBOVCP_SERVER_CN\fR /
-the server cert's CN, and is only required if neither is set. \fB\-port\fR,
-\fB\-proto\fR, and the data cipher default to the server's configured
-values (see \fBvpn config get\fR / \fBvpn config set\fR, or the web UI's
-Settings tab \(en both stay in sync); pass \fB\-port\fR or \fB\-proto\fR to override
-just this one export. \fB\-key\-pass\fR password\-protects the embedded
-key. Same one\-active\-cert\-per\-CN rule and 64\-byte \fB\-cn\fR cap as
-\fBcertificate issue\fR.
+(\fBovcp cert list\fR, \fBovcp cert issue ...\fR); the rest of this page
+spells it out in full. Client\-only \(en a server has exactly one cert,
+tied to the file paths \fBserve\fR reads, and only \fBinit\fR (the first
+one) and \fBcertificate renew\fR (every one after) ever write those files,
+so \fBissue\fR never offers a server option that would just add a
+disconnected DB row.
+.PP
+Covers the whole client lifecycle. Without \fB\-renew\fR, an active CN is
+refused (one certificate per CN may be active at a time); with
+\fB\-renew\fR, the outgoing cert is revoked and the CRL regenerated as
+part of the same call \(en explicit rather than auto\-detected, so a
+typo'd CN fails fast instead of silently replacing a live client's cert.
+\fB\-export\fR switches the output from raw cert+key to a complete inline
+\fI.ovpn\fR profile (CA, cert, key, tls\-crypt); combine both to renew a
+client and hand back a fresh profile in one call. Private keys are printed
+(or written with \fB\-out\fR) exactly once and never stored; if lost,
+\fB\-renew\fR. Certificates (public) are kept and can be re\-downloaded
+anytime with \fBcertificate list\fR / the web UI. With \fB\-key\-pass\fR
+the private key is AES\-256 encrypted; OpenVPN prompts for the password on
+connect. \fB\-days\fR must be positive. \fB\-cn\fR is capped at 64 bytes
+(RFC 5280's CommonName limit).
 .RS
+.TP
+\fB\-export\fR's own flags
+\fB\-remote\fR defaults to \fBOVCP_SERVER_CN\fR / the server cert's CN, and
+is only required if neither is set. \fB\-port\fR, \fB\-proto\fR, and the
+data cipher default to the server's configured values (see \fBvpn config
+get\fR / \fBvpn config set\fR, or the web UI's Settings tab \(en both stay
+in sync); pass \fB\-port\fR or \fB\-proto\fR to override just this one
+export.
 .TP
 \fB\-split\-tunnel\fR
 Adds a client\-side \fBpull\-filter\fR that ignores the server's pushed
@@ -235,16 +231,38 @@ commas, so it passes through the comma\-split unchanged
 Also available from the web UI (Certs tab), a plain multi\-line field.
 .RE
 .TP
-.B certificate renew\-server [\fB\-days\fR \fIN\fR] [\fB\-server\-cn\fR \fICN\fR]
-Reissue the openvpn server certificate (a fresh keypair and serial),
-revoking the outgoing one and writing the new one to the same paths
+.B certificate list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
+List issued certificates with status (valid, expiring, REVOKED, expired;
+expiring is anything within 30 days of \fBNotAfter\fR, matching the web
+UI's Certs tab), colored accordingly (see \fB\-no\-color\fR).
+\fB\-status\fR/\fB\-kind\fR filter before
+printing (default \fBall\fR, today's behavior). \fB\-sort\fR reorders the
+filtered list (default: issued order); \fB\-desc\fR reverses it. Same
+filters/sort as the web UI's Certs tab. \fB\-json\fR prints the same rows
+as JSON instead (see \fBMACHINE\-READABLE OUTPUT\fR). Never includes the
+CA \(en see \fBca status\fR.
+.TP
+.B certificate revoke \fB\-serial\fR \fIHEX\fR
+Revoke a certificate and regenerate the CRL. OpenVPN rejects the client
+on its next handshake (\fBcrl\-verify\fR is always configured).
+.TP
+.B certificate renew [\fB\-cn\fR \fINAME\fR] [\fB\-days\fR \fIN\fR]
+Server\-only \(en a server has exactly one cert, at the fixed paths
 .B serve
-reads. Defaults to the existing server cert's CN (or \fBOVCP_SERVER_CN\fR);
-pass \fB\-server\-cn\fR explicitly right after a \fBbackup restore\fR, which
-never restores a server cert (see below). Also available from the web UI
-(Settings, admin role). Takes effect on the next
+reads directly, so there is no bundle/\fB\-out\fR concept like client
+certs have (see \fBcertificate issue\fR above). Reissues it in place \(en
+fresh keypair and serial, same paths \(en effective on the next
 .B ovcp vpn restart
-\(en openvpn does not hot\-reload its certificate.
+(openvpn does not hot\-reload its certificate). Omit \fB\-cn\fR to keep
+the current CN (routine renewal); pass a different one to rename it \(en
+server identity is kind\-only, not CN\-keyed like a client's (there is
+only ever one), so renew and rename are the same operation. \fB\-cn\fR
+defaults to the existing server cert's CN, falling back to
+\fBOVCP_SERVER_CN\fR if that file can't be read yet (e.g. right after a
+\fBbackup restore\fR, which never restores a server cert \(en see below).
+Also available from the web UI (Certificates tab, admin role, the server
+cert's own row: \fBPOST /api/certs/renew\fR) \(en renew only, no rename;
+a CN change is CLI\-only.
 .TP
 .B vpn config get
 Print the persisted server configuration \(en proto, port, subnet,
@@ -263,7 +281,7 @@ see \fBinit\fR and \fBOVCP_OPENVPN_PROTO\fR and friends below, if nothing
 has been saved yet). \fB\-dns\fR and \fB\-routes\fR take a comma\-separated
 list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
 appending to it. \fB\-extra\fR takes the same three forms as
-\fBcertificate export\fR's \fB\-custom\-opts\fR (comma list, \fB$(cat
+\fBcertificate issue \-export\fR's \fB\-custom\-opts\fR (comma list, \fB$(cat
 FILE)\fR, or a bare \fB\-\fR for \fB$EDITOR\fR) \(en equivalent to
 \fBvpn config edit\fR below, just scriptable inline. \fB\-redirect\-gw\fR and
 \fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
@@ -315,7 +333,7 @@ persisted value. Takes effect on the next
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload its configuration.
 .TP
-.B rotate\-ca
+.B ca rotate
 Re\-encrypt the CA private key under a new passphrase (prompts for the
 current one, then the new one twice). The CA keypair and certificate are
 unchanged \(en issued certificates stay valid, nothing needs reissuing.
@@ -323,14 +341,37 @@ unchanged \(en issued certificates stay valid, nothing needs reissuing.
 one like \fBcertificate issue\fR/\fBcertificate revoke\fR, so the new
 passphrase never has to cross the HTTP surface at all.
 .TP
+.B ca renew [\fB\-years\fR \fIN\fR]
+Reissue the CA certificate itself in place: a fresh serial and extended
+validity (default 10 years), signed with the unchanged CA key. Distinct
+from \fBca rotate\fR (passphrase only) \(en this is what to run if the CA
+certificate's own expiry, not its passphrase, is the problem. Every
+already\-issued client/server cert stays valid: verification only checks
+the CA's signing key, never which CA certificate happens to be on disk, so
+nothing needs reissuing. \fICLI\-only\fR by design, same as \fBca rotate\fR
+\(en not because a passphrase crosses HTTP here (it doesn't, unlike
+\fBrotate\fR), but because the CA is the one thing in \fBovcp\fR where a
+mistake or a hijacked admin session costs everything, not just one cert;
+that stays behind shell access to the machine, not a browser tab. The web
+UI only ever shows the CA's status (Dashboard), never a way to act on it.
+Takes effect on the next
+.B ovcp vpn restart
+\(en openvpn does not hot\-reload the CA certificate either.
+.TP
+.B ca status
+Read\-only: CN, expiry, and status (valid, expiring, expired \(en the CA
+can't be revoked, so never that). Kept out of \fBcertificate list\fR on
+purpose \(en the CA lives on its own path, CLI/admin\-only, never mixed
+into the client/server certs surface.
+.TP
 .B backup create [\fB\-out\fR \fIFILE\fR]
 Write an encrypted archive (argon2id + AES\-256\-GCM, prompts twice for a
 backup passphrase) of the CA, CRL, tls\-crypt key, TOTP key,
 \fIserver.conf\fR, and database. Also available from the web UI (Settings, admin role).
 Deliberately excludes the openvpn server certificate and private key:
 OpenVPN clients trust the CA chain and a CN match, never a pinned server
-cert, so a restore just issues a fresh one (\fBcertificate
-renew\-server\fR) \(en the server's private key never has to leave the
+cert, so a restore just issues a fresh one (\fBcertificate renew\fR)
+\(en the server's private key never has to leave the
 machine. Client private keys
 were never stored here to begin with (no escrow); nothing to back up there
 either.
@@ -340,8 +381,8 @@ Decrypt and extract a backup into \fB\-data\fR (must be an uninitialized
 directory, or pass \fB\-force\fR to overwrite one). \fICLI\-only\fR by
 design \(en restoring is an offline, disaster\-recovery operation against a
 data directory, not something to expose over HTTP on a possibly\-live
-server. Follow with \fBcertificate renew\-server\fR (the archive has no
-server cert) and \fBovcp vpn start\fR.
+server. Follow with \fBcertificate renew\fR (the archive has
+no server cert) and \fBovcp vpn start\fR.
 .TP
 .B status [\fB\-ctrl\fR \fIPATH\fR]
 Overview: whether the openvpn worker is running (with its pid) and, if so,
@@ -349,7 +390,7 @@ the connected clients \(en both via the control socket, see
 \fBOVCP_CTRL_SOCK\fR. Traffic history and per\-client sessions are
 \fBstats\fR's job, not this command's.
 .TP
-.B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR|\fB\-int\fR \fIN\fR] [\fB\-ctrl\fR \fIPATH\fR]
+.B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR \fIN\fR] [\fB\-ctrl\fR \fIPATH\fR]
 .TQ
 .B stats config get
 .TQ
@@ -359,7 +400,7 @@ globally or for one client (\fB\-cn\fR), read straight from the database
 \(en works even with \fBserve\fR not running. Same data as the web UI's
 Stats tab. \fB\-follow\fR switches to a live top\-like view instead: polls
 a running \fBserve\fR's control socket (not the database) every
-\fB\-interval\fR (alias \fB\-int\fR) seconds (default 2) and redraws in
+\fB\-interval\fR seconds (default 2) and redraws in
 place, sorted busiest\-first when global; rejects \fB\-json\fR (a live
 view, not a single result) and needs \fBserve\fR running.
 .B stats config get\fR/\fBstats config set
@@ -546,22 +587,27 @@ and whether the chat is linked yet (a \fB@username\fR admin only links once
 they've messaged the bot; re\-saving the same token or admin never unlinks
 it) \(en never the token itself \(en same values as \fBGET\fR/\fBPUT
 /api/telegram/config\fR (web UI). Changing \fB\-admin\fR to a different
-identity best\-effort warns the chat being replaced first, before it's
-unlinked \(en the one defense against a hijacked reassignment; changing
-\fB\-token\fR has no equivalent, an already\-leaked token grants that access
-regardless.
+identity best\-effort warns the chat being replaced first, naming the
+incoming identity, before it's unlinked \(en the one defense against a
+hijacked reassignment; changing \fB\-token\fR has no equivalent, an
+already\-leaked token grants that access regardless.
 \fBstart\fR/\fBstop\fR/\fBrestart\fR/\fBstatus\fR drive the poller inside a
 running \fBserve\fR over the control socket (see \fBOVCP_CTRL_SOCK\fR),
 same as \fBvpn\fR; the poller also auto\-starts with \fBserve\fR if a token
 is already set. Once linked, the bot pushes notifications for revoke,
-user add/del, CA rotate, a cert (client, server, or the CA itself) entering
-its 30\-day expiry window (once per cert; also logged at Warn in
+user add/del, CA rotate, CA renew, a cert (client, server, or the CA itself)
+entering its 30\-day expiry window (once per cert; also logged at Warn in
 \fIovcp.log\fR regardless of Telegram config), and openvpn/dnsmasq giving up
 auto\-restart after crash\-looping;
-\fB/status\fR, \fB/menu\fR (openvpn Start/Stop/Restart/Reconnect), and
-\fB/dns\fR (dnsmasq Start/Stop/Restart, same confirm step on Stop/Restart)
-are the only commands it accepts \(en revoke, user management, CA
-rotation, config, and backup stay CLI/web\-login only.
+\fB/status\fR, \fB/menu\fR (openvpn Start/Stop/Restart/Reconnect),
+\fB/dns\fR (dnsmasq Start/Stop/Restart, same confirm step on Stop/Restart),
+and \fB/certs\fR (every certificate \(en client, server, and the CA \(en
+grouped by status: expiring, expired, revoked, then valid, most urgent
+first, same \fBstore.Cert.Status()\fR classification \fBcertificate list\fR
+and the web UI's Certificates table use) are the only commands it accepts
+\(en revoke, user management, CA rotation/renewal, config, and backup stay
+CLI/web\-login only; \fB/certs\fR is reporting only, with no renew or
+revoke action reachable from it.
 .TP
 .B version
 Print \fBovcp\fR's version, and the \fBopenvpn\fR and \fBdnsmasq\fR binaries'
@@ -659,22 +705,30 @@ Per\-command JSON shapes:
 \fB[N/5]\fR progress lines are human text only, suppressed under
 \fB\-json\fR so they can't interleave with the result.
 .TP
-.B certificate issue, certificate export
+.B certificate issue
 \fB{serial, cert, key}\fR or \fB{serial, certFile, keyFile}\fR with
-\fB\-out\fR \(en the cert/key (or \fI.ovpn\fR bundle, \fBbundle\fR not
-\fBcert\fR/\fBkey\fR, for \fBexport\fR) inline as JSON strings instead of
-raw bytes on stdout, or the paths they were written to.
+\fB\-out\fR \(en inline as JSON strings instead of raw bytes on stdout, or
+the paths they were written to. With \fB\-export\fR: \fB{serial, bundle}\fR
+or \fB{serial, file}\fR with \fB\-out\fR, the \fI.ovpn\fR bundle instead of
+cert/key.
 .TP
 .B certificate revoke
 \fB{serial, crlPath}\fR.
 .TP
-.B rotate\-ca, vpn config edit, backup restore, user del,
+.B ca rotate, vpn config edit, backup restore, user del,
 .B user passwd, user totp \-off, record edit|include|exclude, init \-skeleton,
 .B logs rotate
 \fB{message}\fR \(en a confirmation string, nothing structured beyond it.
 .TP
-.B certificate renew\-server
-\fB{serverCN, serial}\fR.
+.B certificate renew
+\fB{cn, serial, notAfter}\fR \(en server\-only, nothing sensitive leaves
+the machine.
+.TP
+.B ca renew
+\fB{notAfter}\fR.
+.TP
+.B ca status
+\fB{cn, notAfter, status}\fR.
 .TP
 .B backup create
 \fB{file}\fR.
@@ -810,7 +864,7 @@ and how often the web UI polls it (default \fB3\fR, clamped to 1\-60).
 Invalid values fall back to the default with a logged warning.
 .TP
 .B OVCP_SERVER_CN
-Default client \fBremote\fR for \fBcertificate export\fR and CN for the
+Default client \fBremote\fR for \fBcertificate issue \-export\fR and CN for the
 admin UI certificate (falls back to the VPN server certificate's CN).
 .TP
 .B OVCP_CA_PASSPHRASE, OVCP_USER_PASSWORD
@@ -819,7 +873,7 @@ init (the image defaults both to \fIchangeme!\fR). Avoid on
 shared systems: environment variables can leak.
 .TP
 .B OVCP_CA_NEW_PASSPHRASE, OVCP_BACKUP_PASSPHRASE
-Non\-interactive equivalents for \fBrotate\-ca\fR's new passphrase and
+Non\-interactive equivalents for \fBca rotate\fR's new passphrase and
 \fBbackup\fR's archive passphrase. Same leak caveat as above.
 .TP
 .B OVCP_YOLO_PASSWORD
@@ -916,7 +970,7 @@ CA certificate and encrypted private key.
 .TP
 .I $OVCP_DATA/pki/server.crt, server.key
 Server keypair used by openvpn. Not included in \fBbackup\fR archives \(en
-reissued by \fBcertificate renew\-server\fR after a restore.
+reissued by \fBcertificate renew\fR after a restore.
 .TP
 .I $OVCP_DATA/pki/crl.pem
 Certificate revocation list (referenced by \fBcrl\-verify\fR).
@@ -990,7 +1044,7 @@ would log a line per poll). Live state, not a log: excluded from
 Issue and download a profile for a phone, valid two years:
 .nf
 .RS
-ovcp certificate export \-cn dana\-phone \-remote vpn.example.com > dana\-phone.ovpn
+ovcp certificate issue \-cn dana\-phone \-export \-remote vpn.example.com > dana\-phone.ovpn
 .RE
 .fi
 Revoke it later:
@@ -998,6 +1052,17 @@ Revoke it later:
 .RS
 ovcp certificate list
 ovcp certificate revoke \-serial 682b2da83f4d...
+.RE
+.fi
+Renew that same client's cert before it expires, writing the new key+cert
+to files instead of stdout, then renew the openvpn server cert and the CA
+certificate itself (both admin, both need a restart to take effect):
+.nf
+.RS
+ovcp certificate issue \-cn dana\-phone \-renew \-out dana\-phone\-renewed
+ovcp certificate renew
+ovcp ca renew
+ovcp vpn restart
 .RE
 .fi
 Serve the admin UI on the host loopback and again inside the VPN itself, so
@@ -1012,14 +1077,14 @@ A laptop that should reach the VPN subnet but keep its own default route
 (the server redirects all traffic for everyone else):
 .nf
 .RS
-ovcp certificate export \-cn dana\-laptop \-remote vpn.example.com \-split\-tunnel > dana\-laptop.ovpn
+ovcp certificate issue \-cn dana\-laptop \-export \-remote vpn.example.com \-split\-tunnel > dana\-laptop.ovpn
 .RE
 .fi
 Add a couple of extra directives to one client's profile, and separately
 edit the server's own extra directives:
 .nf
 .RS
-ovcp certificate export \-cn dana\-phone \-remote vpn.example.com \e
+ovcp certificate issue \-cn dana\-phone \-export \-remote vpn.example.com \e
   \-custom\-opts "block\-outside\-dns,ping\-restart 30" > dana\-phone.ovpn
 ovcp vpn config edit
 .RE

@@ -131,7 +131,7 @@ func (ctx *cliContext) openStore() *store.Store {
 	// CLI-triggered audits (ca_rotate has no API path at all) still need to
 	// reach Telegram — Notify() is a bare outbound call, safe here unlike
 	// slog logging, which stays daemon-only to keep -json/automation stderr clean.
-	s.OnAudit(telegram.New(s, nil, nil, nil).OnAudit)
+	s.OnAudit(telegram.New(s, ctx.p, nil, nil, nil).OnAudit)
 	return s
 }
 
@@ -175,7 +175,11 @@ func main() {
 			// sub-op flags (user/backup/telegram) live on FlagSets created inside
 			// the closure, so they don't exist yet for -h's default printer to find.
 			fs.Usage = func() {
-				fmt.Fprintf(os.Stderr, "usage: ovcp %s %s\n", c.name, c.usage)
+				if c.sub != nil {
+					fmt.Fprintln(os.Stderr, opsUsage(c.name, c.sub, c.subDesc))
+					return
+				}
+				fmt.Fprintf(os.Stderr, "usage: ovcp %s %s\n", c.name, c.desc)
 				fs.PrintDefaults()
 			}
 			body := c.run(fs) // registers flags on fs
@@ -204,7 +208,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	dnsGid := dnsGID(dnsRunAsGroup())
 	dnsSup := newDNSSupervisor(pp, dnsPath, s)
 	mgmt := controller.NewClient(sock, statusPath(sock))
-	tg := telegram.New(s, sup, dnsSup, mgmt)
+	tg := telegram.New(s, p, sup, dnsSup, mgmt)
 	// audits fire for CLI commands too, but only the running daemon owns
 	// ovcp.log/Telegram — logging/notifying there would just hit a bare CLI's stderr.
 	s.OnAudit(func(actor, action, detail string) {
@@ -528,9 +532,8 @@ func issueCert(p *pki.PKI, kind pki.CertKind, cn string, days int, pass []byte, 
 }
 
 // writeServerCert persists a freshly issued server cert+key; shared by init
-// and renew-server (CLI), takes effect on next `vpn restart`. Delegates to
-// api.Server.WriteServerCert — the same code the web UI's renew-server uses
-// — via a bare, HTTP-less instance, so the actual writes live in one place.
+// and `certificate renew` (CLI), takes effect on next `vpn restart`.
+// Delegates to api.Server.WriteServerCert via a bare, HTTP-less instance.
 func writeServerCert(pp paths, s *store.Store, ic *pki.IssuedCert) error {
 	return (&api.Server{ServerCert: pp.ServerCert, ServerKey: pp.ServerKey, Store: s}).WriteServerCert(ic)
 }

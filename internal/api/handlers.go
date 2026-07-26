@@ -69,7 +69,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u *store.U
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, map[string]any{
+	out := map[string]any{
 		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote,
 		"version": s.Version, "buildTarget": s.BuildTarget, "platform": runtime.GOOS + "/" + runtime.GOARCH,
 		"openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
@@ -79,7 +79,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User)
 		// — the UI polls /api/status at the same cadence so it's never asking
 		// faster than the data can actually change.
 		"statusPollSeconds": s.LoadConfig().EffectiveStatusInterval(),
-	})
+	}
+	// CA info for Settings' renew-CA card; store.Cert{}.Status() is the same
+	// classification every other cert-status display uses.
+	if ca, err := s.PKI.CACert(); err == nil {
+		out["caCN"] = ca.Subject.CommonName
+		out["caNotAfter"] = ca.NotAfter
+		out["caStatus"] = store.Cert{NotAfter: ca.NotAfter}.Status()
+	}
+	jsonOK(w, out)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -137,15 +145,15 @@ func (s *Server) handleCertList(w http.ResponseWriter, r *http.Request, u *store
 		return
 	}
 	type row struct {
-		Serial, CN, Kind string
-		IssuedAt         time.Time
-		NotAfter         time.Time
-		Revoked          bool
-		IncludeDNS       bool
+		Serial, CN, Kind, Status string
+		IssuedAt                 time.Time
+		NotAfter                 time.Time
+		Revoked                  bool
+		IncludeDNS               bool
 	}
 	out := []row{}
 	for _, c := range certs {
-		out = append(out, row{c.Serial, c.CN, c.Kind, c.IssuedAt, c.NotAfter, c.RevokedAt != nil, c.IncludeDNS})
+		out = append(out, row{c.Serial, c.CN, c.Kind, c.Status(), c.IssuedAt, c.NotAfter, c.RevokedAt != nil, c.IncludeDNS})
 	}
 	jsonOK(w, out)
 }
@@ -159,7 +167,7 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 		jsonErr(w, 400, "cn and passphrase required")
 		return
 	}
-	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days)
+	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days, false)
 	if err != nil {
 		s.pkiErr(w, err)
 		return
@@ -170,10 +178,19 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 }
 
 // issueClientCert issues a client cert, optionally password-protecting the
-// key, and records it in the store. Shared by handleIssue and handleExport.
-func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int) (*pki.IssuedCert, error) {
+// key, and records it in the store — plain issue (AddCert, errors on an
+// existing active cert) or renew (ReplaceCert + CRL regen) depending on
+// renew. Shared by handleIssue and handleExport, so a renewal issued
+// through export is exactly as atomic as a plain issue: the outgoing cert
+// is only ever revoked once the new one already exists, never before.
+func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int, renew bool) (*pki.IssuedCert, error) {
 	if days <= 0 {
 		days = 365
+	}
+	if renew {
+		if err := s.Store.RequireActiveCert(cn, "client"); err != nil {
+			return nil, err
+		}
 	}
 	ic, err := s.PKI.Issue(pki.KindClient, cn, days, []byte(passphrase))
 	if err != nil {
@@ -184,29 +201,50 @@ func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int)
 			return nil, err
 		}
 	}
-	if err := s.Store.AddCert(store.CertFrom(ic, "client")); err != nil {
+	if !renew {
+		if err := s.Store.AddCert(store.CertFrom(ic, "client")); err != nil {
+			return nil, err
+		}
+		return ic, nil
+	}
+	if err := s.Store.ReplaceCert(store.CertFrom(ic, "client")); err != nil {
 		return nil, err
 	}
-	return ic, nil
+	return ic, s.regenCRL([]byte(passphrase))
+}
+
+// regenCRL rebuilds the CRL from the store's full revoked set — the shared
+// tail end of anything that revokes a cert, whether directly (handleRevoke)
+// or as the side effect of a client renewal (issueClientCert).
+func (s *Server) regenCRL(passphrase []byte) error {
+	rev, err := s.Store.RevokedCerts()
+	if err != nil {
+		return err
+	}
+	entries := make([]pki.RevokedEntry, len(rev))
+	for i, c := range rev {
+		entries[i] = pki.RevokedEntry{SerialHex: c.Serial, RevokedAt: *c.RevokedAt}
+	}
+	return s.PKI.RegenCRL(entries, passphrase)
 }
 
 // WriteServerCert persists a freshly issued server cert+key to the paths
-// `serve` reads and records it in the store — the one place that writes
-// them, shared by handleRenewServer below and the CLI (init, renew-server)
-// via cmd/ovcp's writeServerCert, which wraps this in a bare *Server.
+// `serve` reads and records it in the store — shared by handleRenew below
+// and the CLI (init, certificate renew) via cmd/ovcp's writeServerCert.
 func (s *Server) WriteServerCert(ic *pki.IssuedCert) error {
-	if err := os.WriteFile(s.ServerCert, ic.CertPEM, 0o644); err != nil {
+	if err := pki.WriteFileAtomic(s.ServerCert, ic.CertPEM, 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(s.ServerKey, ic.KeyPEM, 0o600); err != nil {
+	if err := pki.WriteFileAtomic(s.ServerKey, ic.KeyPEM, 0o600); err != nil {
 		return err
 	}
 	return s.Store.ReplaceCert(store.CertFrom(ic, "server"))
 }
 
-// handleRenewServer reissues the server cert in place (same CN, new serial)
-// at the paths `serve` reads. Admin-only; needs a `vpn restart` to take effect.
-func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *store.User) {
+// handleRenew reissues the server cert in place (same CN, new serial) at the
+// paths `serve` reads. Admin-only; needs a `vpn restart` to take effect.
+// Client renewal is a separate path — handleExport's Renew flag.
+func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct {
 		Passphrase string
 		Days       int
@@ -222,6 +260,12 @@ func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *st
 		jsonErr(w, 400, "no server CN configured")
 		return
 	}
+	// fail fast if there's nothing active to replace; pkiErr maps
+	// ErrNoActiveCert to 400, same as export's Renew path.
+	if err := s.Store.RequireActiveCert("", "server"); err != nil {
+		s.pkiErr(w, err)
+		return
+	}
 	ic, err := s.PKI.Issue(pki.KindServer, s.DefaultRemote, in.Days, []byte(in.Passphrase))
 	if err != nil {
 		s.pkiErr(w, err)
@@ -231,7 +275,7 @@ func (s *Server) handleRenewServer(w http.ResponseWriter, r *http.Request, u *st
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	s.Store.Audit(u.Username, "renew_server", "cn="+s.DefaultRemote+" serial="+ic.SerialHex)
+	s.Store.Audit(u.Username, "renew", "kind=server cn="+s.DefaultRemote+" serial="+ic.SerialHex)
 	jsonOK(w, map[string]string{"serial": ic.SerialHex, "notAfter": ic.NotAfter.Format(time.RFC3339)})
 }
 
@@ -266,16 +310,7 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, u *store.U
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	rev, err := s.Store.RevokedCerts()
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	entries := make([]pki.RevokedEntry, len(rev))
-	for i, c := range rev {
-		entries[i] = pki.RevokedEntry{SerialHex: c.Serial, RevokedAt: *c.RevokedAt}
-	}
-	if err := s.PKI.RegenCRL(entries, []byte(in.Passphrase)); err != nil {
+	if err := s.regenCRL([]byte(in.Passphrase)); err != nil {
 		s.pkiErr(w, err)
 		return
 	}
@@ -288,7 +323,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 	var in struct {
 		CN, Passphrase, Remote, KeyPassphrase, Extra string
 		Days                                         int
-		SplitTunnel                                  bool
+		SplitTunnel, Renew                           bool
 	}
 	if !decode(r, &in) || in.CN == "" || in.Passphrase == "" {
 		jsonErr(w, 400, "cn and passphrase required")
@@ -306,12 +341,16 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		jsonErr(w, 400, ovpnconf.ErrNoRedirect.Error())
 		return
 	}
-	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days)
+	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days, in.Renew)
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
-	s.Store.Audit(u.Username, "issue", "cn="+in.CN+" (export)")
+	action := "issue"
+	if in.Renew {
+		action = "renew"
+	}
+	s.Store.Audit(u.Username, action, "cn="+in.CN+" (export)")
 	caPEM, err := s.PKI.CACertPEM()
 	if err != nil {
 		jsonErr(w, 500, err.Error())
@@ -435,18 +474,15 @@ func (s *Server) handleTelegramConfigGet(w http.ResponseWriter, r *http.Request,
 
 // handleTelegramConfigSet sets token and/or admin independently — empty means
 // unchanged for that field; SetToken validates against getMe when given.
+// Admin is applied before token: SetAdmin's goodbye message to the outgoing
+// admin needs the chat id SetToken would otherwise have already wiped, had a
+// caller changed both in one request (SetToken clears it on any real token
+// change, same unlink-on-identity-change rule SetAdmin follows for its own field).
 func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Token, Admin string }
 	if !decode(r, &in) {
 		jsonErr(w, 400, "bad json")
 		return
-	}
-	if in.Token != "" {
-		if err := telegram.SetToken(s.Store, in.Token); err != nil {
-			jsonErr(w, 400, err.Error())
-			return
-		}
-		s.Store.Audit(u.Username, "telegram_token_change", "")
 	}
 	if in.Admin != "" {
 		if err := telegram.SetAdmin(s.Store, in.Admin); err != nil {
@@ -454,6 +490,13 @@ func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		s.Store.Audit(u.Username, "telegram_admin_change", "admin="+in.Admin)
+	}
+	if in.Token != "" {
+		if err := telegram.SetToken(s.Store, in.Token); err != nil {
+			jsonErr(w, 400, err.Error())
+			return
+		}
+		s.Store.Audit(u.Username, "telegram_token_change", "")
 	}
 	jsonOK(w, s.Telegram.Status())
 }
@@ -888,7 +931,7 @@ func (s *Server) pkiErr(w http.ResponseWriter, err error) {
 		jsonErr(w, 403, "wrong CA passphrase")
 		return
 	}
-	if errors.Is(err, store.ErrDuplicateCN) {
+	if errors.Is(err, store.ErrDuplicateCN) || errors.Is(err, store.ErrNoActiveCert) {
 		jsonErr(w, 400, err.Error())
 		return
 	}

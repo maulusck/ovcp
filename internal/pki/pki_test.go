@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,60 @@ func newCA(t *testing.T) *PKI {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// TestWriteFileAtomic covers the happy path (content actually lands, no
+// leftover .tmp) and that a stale .tmp from an earlier crashed write never
+// blocks a fresh one — WriteFileAtomic removes it before O_EXCL, not the
+// other way around.
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+
+	if err := WriteFileAtomic(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "v1" {
+		t.Fatalf("got %q, want v1", got)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("temp file must not survive a successful write")
+	}
+
+	if err := os.WriteFile(path+".tmp", []byte("stale, from a crashed prior write"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFileAtomic(path, []byte("v2"), 0o644); err != nil {
+		t.Fatalf("a stale .tmp must not block a fresh write: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "v2" {
+		t.Fatalf("got %q, want v2", got)
+	}
+}
+
+// TestWriteFileAtomicLeavesOriginalOnFailure: if WriteFileAtomic can't even
+// create the temp file (here: a read-only directory, standing in for any
+// failure before the rename), the original file must be completely
+// untouched — the whole point of writing to a temp name first.
+func TestWriteFileAtomicLeavesOriginalOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "target.txt")
+	if err := WriteFileAtomic(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	if err := WriteFileAtomic(path, []byte("new"), 0o644); err == nil {
+		t.Fatal("expected an error writing into a read-only directory")
+	}
+	os.Chmod(dir, 0o700)
+
+	if got, _ := os.ReadFile(path); string(got) != "original" {
+		t.Fatalf("original must survive a failed write, got %q", got)
+	}
 }
 
 func TestInitCA(t *testing.T) {
@@ -53,6 +108,56 @@ func TestRotate(t *testing.T) {
 	// CA identity survives rotation: issuing still works under the new key.
 	if _, err := p.Issue(KindClient, "alice", 365, newPass); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRenewCA: the CA cert gets a new serial and extended validity, but the
+// key doesn't change — a cert issued before renewal must still verify
+// against the renewed CA cert.
+func TestRenewCA(t *testing.T) {
+	p := newCA(t)
+	before, err := p.CACert()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ic, err := p.Issue(KindClient, "alice", 365, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preCert, err := parseCertPEM(ic.CertPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	renewed, err := p.RenewCA(20, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.SerialNumber.Cmp(before.SerialNumber) == 0 {
+		t.Fatal("RenewCA must issue a fresh serial")
+	}
+	if !renewed.NotAfter.After(before.NotAfter) {
+		t.Fatalf("RenewCA must extend validity: before=%v after=%v", before.NotAfter, renewed.NotAfter)
+	}
+	if renewed.Subject.CommonName != before.Subject.CommonName {
+		t.Fatalf("RenewCA must keep the CA's CN, got %q want %q", renewed.Subject.CommonName, before.Subject.CommonName)
+	}
+
+	after, err := p.CACert()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preCert.CheckSignatureFrom(after); err != nil {
+		t.Fatalf("a cert issued before RenewCA must still verify against the renewed CA (same key): %v", err)
+	}
+
+	// same key: issuing still works under the unchanged passphrase.
+	if _, err := p.Issue(KindClient, "bob", 365, pass); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.RenewCA(20, []byte("wrong")); err != ErrBadPassphrase {
+		t.Fatalf("want ErrBadPassphrase, got %v", err)
 	}
 }
 

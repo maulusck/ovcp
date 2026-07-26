@@ -33,13 +33,11 @@ var (
 func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 	cn := fs.String("cn", "", "client CN (default: global aggregate)")
 	follow := fs.Bool("follow", false, "live top-like view, via a running serve's control socket (ignores -json)")
-	interval := new(int)
-	fs.IntVar(interval, "interval", 2, "poll interval in seconds, -follow only")
-	fs.IntVar(interval, "int", 2, "alias for -interval")
+	interval := fs.Int("interval", 2, "poll interval in seconds, -follow only")
 	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket, -follow only")
 	return func(ctx *cliContext) {
 		if args := fs.Args(); len(args) > 0 && args[0] == "config" {
-			configOp("stats config", statsConfigOps, statsConfigBodies)(ctx, args[1:])
+			configOp("stats config", statsConfigOps, configOpDesc, statsConfigBodies)(ctx, args[1:])
 			return
 		}
 		if *follow {

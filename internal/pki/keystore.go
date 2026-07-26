@@ -90,7 +90,7 @@ func sealToFile(path string, plaintext, passphrase []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return WriteFileAtomic(path, data, 0o600)
 }
 
 func openFromFile(path string, passphrase []byte) ([]byte, error) {

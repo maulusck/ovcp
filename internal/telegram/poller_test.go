@@ -5,12 +5,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 )
 
@@ -93,7 +96,7 @@ func TestHandleCommandCoversRegisteredSurface(t *testing.T) {
 
 	s, _ := store.Open(filepath.Join(t.TempDir(), "ovcp.db"))
 	defer s.Close()
-	p := &Poller{s: s, vpn: fakeLife{}, dns: fakeLife{}}
+	p := &Poller{s: s, p: pki.New(t.TempDir()), vpn: fakeLife{}, dns: fakeLife{}}
 	b := newBot("t")
 	ctx := context.Background()
 
@@ -114,6 +117,61 @@ func TestHandleCommandCoversRegisteredSurface(t *testing.T) {
 	}
 }
 
+// TestCertsText covers /certs' grouping: expiring/expired/revoked/valid
+// sections, the CA folded in via AllCerts, and that revoked wins the
+// classification even for a cert that's also past NotAfter.
+func TestCertsText(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "pki"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	caPKI := pki.New(filepath.Join(dir, "pki"))
+	if err := caPKI.InitCA("Test CA", 1, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := store.Open(filepath.Join(dir, "ovcp.db"))
+	defer s.Close()
+	now := time.Now()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(s.AddCert(store.Cert{Serial: "s1", CN: "alice", Kind: "client", CertPEM: []byte("x"), IssuedAt: now, NotAfter: now.Add(5 * 24 * time.Hour)}))
+	must(s.AddCert(store.Cert{Serial: "s2", CN: "bob", Kind: "client", CertPEM: []byte("x"), IssuedAt: now, NotAfter: now.Add(-3 * 24 * time.Hour)}))
+	must(s.AddCert(store.Cert{Serial: "s3", CN: "carol", Kind: "client", CertPEM: []byte("x"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}))
+	must(s.Revoke("s3", now))
+
+	po := &Poller{s: s, p: caPKI}
+	got := po.certsText()
+
+	for _, want := range []string{
+		"Certificates (4 total)",
+		"⏳ Expiring (1)", "alice (client) — 4d left",
+		"❌ Expired (1)", "bob (client) — expired 3d ago",
+		"🚫 Revoked (1)", "carol (client) — revoked",
+		"✅ Valid (1)", "Test CA (ca) — until",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("certsText() missing %q, got:\n%s", want, got)
+		}
+	}
+
+	// sections must appear most-urgent-first, not just all be present.
+	var positions []int
+	for _, heading := range []string{"⏳ Expiring", "❌ Expired", "🚫 Revoked", "✅ Valid"} {
+		i := strings.Index(got, heading)
+		if i < 0 {
+			t.Fatalf("heading %q not found in:\n%s", heading, got)
+		}
+		positions = append(positions, i)
+	}
+	if !slices.IsSorted(positions) {
+		t.Fatalf("sections out of order (want expiring, expired, revoked, valid), got:\n%s", got)
+	}
+}
+
 // TestDNSArgForm covers "/dns start|stop|restart" folding onto the same
 // tokens the inline keyboard's callback_data uses — not listed in
 // botCommands (no menu clutter), so the surface-coverage test above can't see it.
@@ -130,7 +188,7 @@ func TestDNSArgForm(t *testing.T) {
 
 	s, _ := store.Open(filepath.Join(t.TempDir(), "ovcp.db"))
 	defer s.Close()
-	p := &Poller{s: s, vpn: fakeLife{}, dns: fakeLife{}}
+	p := &Poller{s: s, p: pki.New(t.TempDir()), vpn: fakeLife{}, dns: fakeLife{}}
 	b := newBot("t")
 	ctx := context.Background()
 

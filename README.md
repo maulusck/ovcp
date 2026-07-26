@@ -96,7 +96,7 @@ the fix.
 Issue a client and hand them a ready-to-import profile:
 
 ```sh
-ovcp certificate export -cn alice -remote vpn.example.com > alice.ovpn
+ovcp certificate issue -cn alice -export -remote vpn.example.com > alice.ovpn
 ```
 
 **Production**, via an installed package:

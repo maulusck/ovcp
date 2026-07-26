@@ -70,9 +70,9 @@ func TestSweepExpiringIncludesCA(t *testing.T) {
 	defer s.Close()
 	telegram.SetToken(s, "t")
 	telegram.SetAdmin(s, "555")
-	tg := telegram.New(s, nil, nil, nil)
 
 	p := pki.New(filepath.Join(dir, "pki"))
+	tg := telegram.New(s, p, nil, nil, nil)
 	writeSoonExpiringCA(t, filepath.Join(dir, "pki"), "OVCP CA")
 
 	sweepExpiring(s, p, tg)

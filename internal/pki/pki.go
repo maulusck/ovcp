@@ -39,6 +39,43 @@ const MaxCNLen = 64
 
 func New(dir string) *PKI { return &PKI{Dir: dir} }
 
+// WriteFileAtomic writes data to path the durable way — the one write path
+// for every load-bearing PKI file (CA cert, CA key, server cert/key), so
+// neither a crash nor a power loss mid-write can ever leave one truncated:
+// a reader always sees either the old file or the complete new one.
+// fsync before rename (data really on disk, not just the page cache);
+// rename (atomic on the same filesystem); fsync the directory too, so the
+// rename itself survives a power loss, not just a process crash.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	os.Remove(tmp) // clear a stale tmp (crashed prior write, or a symlink) before O_EXCL below
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// best-effort: the rename above already succeeded either way, this only
+	// hardens the last mile against power loss, not a correctness requirement.
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		dir.Sync()
+		dir.Close()
+	}
+	return nil
+}
+
 func (p *PKI) caCertPath() string { return filepath.Join(p.Dir, "ca.crt") }
 func (p *PKI) caKeyPath() string  { return filepath.Join(p.Dir, "ca.key.enc") }
 
@@ -46,6 +83,22 @@ func (p *PKI) caKeyPath() string  { return filepath.Join(p.Dir, "ca.key.enc") }
 func (p *PKI) CRLPath() string { return filepath.Join(p.Dir, "crl.pem") }
 
 var ErrCAExists = errors.New("pki: CA already initialized")
+
+// caTemplate is the self-signed CA cert shape shared by InitCA and RenewCA —
+// same fields either way, only the key/subject/serial/validity differ.
+func caTemplate(subject pkix.Name, serial *big.Int, years int) *x509.Certificate {
+	now := time.Now()
+	return &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               subject,
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.AddDate(years, 0, 0),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLenZero:        true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+}
 
 // InitCA creates a new ECDSA P-256 CA. Refuses to overwrite.
 func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
@@ -60,17 +113,7 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
-	tpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: cn},
-		NotBefore:             now.Add(-5 * time.Minute),
-		NotAfter:              now.AddDate(years, 0, 0),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		MaxPathLenZero:        true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
+	tpl := caTemplate(pkix.Name{CommonName: cn}, serial, years)
 	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
 	if err != nil {
 		return err
@@ -82,11 +125,36 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 	if err := sealToFile(p.caKeyPath(), keyDER, passphrase); err != nil {
 		return err
 	}
-	if err := os.WriteFile(p.caCertPath(), pemEncode("CERTIFICATE", der), 0o644); err != nil {
+	if err := WriteFileAtomic(p.caCertPath(), pemEncode("CERTIFICATE", der), 0o644); err != nil {
 		return err
 	}
 	// empty CRL so crl-verify can be configured from day one
 	return p.RegenCRL(nil, passphrase)
+}
+
+// RenewCA reissues the CA certificate in place with a new serial and
+// extended validity, keeping the same key — every already-issued cert stays
+// valid, since only the CA's signing key (unchanged) matters for
+// verification, not which CA cert happens to be on disk. Distinct from
+// Rotate, which only re-encrypts the key under a new passphrase.
+func (p *PKI) RenewCA(years int, passphrase []byte) (*x509.Certificate, error) {
+	cur, key, err := p.loadCA(passphrase)
+	if err != nil {
+		return nil, err
+	}
+	serial, err := randSerial()
+	if err != nil {
+		return nil, err
+	}
+	tpl := caTemplate(cur.Subject, serial, years)
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := WriteFileAtomic(p.caCertPath(), pemEncode("CERTIFICATE", der), 0o644); err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(der)
 }
 
 // CACertPEM returns the CA certificate (public; no passphrase needed).
@@ -141,11 +209,7 @@ func (p *PKI) Rotate(oldPassphrase, newPassphrase []byte) error {
 	if err != nil {
 		return err
 	}
-	tmp := p.caKeyPath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p.caKeyPath())
+	return WriteFileAtomic(p.caKeyPath(), data, 0o600)
 }
 
 type CertKind int
@@ -233,7 +297,7 @@ func (p *PKI) RegenCRL(revoked []RevokedEntry, passphrase []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p.CRLPath(), pemEncode("X509 CRL", der), 0o644)
+	return WriteFileAtomic(p.CRLPath(), pemEncode("X509 CRL", der), 0o644)
 }
 
 func randSerial() (*big.Int, error) {

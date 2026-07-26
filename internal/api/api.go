@@ -29,8 +29,8 @@ type Server struct {
 	DataDir         string               // data directory root (backup source)
 	ConfigPath      string               // rendered server.conf
 	TLSCrypt        string               // tls-crypt key path
-	ServerCert      string               // openvpn server cert path (renew-server target)
-	ServerKey       string               // openvpn server key path (renew-server target)
+	ServerCert      string               // openvpn server cert path (certificate renew target)
+	ServerKey       string               // openvpn server key path (certificate renew target)
 	DefaultRemote   string               // OVCP_SERVER_CN / server cert CN; default client remote
 	Version         string               // build version, for the status export
 	BuildTarget     string               // Makefile TARGET/Containerfile arch this binary was built for, e.g. "host", "arm64-musl"
@@ -80,7 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/clients/kill", s.wrap(auth.RoleOperator, s.handleKill))
 	mux.Handle("POST /api/certs", s.wrap(auth.RoleOperator, s.handleIssue))
 	mux.Handle("POST /api/certs/revoke", s.wrap(auth.RoleOperator, s.handleRevoke))
-	mux.Handle("POST /api/certs/renew-server", s.wrap(auth.RoleAdmin, s.handleRenewServer))
+	mux.Handle("POST /api/certs/renew", s.wrap(auth.RoleAdmin, s.handleRenew))
 	mux.Handle("POST /api/backup", s.wrap(auth.RoleAdmin, s.handleBackup))
 	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
 	mux.Handle("PUT /api/vpn/config", s.wrap(auth.RoleAdmin, s.handleVPNConfigPut))

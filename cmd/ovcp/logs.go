@@ -61,10 +61,10 @@ var logConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
 // plain idempotent copytruncate, and RetentionDays is the prune policy.
 func cmdLogs(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "logs", logsOps)
+		op, rest := opArg(fs, "logs", logsOps, logsOpDesc)
 		switch op {
 		case "config":
-			configOp("logs config", logConfigOps, logConfigBodies)(ctx, rest)
+			configOp("logs config", logConfigOps, configOpDesc, logConfigBodies)(ctx, rest)
 		case "rotate":
 			rfs := newFlags("logs rotate")
 			subUsage(rfs, "logs rotate")

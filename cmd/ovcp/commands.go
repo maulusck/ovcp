@@ -30,12 +30,19 @@ import (
 
 // command is one subcommand: run registers flags on fs, returning the closure executed once parsed.
 // commands is the single source of truth dispatch, helpText, and completeArgs all read.
+//
+// Help is three tiers, each answering only the question it's asked: `ovcp -h`
+// lists every command with desc, a few words (tier 1); `ovcp <command> -h` (or
+// a missing/bad op) lists sub with subDesc, still a few words each (tier 2);
+// `ovcp <command> <op> -h` prints that op's real flags via fs.PrintDefaults()
+// (tier 3, already exists — every flag already carries its own description).
 type command struct {
-	name  string
-	alias string // short form accepted alongside name in dispatch/completion; "" if none
-	usage string
-	sub   []string
-	run   func(fs *flag.FlagSet) func(ctx *cliContext)
+	name    string
+	alias   string // short form accepted alongside name in dispatch/completion; "" if none
+	desc    string
+	sub     []string
+	subDesc map[string]string
+	run     func(fs *flag.FlagSet) func(ctx *cliContext)
 }
 
 // flagNames registers c's flags on a throwaway FlagSet (same code path as
@@ -48,13 +55,28 @@ func (c command) flagNames() []string {
 	return names
 }
 
+// opsUsage renders tier 2: "usage: ovcp <name> <op>" plus one line per op
+// with its short description (desc[o] == "" prints a bare name, never
+// breaks) — shared by a missing/bad op's error and `ovcp <command> -h`, so
+// the two can't drift apart into different listings of the same ops.
+func opsUsage(name string, ops []string, desc map[string]string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "usage: ovcp %s <op>\n", name)
+	tw := tabwriter.NewWriter(&b, 0, 4, 3, ' ', 0)
+	for _, o := range ops {
+		fmt.Fprintf(tw, "  %s\t%s\n", o, desc[o])
+	}
+	tw.Flush()
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // opArgList validates args[0] against ops, returning it plus the rest —
 // opArg's shape without needing an already-Parse'd FlagSet, for op-dispatch
 // one level deeper (e.g. "logs config get", where "config"'s own opArg
 // already split "get" off as plain rest).
-func opArgList(name string, ops []string, args []string) (op string, rest []string) {
+func opArgList(name string, ops []string, desc map[string]string, args []string) (op string, rest []string) {
 	if len(args) < 1 || !slices.Contains(ops, args[0]) {
-		die(fmt.Errorf("usage: ovcp %s %s", name, strings.Join(ops, "|")))
+		die(fmt.Errorf("%s", opsUsage(name, ops, desc)))
 	}
 	return args[0], args[1:]
 }
@@ -62,16 +84,16 @@ func opArgList(name string, ops []string, args []string) (op string, rest []stri
 // opArg validates fs's first positional arg against ops, returning it plus
 // the rest. Op-dispatched commands must never register flags on fs itself:
 // main() calls fs.Parse before the op is known, so a flag placed after the op would never be parsed.
-func opArg(fs *flag.FlagSet, name string, ops []string) (op string, rest []string) {
-	return opArgList(name, ops, fs.Args())
+func opArg(fs *flag.FlagSet, name string, ops []string, desc map[string]string) (op string, rest []string) {
+	return opArgList(name, ops, desc, fs.Args())
 }
 
 // configOp is every "<name> config get|set[|preview|edit]" dispatch: same
 // wiring reused by vpn/dns/logs/stats/telegram instead of five hand-rolled
 // copies. bodies must have one entry per ops.
-func configOp(name string, ops []string, bodies map[string]func(fs *flag.FlagSet) func(ctx *cliContext)) func(ctx *cliContext, rest []string) {
+func configOp(name string, ops []string, desc map[string]string, bodies map[string]func(fs *flag.FlagSet) func(ctx *cliContext)) func(ctx *cliContext, rest []string) {
 	return func(ctx *cliContext, rest []string) {
-		op, crest := opArgList(name, ops, rest)
+		op, crest := opArgList(name, ops, desc, rest)
 		ofs := newFlags(name + " " + op)
 		subUsage(ofs, name+" "+op)
 		body := bodies[op](ofs)
@@ -93,37 +115,87 @@ func parseBoolArg(s string) (bool, error) {
 }
 
 var (
-	vpnOps            = []string{"start", "stop", "restart", "reconnect", "status", "kill", "config"}
-	vpnConfigOps      = []string{"get", "set", "preview", "edit"}
-	dnsOps            = []string{"start", "stop", "restart", "status", "config"} // no reconnect: dnsmasq has no such signal
-	dnsConfigOps      = []string{"get", "set"}
-	certOps           = []string{"issue", "list", "revoke", "export", "renew-server"}
-	recordOps         = []string{"list", "edit", "include", "exclude"}
-	userOps           = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
-	backupOps         = []string{"create", "restore"}
-	debugOps          = []string{"on", "off"}
-	telegramOps       = []string{"config", "start", "stop", "restart", "status"}
+	vpnOps    = []string{"start", "stop", "restart", "reconnect", "status", "kill", "config"}
+	vpnOpDesc = map[string]string{
+		"start": "bring the tunnel up", "stop": "bring it down",
+		"restart": "full stop + fresh start", "reconnect": "SIGUSR1, no restart",
+		"status": "pid, uptime, connected clients", "kill": "disconnect one client (-cn NAME)",
+		"config": "get|set|preview|edit server settings",
+	}
+	vpnConfigOps = []string{"get", "set", "preview", "edit"}
+	configOpDesc = map[string]string{ // shared by every "<x> config" dispatch below
+		"get": "print the persisted config", "set": "change and persist settings",
+		"preview": "show a set's diff, unsaved", "edit": "$EDITOR for raw extra directives",
+	}
+	dnsOps    = []string{"start", "stop", "restart", "status", "config"} // no reconnect: dnsmasq has no such signal
+	dnsOpDesc = map[string]string{
+		"start": "bring dnsmasq up", "stop": "bring it down",
+		"restart": "full stop + fresh start", "status": "pid, uptime",
+		"config": "get|set dnsmasq settings",
+	}
+	dnsConfigOps = []string{"get", "set"}
+	certOps      = []string{"issue", "list", "revoke", "renew"}
+	certOpDesc   = map[string]string{
+		"issue": "issue or renew a client cert (-export for a .ovpn)", "list": "list certs, filter/sort",
+		"revoke": "revoke a cert, regen CRL", "renew": "renew or rename the server cert",
+	}
+	caOps    = []string{"rotate", "renew", "status"}
+	caOpDesc = map[string]string{
+		"status": "CN, expiry, status — read-only",
+		"rotate": "re-encrypt the CA key under a new passphrase",
+		"renew":  "reissue the CA cert, same key, extended validity",
+	}
+	recordOps    = []string{"list", "edit", "include", "exclude"}
+	recordOpDesc = map[string]string{
+		"list": "list internal DNS records", "edit": "$EDITOR for custom.hosts",
+		"include": "resolve this CN while connected (-cn NAME)", "exclude": "stop resolving this CN (-cn NAME)",
+	}
+	userOps    = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
+	userOpDesc = map[string]string{
+		"add": "create an account", "list": "list accounts", "del": "delete an account",
+		"disable": "lock an account out", "enable": "unlock an account",
+		"passwd": "change a password", "totp": "enable/disable 2FA",
+	}
+	backupOps    = []string{"create", "restore"}
+	backupOpDesc = map[string]string{
+		"create": "encrypted archive of CA, config, database", "restore": "extract an archive into -data",
+	}
+	debugOps       = []string{"on", "off"}
+	debugOpDesc    = map[string]string{"on": "verbose logging, no restart", "off": "back to normal logging"}
+	telegramOps    = []string{"config", "start", "stop", "restart", "status"}
+	telegramOpDesc = map[string]string{
+		"config": "get|set token/admin", "start": "start the poller", "stop": "stop the poller",
+		"restart": "restart the poller", "status": "token/admin/chat-linked state",
+	}
 	telegramConfigOps = []string{"get", "set"}
+	logsOpDesc        = map[string]string{
+		"config": "get|set rotation policy", "rotate": "copytruncate all logs now",
+		"status": "sizes + rotation state",
+	}
 )
 
+// desc (tier 1, ovcp -h) stays to a few words — each command's own ops get
+// their few-word explanation one level deeper (ovcp <command> -h, tier 2),
+// and every op's real flags are a level deeper still (tier 3, already
+// existing fs.PrintDefaults()). Full prose lives in ovcp(8), not here.
 var commands = []command{
-	{name: "init", usage: "-server-cn HOST [-admin NAME]   one-shot setup: CA, server cert, tls-crypt, config, admin user", run: cmdInit},
-	{name: "certificate", alias: "cert", usage: "issue|list|revoke|export|renew-server   manage certificates", sub: certOps, run: cmdCertificate},
-	{name: "rotate-ca", usage: "re-encrypt the CA key under a new passphrase", run: cmdRotateCA},
-	{name: "backup", usage: "create [-out FILE] | restore [-force] FILE   encrypted export/import: CA, CRL, tls-crypt, config, database", sub: backupOps, run: cmdBackup},
-	{name: "status", usage: "VPN process + connected clients", run: cmdStatus},
-	{name: "stats", usage: "[-cn NAME] [-follow] [-interval N] | config get|set   traffic history, live follow view, or sampling config", run: cmdStats},
-	{name: "vpn", usage: "start|stop|restart|reconnect|status|kill|config   manage the openvpn worker + its config get|set|preview|edit (kill -cn NAME disconnects one client)", sub: vpnOps, run: cmdVPN},
-	{name: "dns", usage: "start|stop|restart|status|config   manage the dnsmasq worker + its config get|set -block-internet", sub: dnsOps, run: cmdDNS},
-	{name: "record", usage: "list [-status] [-kind] [-sort] [-desc] | edit | include|exclude -cn NAME   manage internal DNS records", sub: recordOps, run: cmdRecord},
-	{name: "logs", usage: "config get|set | rotate | status   manage log rotation for openvpn.log/ovcp.log/dnsmasq.log", sub: logsOps, run: cmdLogs},
-	{name: "debug", usage: "on|off   toggle verbose logging on a running serve (no restart)", sub: debugOps, run: cmdDebug},
-	{name: "telegram", usage: "config get|set [-token] [-admin ID|@user] | start|stop|restart|status   notify+control bot", sub: telegramOps, run: cmdTelegram},
-	{name: "user", usage: "add|list|del|disable|enable|passwd|totp[-off]", sub: userOps, run: cmdUser},
-	{name: "audit", usage: "last 50 audit entries", run: cmdAudit},
-	{name: "serve", usage: "[-listen ADDR] [-mgmt PATH] [-ctrl PATH]   run admin UI + API", run: cmdServe},
-	{name: "version", usage: "print version", run: cmdVersion},
-	{name: "completion", usage: "bash|zsh|fish   print a shell completion script", sub: []string{"bash", "zsh", "fish"}, run: cmdCompletion},
+	{name: "init", desc: "one-shot setup: CA, server cert, admin user", run: cmdInit},
+	{name: "certificate", alias: "cert", desc: "issue, list, revoke, renew certs", sub: certOps, subDesc: certOpDesc, run: cmdCertificate},
+	{name: "ca", desc: "CA passphrase rotation or cert renewal, CLI-only", sub: caOps, subDesc: caOpDesc, run: cmdCA},
+	{name: "backup", desc: "encrypted export/import: CA, config, database", sub: backupOps, subDesc: backupOpDesc, run: cmdBackup},
+	{name: "status", desc: "VPN process + connected clients", run: cmdStatus},
+	{name: "stats", desc: "traffic history, live follow, sampling config", run: cmdStats},
+	{name: "vpn", desc: "manage the openvpn worker", sub: vpnOps, subDesc: vpnOpDesc, run: cmdVPN},
+	{name: "dns", desc: "manage the dnsmasq worker", sub: dnsOps, subDesc: dnsOpDesc, run: cmdDNS},
+	{name: "record", desc: "manage internal DNS records", sub: recordOps, subDesc: recordOpDesc, run: cmdRecord},
+	{name: "logs", desc: "log rotation for openvpn/ovcp/dnsmasq logs", sub: logsOps, subDesc: logsOpDesc, run: cmdLogs},
+	{name: "debug", desc: "toggle verbose logging on a running serve", sub: debugOps, subDesc: debugOpDesc, run: cmdDebug},
+	{name: "telegram", desc: "notify + control bot", sub: telegramOps, subDesc: telegramOpDesc, run: cmdTelegram},
+	{name: "user", desc: "manage admin UI accounts", sub: userOps, subDesc: userOpDesc, run: cmdUser},
+	{name: "audit", desc: "last 50 audit entries", run: cmdAudit},
+	{name: "serve", desc: "run admin UI + API", run: cmdServe},
+	{name: "version", desc: "print version", run: cmdVersion},
+	{name: "completion", desc: "shell completion script", sub: []string{"bash", "zsh", "fish"}, run: cmdCompletion},
 }
 
 // subUsage sets fs.Usage to ovcp's standard "usage: ovcp <path> ..." line, so
@@ -135,12 +207,11 @@ func subUsage(fs *flag.FlagSet, path string) {
 	}
 }
 
-// cmdCertificate wraps the certificate lifecycle ops. Each op's body is the
-// same cmdIssue/cmdList/cmdRevoke/cmdExport/cmdRenewServer function that used
-// to be its own top-level command — only how it's reached changed.
+// cmdCertificate wraps the certificate lifecycle ops: issue (client,
+// create+renew+export), list, revoke, renew (server only — see cmdRenew).
 func cmdCertificate(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "certificate", certOps)
+		op, rest := opArg(fs, "certificate", certOps, certOpDesc)
 		cfs := newFlags("certificate " + op)
 		subUsage(cfs, "certificate "+op)
 		var body func(ctx *cliContext)
@@ -151,10 +222,8 @@ func cmdCertificate(fs *flag.FlagSet) func(ctx *cliContext) {
 			body = cmdList(cfs)
 		case "revoke":
 			body = cmdRevoke(cfs)
-		case "export":
-			body = cmdExport(cfs)
-		case "renew-server":
-			body = cmdRenewServer(cfs)
+		case "renew":
+			body = cmdRenew(cfs)
 		}
 		cfs.Parse(rest)
 		body(ctx)
@@ -171,10 +240,11 @@ func helpText() string {
 		if c.alias != "" {
 			name += " (" + c.alias + ")"
 		}
-		fmt.Fprintf(tw, "  %s\t%s\n", name, c.usage)
+		fmt.Fprintf(tw, "  %s\t%s\n", name, c.desc)
 	}
 	tw.Flush()
-	b.WriteString("\n-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before\n")
+	b.WriteString("\novcp <command> -h lists that command's own ops; ovcp <command> <op> -h its flags.\n")
+	b.WriteString("-data DIR overrides $OVCP_DATA (default /var/lib/ovcp); must come before\n")
 	b.WriteString("the command, e.g. ovcp -data /tmp/ovcp init ...\n")
 	b.WriteString("-no-color disables ANSI colors; -debug turns on debug-level logging.\n")
 	b.WriteString("-json switches every command to JSON output (JSON log lines for serve);\n")
@@ -218,45 +288,118 @@ func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// cmdIssue is client-only — a server has one cert, touched only by `init`/
+// `certificate renew` — and covers create+renew (-renew) and raw or bundle
+// output (-export).
 func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 	cn := fs.String("cn", "", "common name (required)")
-	kindS := fs.String("kind", "client", "client|server")
+	renew := fs.Bool("renew", false, "replace an existing active cert for this CN (else: error if one exists)")
 	days := fs.Int("days", 365, "validity (days)")
-	out := fs.String("out", "", "write key+cert to files with this prefix (server certs)")
-	keyPass := fs.String("key-pass", "", "encrypt private key with this password (client certs)")
+	out := fs.String("out", "", "write to files with this prefix instead of printing (.crt/.key, or .ovpn with -export)")
+	keyPass := fs.String("key-pass", "", "encrypt private key with this password")
+	export := fs.Bool("export", false, "print a ready .ovpn bundle instead of raw cert+key")
+	remote := fs.String("remote", "", "-export: server host clients connect to (default: OVCP_SERVER_CN / server cert CN)")
+	port := fs.Int("port", 0, "-export: server port (default: the configured server port)")
+	proto := fs.String("proto", "", "-export: udp|tcp (default: the configured server proto)")
+	serverCN := fs.String("server-cn", "", "-export: verify-x509-name value")
+	splitTunnel := fs.Bool("split-tunnel", false, "-export: keep the client's own default route (needs server redirect on)")
+	customOpts := fs.String("custom-opts", "", "-export: custom client directives: comma-separated, a file via $(cat FILE), or - for $EDITOR")
 	return func(ctx *cliContext) {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
 		}
 		requirePositive(*days, "days")
-		kind := pki.KindClient
-		if *kindS == "server" {
-			kind = pki.KindServer
-		}
-		if kind == pki.KindServer && *keyPass != "" {
-			die(fmt.Errorf("-key-pass is client-only: an encrypted server key can't be unlocked non-interactively when openvpn starts"))
-		}
-		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := issueCert(ctx.p, kind, *cn, *days, pass, *keyPass)
-		die(err)
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.AddCert(store.CertFrom(ic, *kindS)))
-		refreshCertsHostsCLI(ctx.dataDir, s)
-		s.Audit("cli", "issue", fmt.Sprintf("cn=%s kind=%s serial=%s", *cn, *kindS, ic.SerialHex))
-		o := issueOut{Serial: ic.SerialHex}
-		if *out != "" {
-			die(os.WriteFile(*out+".crt", ic.CertPEM, 0o644))
-			die(os.WriteFile(*out+".key", ic.KeyPEM, 0o600))
-			o.CertFile, o.KeyFile = *out+".crt", *out+".key"
-		} else {
-			o.CertPEM, o.KeyPEM = string(ic.CertPEM), string(ic.KeyPEM)
+		if *renew {
+			if err := s.RequireActiveCert(*cn, "client"); err != nil {
+				die(fmt.Errorf("%w — omit -renew to issue a new one", err))
+			}
 		}
-		output(o, func(o issueOut) {
-			if o.CertFile != "" {
-				fmt.Println("wrote", o.CertFile, o.KeyFile)
+		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
+		ic, err := issueCert(ctx.p, pki.KindClient, *cn, *days, pass, *keyPass)
+		die(err)
+		action := "issue"
+		if *renew {
+			action = "renew"
+			die(s.ReplaceCert(store.CertFrom(ic, "client")))
+			die(regenCRLFromStore(ctx.p, s, pass))
+		} else if err := s.AddCert(store.CertFrom(ic, "client")); err != nil {
+			die(fmt.Errorf("%w — add -renew to replace it", err))
+		}
+		refreshCertsHostsCLI(ctx.dataDir, s)
+		s.Audit("cli", action, fmt.Sprintf("cn=%s serial=%s", *cn, ic.SerialHex))
+
+		if !*export {
+			o := issueOut{Serial: ic.SerialHex}
+			if *out != "" {
+				die(os.WriteFile(*out+".crt", ic.CertPEM, 0o644))
+				die(os.WriteFile(*out+".key", ic.KeyPEM, 0o600))
+				o.CertFile, o.KeyFile = *out+".crt", *out+".key"
 			} else {
-				fmt.Print(o.CertPEM, o.KeyPEM)
+				o.CertPEM, o.KeyPEM = string(ic.CertPEM), string(ic.KeyPEM)
+			}
+			output(o, func(o issueOut) {
+				if o.CertFile != "" {
+					fmt.Println("wrote", o.CertFile, o.KeyFile)
+				} else {
+					fmt.Print(o.CertPEM, o.KeyPEM)
+				}
+				fmt.Fprintln(os.Stderr, "serial:", o.Serial)
+			})
+			return
+		}
+
+		if *remote == "" {
+			*remote = adminCertCN(ctx.dataDir)
+		}
+		if *serverCN == "" {
+			*serverCN = adminCertCN(ctx.dataDir)
+		}
+		if *remote == "" {
+			die(fmt.Errorf("-remote required (no server CN found)"))
+		}
+		raw, _ := s.GetSetting("vpn_config")
+		cfg := ovpnconf.Load(raw)
+		if *port != 0 {
+			cfg.Port = *port
+		}
+		if *proto != "" {
+			cfg.Proto = *proto
+		}
+		if *splitTunnel && !cfg.CanSplitTunnel() {
+			die(ovpnconf.ErrNoRedirect)
+		}
+		var extra string
+		switch *customOpts {
+		case "":
+		case "-":
+			extra, _ = editText("")
+		default:
+			extra = commaOrLines(*customOpts)
+		}
+		caPEM, err := ctx.p.CACertPEM()
+		die(err)
+		tc, err := loadOrCreateTLSCrypt(filepath.Join(ctx.dataDir, "pki", "tls-crypt.key"))
+		die(err)
+		bundle, err := pki.RenderOVPN(pki.BundleParams{
+			Remote: *remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: *serverCN,
+			CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
+			TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: *splitTunnel, Extra: extra,
+		})
+		die(err)
+		o := exportOut{Serial: ic.SerialHex}
+		if *out != "" {
+			die(os.WriteFile(*out+".ovpn", bundle, 0o644))
+			o.File = *out + ".ovpn"
+		} else {
+			o.Bundle = string(bundle)
+		}
+		output(o, func(o exportOut) {
+			if o.File != "" {
+				fmt.Println("wrote", o.File)
+			} else {
+				fmt.Print(o.Bundle)
 			}
 			fmt.Fprintln(os.Stderr, "serial:", o.Serial)
 		})
@@ -273,6 +416,29 @@ type issueOut struct {
 	KeyFile  string `json:"keyFile,omitempty"`
 }
 
+// exportOut is `issue -export -json`'s shape: the .ovpn bundle inline (no
+// -out), or the path it was written to instead.
+type exportOut struct {
+	Serial string `json:"serial"`
+	Bundle string `json:"bundle,omitempty"`
+	File   string `json:"file,omitempty"`
+}
+
+// regenCRLFromStore rebuilds the CRL from s's full revoked set — the shared
+// tail end of anything that revokes a cert, whether directly (cmdRevoke) or
+// as the side effect of a client renewal (cmdRenew).
+func regenCRLFromStore(p *pki.PKI, s *store.Store, passphrase []byte) error {
+	rev, err := s.RevokedCerts()
+	if err != nil {
+		return err
+	}
+	entries := make([]pki.RevokedEntry, len(rev))
+	for i, c := range rev {
+		entries[i] = pki.RevokedEntry{SerialHex: c.Serial, RevokedAt: *c.RevokedAt}
+	}
+	return p.RegenCRL(entries, passphrase)
+}
+
 func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 	serial := fs.String("serial", "", "serial (hex, required)")
 	return func(ctx *cliContext) {
@@ -284,13 +450,7 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		die(s.Revoke(*serial, time.Now()))
 		refreshCertsHostsCLI(ctx.dataDir, s)
-		rev, err := s.RevokedCerts()
-		die(err)
-		entries := make([]pki.RevokedEntry, len(rev))
-		for i, c := range rev {
-			entries[i] = pki.RevokedEntry{SerialHex: c.Serial, RevokedAt: *c.RevokedAt}
-		}
-		die(ctx.p.RegenCRL(entries, pass))
+		die(regenCRLFromStore(ctx.p, s, pass))
 		s.Audit("cli", "revoke", "serial="+*serial)
 		output(revokeOut{*serial, ctx.p.CRLPath()}, func(o revokeOut) {
 			fmt.Println("revoked; CRL regenerated:", o.CRLPath)
@@ -386,18 +546,15 @@ var userSortGetters = map[string]func(store.User) string{
 	"created":  func(u store.User) string { return u.CreatedAt.Format(time.RFC3339) },
 }
 
-// certStatus classifies a cert for both the text and -json list output.
+// certStatus renders c.Status() for the text/-json list output — same
+// classification store.Cert.Status() gives the API and the telegram bot,
+// just upper-cased for "revoked" to keep this command's existing look.
 func certStatus(c store.Cert) string {
-	switch {
-	case c.RevokedAt != nil:
+	st := c.Status()
+	if st == "revoked" {
 		return "REVOKED"
-	case time.Now().After(c.NotAfter):
-		return "expired"
-	case time.Until(c.NotAfter) <= store.ExpiryWarnDays*24*time.Hour:
-		return "expiring"
-	default:
-		return "valid"
 	}
+	return st
 }
 
 // certOut is what `list -json` prints: the fields a script wants, none of
@@ -466,89 +623,6 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 			}
 		})
 	}
-}
-
-func cmdExport(fs *flag.FlagSet) func(ctx *cliContext) {
-	cn := fs.String("cn", "", "client CN (issues fresh cert, required)")
-	remote := fs.String("remote", "", "server host clients connect to (default: OVCP_SERVER_CN / server cert CN)")
-	port := fs.Int("port", 0, "server port (default: the configured server port)")
-	proto := fs.String("proto", "", "udp|tcp (default: the configured server proto)")
-	serverCN := fs.String("server-cn", "", "verify-x509-name value")
-	out := fs.String("out", "", "write bundle to this file with .ovpn appended (prefix, like issue)")
-	keyPass := fs.String("key-pass", "", "encrypt embedded private key with this password")
-	splitTunnel := fs.Bool("split-tunnel", false, "keep the client's own default route (needs server redirect on)")
-	customOpts := fs.String("custom-opts", "", "custom client directives: comma-separated, a file via $(cat FILE), or - for $EDITOR")
-	return func(ctx *cliContext) {
-		if *remote == "" {
-			*remote = adminCertCN(ctx.dataDir)
-		}
-		if *serverCN == "" {
-			*serverCN = adminCertCN(ctx.dataDir)
-		}
-		if *cn == "" || *remote == "" {
-			die(fmt.Errorf("-cn required; -remote required (no server CN found)"))
-		}
-		s := ctx.openStore()
-		defer s.Close()
-		raw, _ := s.GetSetting("vpn_config")
-		cfg := ovpnconf.Load(raw)
-		if *port != 0 {
-			cfg.Port = *port
-		}
-		if *proto != "" {
-			cfg.Proto = *proto
-		}
-		if *splitTunnel && !cfg.CanSplitTunnel() {
-			die(ovpnconf.ErrNoRedirect)
-		}
-		var extra string
-		switch *customOpts {
-		case "":
-		case "-":
-			extra, _ = editText("")
-		default:
-			extra = commaOrLines(*customOpts)
-		}
-		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := issueCert(ctx.p, pki.KindClient, *cn, 365, pass, *keyPass)
-		die(err)
-		die(s.AddCert(store.CertFrom(ic, "client")))
-		refreshCertsHostsCLI(ctx.dataDir, s)
-		s.Audit("cli", "issue", "cn="+*cn+" (export)")
-		caPEM, err := ctx.p.CACertPEM()
-		die(err)
-		tc, err := loadOrCreateTLSCrypt(filepath.Join(ctx.dataDir, "pki", "tls-crypt.key"))
-		die(err)
-		bundle, err := pki.RenderOVPN(pki.BundleParams{
-			Remote: *remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: *serverCN,
-			CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
-			TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: *splitTunnel, Extra: extra,
-		})
-		die(err)
-		o := exportOut{Serial: ic.SerialHex}
-		if *out != "" {
-			die(os.WriteFile(*out+".ovpn", bundle, 0o644))
-			o.File = *out + ".ovpn"
-		} else {
-			o.Bundle = string(bundle)
-		}
-		output(o, func(o exportOut) {
-			if o.File != "" {
-				fmt.Println("wrote", o.File)
-			} else {
-				fmt.Print(o.Bundle)
-			}
-			fmt.Fprintln(os.Stderr, "serial:", o.Serial)
-		})
-	}
-}
-
-// exportOut is `export -json`'s shape: the .ovpn bundle inline (no -out),
-// or the path it was written to instead.
-type exportOut struct {
-	Serial string `json:"serial"`
-	Bundle string `json:"bundle,omitempty"`
-	File   string `json:"file,omitempty"`
 }
 
 func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -765,7 +839,7 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 // custom.hosts in $EDITOR, or include/exclude a CN (mirrors `user enable|disable`).
 func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "record", recordOps)
+		op, rest := opArg(fs, "record", recordOps, recordOpDesc)
 		pp := dataPaths(ctx.dataDir)
 		gid := dnsGID(dnsRunAsGroup())
 		ctx.openStore().Close() // guarantees dns/ (and everything else) exists before any op below touches it
@@ -895,9 +969,9 @@ var dnsConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
 // a lifecycle op) — mirrors cmdVPN's kill/config special-cases.
 func cmdDNS(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "dns", dnsOps)
+		op, rest := opArg(fs, "dns", dnsOps, dnsOpDesc)
 		if op == "config" {
-			configOp("dns config", dnsConfigOps, dnsConfigBodies)(ctx, rest)
+			configOp("dns config", dnsConfigOps, configOpDesc, dnsConfigBodies)(ctx, rest)
 			return
 		}
 		runProcOp(ctx, "dns", op, rest, "dns-")
@@ -963,7 +1037,7 @@ var vpnConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
 // flags/sub-dispatch instead of runProcOp's plain start/stop/restart shape.
 func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "vpn", vpnOps)
+		op, rest := opArg(fs, "vpn", vpnOps, vpnOpDesc)
 		switch op {
 		case "kill":
 			kfs := newFlags("vpn kill")
@@ -972,7 +1046,7 @@ func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 			kfs.Parse(rest)
 			body(ctx)
 		case "config":
-			configOp("vpn config", vpnConfigOps, vpnConfigBodies)(ctx, rest)
+			configOp("vpn config", vpnConfigOps, configOpDesc, vpnConfigBodies)(ctx, rest)
 		default:
 			runProcOp(ctx, "vpn", op, rest, "")
 		}
@@ -1007,35 +1081,45 @@ func printProcText(name, op string, r controller.ControlResult) {
 	}
 }
 
-func cmdRenewServer(fs *flag.FlagSet) func(ctx *cliContext) {
+// cmdRenew is server-only — a server has one cert, at fixed paths `serve`
+// reads, no bundle concept (see cmdIssue for that). -cn renames it in place:
+// server identity is kind-only, not CN-keyed, so renew and rename are one op.
+func cmdRenew(fs *flag.FlagSet) func(ctx *cliContext) {
+	cn := fs.String("cn", "", "new common name — omit to keep the current one")
 	days := fs.Int("days", 825, "validity (days)")
-	serverCNFlag := fs.String("server-cn", "", "server CN (default: current server cert's CN / OVCP_SERVER_CN)")
 	return func(ctx *cliContext) {
 		requirePositive(*days, "days")
-		serverCN := *serverCNFlag
-		if serverCN == "" {
-			serverCN = adminCertCN(ctx.dataDir)
-		}
-		if serverCN == "" {
-			die(fmt.Errorf("no server certificate found; pass -server-cn (e.g. right after a backup restore) or run ovcp init first"))
-		}
-		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := ctx.p.Issue(pki.KindServer, serverCN, *days, pass)
-		die(err)
 		s := ctx.openStore()
 		defer s.Close()
+		// renew replaces the current server cert; nothing active would
+		// otherwise silently fall through to a plain issue instead of erroring.
+		if err := s.RequireActiveCert("", "server"); err != nil {
+			die(fmt.Errorf("%w — run `ovcp init` first", err))
+		}
+		targetCN := *cn
+		if targetCN == "" {
+			targetCN = adminCertCN(ctx.dataDir)
+		}
+		if targetCN == "" {
+			die(fmt.Errorf("can't auto-detect the current server CN (e.g. right after a backup restore) — pass -cn"))
+		}
+		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
+		ic, err := ctx.p.Issue(pki.KindServer, targetCN, *days, pass)
+		die(err)
 		die(writeServerCert(dataPaths(ctx.dataDir), s, ic))
-		s.Audit("cli", "renew_server", "cn="+serverCN+" serial="+ic.SerialHex)
-		output(renewOut{serverCN, ic.SerialHex}, func(o renewOut) {
+		s.Audit("cli", "renew", fmt.Sprintf("kind=server cn=%s serial=%s", targetCN, ic.SerialHex))
+		output(renewOut{CN: targetCN, Serial: ic.SerialHex, NotAfter: ic.NotAfter}, func(o renewOut) {
 			fmt.Println("server cert renewed:", o.Serial)
 			fmt.Println("run `ovcp vpn restart` to apply")
 		})
 	}
 }
 
+// renewOut is `certificate renew -json`'s shape.
 type renewOut struct {
-	ServerCN string `json:"serverCN"`
-	Serial   string `json:"serial"`
+	CN       string    `json:"cn"`
+	Serial   string    `json:"serial"`
+	NotAfter time.Time `json:"notAfter"`
 }
 
 // commaOrLines: comma list → one directive per line; no-op without a comma, so $(cat FILE) passes through unchanged.
@@ -1092,7 +1176,7 @@ func printConfigText(c ovpnconf.Config) {
 }
 
 // configFlags registers config set/preview's shared flags — zero value means
-// "leave unchanged", same idiom `certificate export`'s -port/-proto already
+// "leave unchanged", same idiom `certificate issue -export`'s -port/-proto
 // use — and returns a closure applying whichever were set onto a base config.
 func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, error) {
 	proto := fs.String("proto", "", "udp|tcp (unchanged if omitted)")
@@ -1226,6 +1310,51 @@ func cmdVPNConfigEdit(_ *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// cmdCA wraps the CA-level ops (passphrase rotation, cert renewal) — the
+// most sensitive surface in the tool, deliberately CLI-only and kept on its
+// own top-level menu rather than folded into `certificate` (the CA isn't a
+// certs-table row at all, see store's schema).
+func cmdCA(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		op, rest := opArg(fs, "ca", caOps, caOpDesc)
+		cfs := newFlags("ca " + op)
+		subUsage(cfs, "ca "+op)
+		var body func(ctx *cliContext)
+		switch op {
+		case "rotate":
+			body = cmdRotateCA(cfs)
+		case "renew":
+			body = cmdRenewCA(cfs)
+		case "status":
+			body = cmdCAStatus(cfs)
+		}
+		cfs.Parse(rest)
+		body(ctx)
+	}
+}
+
+// caStatusOut is `ca status -json`'s shape; status reuses store.Cert.Status,
+// same classification the API and telegram bot use.
+type caStatusOut struct {
+	CN       string    `json:"cn"`
+	NotAfter time.Time `json:"notAfter"`
+	Status   string    `json:"status"`
+}
+
+func cmdCAStatus(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		cert, err := ctx.p.CACert()
+		die(err)
+		o := caStatusOut{
+			CN: cert.Subject.CommonName, NotAfter: cert.NotAfter,
+			Status: store.Cert{NotAfter: cert.NotAfter}.Status(),
+		}
+		output(o, func(o caStatusOut) {
+			fmt.Printf("%s  %-10s expires %s\n", o.CN, coloredStatus(o.Status), o.NotAfter.Format("2006-01-02"))
+		})
+	}
+}
+
 func cmdRotateCA(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		oldPass := readSecret("Current CA passphrase", "OVCP_CA_PASSPHRASE", false)
@@ -1238,11 +1367,35 @@ func cmdRotateCA(_ *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// cmdRenewCA reissues the CA cert in place: new serial, extended validity,
+// same key — every already-issued cert stays valid, nothing needs
+// reissuing. Distinct from `ca rotate`, which only changes the passphrase.
+func cmdRenewCA(fs *flag.FlagSet) func(ctx *cliContext) {
+	years := fs.Int("years", 10, "validity (years)")
+	return func(ctx *cliContext) {
+		requirePositive(*years, "years")
+		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
+		cert, err := ctx.p.RenewCA(*years, pass)
+		die(err)
+		s := ctx.openStore()
+		defer s.Close()
+		s.Audit("cli", "renew_ca", "")
+		output(renewCAOut{cert.NotAfter}, func(o renewCAOut) {
+			fmt.Println("CA cert renewed; valid until", o.NotAfter.Format("2006-01-02"))
+			fmt.Println("run `ovcp vpn restart` to apply")
+		})
+	}
+}
+
+type renewCAOut struct {
+	NotAfter time.Time `json:"notAfter"`
+}
+
 // cmdBackup and cmdUser take no top-level flags: opArg's rest is fed to a
 // fresh FlagSet per op, same as vpn/debug/telegram.
 func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "backup", backupOps)
+		op, rest := opArg(fs, "backup", backupOps, backupOpDesc)
 		switch op {
 		case "create":
 			cfs := newFlags("backup create")
@@ -1278,10 +1431,10 @@ func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 			defer f.Close()
 			die(backup.Restore(ctx.dataDir, f, pass, *force))
 			output(msg("restored CA, CRL, tls-crypt key, config, and database into %s; "+
-				"next: OVCP_SERVER_CN=<host> ovcp renew-server, then ovcp vpn start", ctx.dataDir),
+				"next: OVCP_SERVER_CN=<host> ovcp certificate renew, then ovcp vpn start", ctx.dataDir),
 				func(o outcome) {
 					fmt.Println("[1/2] restored CA, CRL, tls-crypt key, config, and database into", ctx.dataDir)
-					fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp renew-server   (issues the openvpn server cert)")
+					fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp certificate renew   (issues the openvpn server cert)")
 					fmt.Println("      then: ovcp vpn start")
 				})
 		}
@@ -1294,7 +1447,7 @@ type backupCreateOut struct {
 
 func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "debug", debugOps)
+		op, rest := opArg(fs, "debug", debugOps, debugOpDesc)
 		ofs := newFlags("debug " + op)
 		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
 		ofs.Parse(rest)
@@ -1326,6 +1479,10 @@ func cmdTelegramConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 // cmdTelegramConfigSet: token and admin are independently optional, so
 // changing one never requires re-supplying the other — -token is a flag
 // (not a value) since a secret has no business appearing on the command line.
+// Admin is applied before token: SetAdmin's goodbye message to the outgoing
+// admin needs the chat id SetToken would otherwise already have wiped, had
+// both been changed in this one invocation (SetToken clears it on any real
+// token change, same unlink-on-identity-change rule SetAdmin follows).
 func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	setToken := fs.Bool("token", false, "prompt for (or read $OVCP_TELEGRAM_TOKEN) a new bot token")
 	admin := fs.String("admin", os.Getenv("OVCP_TELEGRAM_ADMIN"),
@@ -1336,14 +1493,14 @@ func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		s := ctx.openStore()
 		defer s.Close()
+		if *admin != "" {
+			die(telegram.SetAdmin(s, *admin))
+			s.Audit("cli", "telegram_admin_change", "admin="+*admin)
+		}
 		if *setToken {
 			token := readSecret("Telegram bot token", "OVCP_TELEGRAM_TOKEN", false)
 			die(telegram.SetToken(s, string(token)))
 			s.Audit("cli", "telegram_token_change", "")
-		}
-		if *admin != "" {
-			die(telegram.SetAdmin(s, *admin))
-			s.Audit("cli", "telegram_admin_change", "admin="+*admin)
 		}
 		output(telegram.ConfigStatus(s), func(st controller.TelegramStatus) {
 			fmt.Println("token-set:", st.TokenSet)
@@ -1355,9 +1512,9 @@ func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 
 func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "telegram", telegramOps)
+		op, rest := opArg(fs, "telegram", telegramOps, telegramOpDesc)
 		if op == "config" {
-			configOp("telegram config", telegramConfigOps, telegramConfigBodies)(ctx, rest)
+			configOp("telegram config", telegramConfigOps, configOpDesc, telegramConfigBodies)(ctx, rest)
 			return
 		}
 
@@ -1399,7 +1556,7 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 
 func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "user", userOps)
+		op, rest := opArg(fs, "user", userOps, userOpDesc)
 		s := ctx.openStore()
 		defer s.Close()
 		switch op {
