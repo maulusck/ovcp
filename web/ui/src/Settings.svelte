@@ -1,5 +1,5 @@
 <script>
-  import { api, apiBlob, downloadBlob, procOp, flash } from './api.js'
+  import { api, apiBlob, downloadBlob, procOp, procDone, flash } from './api.js'
   import { expectRecovery, expectDnsRecovery, telegram, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { isAdmin, dnsAvailable } = $props()
@@ -44,7 +44,7 @@
     err = ''; ok = ''
     try {
       const r = await procOp('/vpn/', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectRecovery(ms, label) })
-      if (r) flash(v => ok = v, done)
+      if (r) flash(v => ok = v, procDone(op, r, done))
     } catch (x) { flash(v => err = v, x.error) }
   }
 
@@ -102,7 +102,7 @@
     dnsErr = ''; dnsOk = ''
     try {
       const r = await procOp('/dns/', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectDnsRecovery(ms, label) })
-      if (r) flash(v => dnsOk = v, done)
+      if (r) flash(v => dnsOk = v, procDone(op, r, done))
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }
   const dnsStart   = () => dnsOp('start', null, 10000, 'Started.', 'starting')
@@ -205,9 +205,9 @@
   async function telegramOp(op, done) {
     tgErr = ''; tgOk = ''
     try {
-      await procOp('/telegram/', op)
+      const r = await procOp('/telegram/', op)
       pollOnce()
-      flash(v => tgOk = v, done)
+      flash(v => tgOk = v, procDone(op, r, done))
     } catch (x) { flash(v => tgErr = v, x.error) }
   }
   const tgStart = () => telegramOp('start', 'Started.')

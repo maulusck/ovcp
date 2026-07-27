@@ -32,6 +32,16 @@ export async function procOp(prefix, op, { confirm: confirmMsg, recoverMs, onRec
   return result
 }
 
+// procOp's `changed` flag only means something for start/stop (restart always
+// does a real stop+start regardless) — same distinction the CLI's text output
+// already makes (`already started`/`already stopped`).
+export function procDone(op, result, done) {
+  if (result && result.changed === false && (op === 'start' || op === 'stop')) {
+    return `Already ${op === 'start' ? 'started' : 'stopped'}.`
+  }
+  return done
+}
+
 // apiBlob: api()'s counterpart for file-download endpoints — same CSRF'd POST, but
 // returns the raw blob and server-suggested filename instead of parsed JSON.
 export async function apiBlob(method, path, body) {

@@ -40,6 +40,7 @@ type TelegramStatus struct {
 	TokenSet   bool   `json:"tokenSet"`
 	Admin      string `json:"admin"`
 	ChatLinked bool   `json:"chatLinked"` // false: admin hasn't messaged the bot yet, push notifications can't reach them
+	Changed    bool   `json:"changed"`    // set by start/stop/restart callers; meaningless (and left false) for a plain status read
 }
 
 // TelegramController is the telegram poller's control surface (implemented
@@ -120,6 +121,7 @@ func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.Le
 		return
 	}
 	if op == "telegram-start" || op == "telegram-stop" || op == "telegram-restart" {
+		before := tc.Status().Running
 		var opErr error
 		switch op {
 		case "telegram-start":
@@ -133,7 +135,9 @@ func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.Le
 			fmt.Fprintf(c, "ERR %s\n", opErr)
 			return
 		}
-		data, _ := json.Marshal(tc.Status())
+		st := tc.Status()
+		st.Changed = st.Running != before
+		data, _ := json.Marshal(st)
 		fmt.Fprintf(c, "OK %s\n", data)
 		return
 	}

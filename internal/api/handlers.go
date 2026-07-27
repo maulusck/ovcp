@@ -446,6 +446,7 @@ func (s *Server) handleVPNConfigPreview(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handleProc(name string, target controller.Lifecycle, allowReconnect bool) handler {
 	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
 		op := r.PathValue("op")
+		before := target.Pid()
 		var err error
 		switch op {
 		case "start":
@@ -469,7 +470,7 @@ func (s *Server) handleProc(name string, target controller.Lifecycle, allowRecon
 			return
 		}
 		s.Store.Audit(u.Username, name+"_"+op, "")
-		jsonOK(w, map[string]any{"op": op, "pid": target.Pid()})
+		jsonOK(w, map[string]any{"op": op, "pid": target.Pid(), "changed": target.Pid() != before})
 	}
 }
 
@@ -508,6 +509,7 @@ func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request,
 
 func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *store.User) {
 	op := r.PathValue("op")
+	before := s.Telegram.Status().Running
 	var err error
 	switch op {
 	case "start":
@@ -525,7 +527,9 @@ func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *sto
 		return
 	}
 	s.Store.Audit(u.Username, "telegram_"+op, "")
-	jsonOK(w, s.Telegram.Status())
+	st := s.Telegram.Status()
+	st.Changed = st.Running != before
+	jsonOK(w, st)
 }
 
 // opStatus: an op already in flight is a client retry situation, not a

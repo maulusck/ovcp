@@ -1607,6 +1607,9 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 			if st.Running {
 				state, color = "running", green
 			}
+			if (op == "start" || op == "stop") && !st.Changed {
+				state = "already " + state
+			}
 			fmt.Println(color(fmt.Sprintf("Telegram: %s, admin %s", state, st.Admin)))
 		})
 	}

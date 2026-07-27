@@ -404,8 +404,19 @@ func TestDNSProc(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
 	for _, op := range []string{"start", "stop", "restart"} {
-		if r := e.req("POST", "/api/dns/"+op, "", true); r.StatusCode != 200 {
+		r := e.req("POST", "/api/dns/"+op, "", true)
+		if r.StatusCode != 200 {
 			t.Fatalf("%s: %s", op, r.Status)
+		}
+		// the before/after Pid() diff itself is exercised against a real
+		// flip in internal/controller (TestControlChangedFlag) — this just
+		// confirms the field actually reaches the client.
+		var out struct {
+			Changed bool `json:"changed"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &out); err != nil || !strings.Contains(string(body), `"changed"`) {
+			t.Fatalf("%s: response missing changed field: %s (err=%v)", op, body, err)
 		}
 	}
 	if r := e.req("POST", "/api/dns/reconnect", "", true); r.StatusCode != 404 {
@@ -804,6 +815,7 @@ func TestTelegramEndpoints(t *testing.T) {
 		Running  bool
 		TokenSet bool
 		Admin    string
+		Changed  bool
 	}
 	r := e.req("GET", "/api/telegram/config", "", false)
 	json.NewDecoder(r.Body).Decode(&st)
@@ -829,12 +841,17 @@ func TestTelegramEndpoints(t *testing.T) {
 
 	r = e.req("POST", "/api/telegram/start", "", true)
 	json.NewDecoder(r.Body).Decode(&st)
-	if r.StatusCode != 200 || !st.Running {
+	if r.StatusCode != 200 || !st.Running || !st.Changed {
 		t.Fatalf("start: status=%d %+v", r.StatusCode, st)
+	}
+	r = e.req("POST", "/api/telegram/start", "", true) // already running
+	json.NewDecoder(r.Body).Decode(&st)
+	if r.StatusCode != 200 || !st.Running || st.Changed {
+		t.Fatalf("start again: status=%d %+v, want changed=false", r.StatusCode, st)
 	}
 	r = e.req("POST", "/api/telegram/stop", "", true)
 	json.NewDecoder(r.Body).Decode(&st)
-	if r.StatusCode != 200 || st.Running {
+	if r.StatusCode != 200 || st.Running || !st.Changed {
 		t.Fatalf("stop: status=%d %+v", r.StatusCode, st)
 	}
 	if r := e.req("POST", "/api/telegram/bogus", "", true); r.StatusCode != 404 {
