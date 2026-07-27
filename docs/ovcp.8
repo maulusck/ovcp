@@ -634,9 +634,11 @@ path in \fBFILES\fR below is relative to. Must come before the command
 \-H\fR.
 .TP
 .B \-no\-color
-Disable ANSI color: the status words in \fBcertificate list\fR/\fBstatus\fR/
-\fBvpn status\fR/\fBdns status\fR/\fBtelegram status\fR/\fBuser list\fR's
-text output, and the level tag in \fBovcp\fR's own log lines.
+Disable ANSI color: the status words in \fBcertificate list\fR/\fBrecord
+list\fR/\fBstatus\fR/\fBvpn status\fR/\fBdns status\fR/\fBtelegram
+status\fR/\fBuser list\fR/\fBca status\fR's text output, the \fB+\fR/\fB\-\fR
+diff lines in \fBvpn config preview\fR, the platform/build tag in
+\fBversion\fR, and the level tag in \fBovcp\fR's own log lines.
 Same effect as \fB$NO_COLOR\fR. Color is already off automatically when the
 relevant stream (stdout for table output, stderr for logs) isn't a
 terminal \(en piped, journal, redirected to a file. Must come before the
@@ -805,9 +807,12 @@ serial, expires, includeDNS}\fR (same \fBstatus\fR values as
 one string.
 .TP
 .B telegram config get, telegram config set, telegram start|stop|restart|status
-\fB{running, tokenSet, admin, chatLinked}\fR \(en same shape from every one
-of these, whether or not \fB\-token\fR/\fB\-admin\fR were passed to
-\fBconfig set\fR.
+\fB{running, tokenSet, admin, chatLinked, changed}\fR \(en same shape from
+every one of these, whether or not \fB\-token\fR/\fB\-admin\fR were passed
+to \fBconfig set\fR. \fBchanged\fR is only meaningful for \fBstart\fR/
+\fBstop\fR/\fBrestart\fR (whether the op actually flipped \fBrunning\fR,
+same distinction \fBvpn\fR/\fBdns\fR's \fBChanged\fR makes above); always
+\fBfalse\fR from \fBconfig get\fR, \fBconfig set\fR, and \fBstatus\fR.
 .TP
 .B user add
 \fB{username, role}\fR.
@@ -857,11 +862,16 @@ ovcp control socket for \fBvpn\fR (including \fBkill\fR), \fBdns\fR,
 \fI/run/ovcp/control.sock\fR); same path \fBserve \-ctrl\fR sets for a
 single invocation, no env var needed. The CLI talks to a running
 \fBserve\fR here for anything that needs its in\-process state \(en only
-\fBvpn\fR's \fBstatus\fR/\fBkill\fR/\fBreconnect\fR and \fBstats \-follow\fR
-actually proxy through to \fBserve\fR's own \fBOVCP_MGMT_SOCK\fR
-connection, per above; \fBdns\fR/\fBtelegram\fR lifecycle ops and
-\fBdebug\fR answer from \fBserve\fR's own state directly, never touching
-the management socket. This is a \fIseparate\fR socket from
+\fBkill\fR and the connected\-client list (\fBclients\fR, used by the
+top\-level \fBovcp status\fR and by \fBstats \-follow\fR) actually proxy
+through to \fBserve\fR's own \fBOVCP_MGMT_SOCK\fR connection, per above.
+Everything else answers from \fBserve\fR's own state directly, never
+touching the management socket: \fBvpn\fR/\fBdns\fR
+\fBstatus\fR/\fBstart\fR/\fBstop\fR/\fBrestart\fR drive their own
+\fBSupervisor\fR; \fBvpn reconnect\fR sends \fBSIGUSR1\fR straight to the
+openvpn child; \fBtelegram\fR lifecycle ops drive its own \fBPoller\fR;
+\fBdebug\fR flips an in\-process log\-level variable. This is a
+\fIseparate\fR socket from
 \fBOVCP_MGMT_SOCK\fR/\fB\-mgmt\fR above \(en overriding one does not move
 the other; pass both flags (or set both env vars) to run \fBserve\fR
 entirely out of a non\-root\-writable directory.
@@ -959,10 +969,12 @@ web UI); this only gates the boot\-time launch.
 .TP
 .B NO_COLOR
 Same as \fB\-no\-color\fR: disable ANSI color in \fBcertificate list\fR/
-\fBstatus\fR/\fBvpn status\fR/\fBdns status\fR/\fBtelegram status\fR/
-\fBuser list\fR's table output and in \fBovcp\fR's own log lines. Color is
-already off automatically when the relevant stream isn't a terminal
-(piped, journal, redirected to a file).
+\fBrecord list\fR/\fBstatus\fR/\fBvpn status\fR/\fBdns status\fR/
+\fBtelegram status\fR/\fBuser list\fR/\fBca status\fR's table output, the
+diff lines in \fBvpn config preview\fR, the platform/build tag in
+\fBversion\fR, and in \fBovcp\fR's own log lines. Color is already off
+automatically when the relevant stream isn't a terminal (piped, journal,
+redirected to a file).
 .TP
 .B OVCP_JSON
 Same as \fB\-json\fR: JSON instead of human text, for every command (see

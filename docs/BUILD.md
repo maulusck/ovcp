@@ -129,8 +129,7 @@ platform and fails immediately, with the cause and the fix, if that does
 not succeed:
 
 ```
-error: this host can't run linux/arm64 containers (no working QEMU/binfmt for it)
-  see docs/BUILD.md, 'Cross-building an image needs QEMU/binfmt'
+error: this host can't run linux/arm64 containers (no working QEMU/binfmt for it) - see docs/BUILD.md, 'Cross-building an image needs QEMU/binfmt'
 ```
 
 This is inherent to any cross-architecture image build whose final stage
@@ -284,9 +283,18 @@ GNU Coding Standards.
 
 ```sh
 make help                  # every target and variable
-go test ./...              # Go test suite
+make test                  # go test ./... (builds the UI first, see below)
+make vet                   # go vet ./...
+make man                   # preview docs/ovcp.8 with man(1)
 cd web/ui && npm run dev   # UI dev server; proxy the API manually or run `ovcp serve` alongside
 ```
+
+`web/web.go` does `//go:embed all:dist`, so anything that imports it —
+`cmd/ovcp`, hence `go build`/`go test`/`go vet` on that package — fails on a
+fresh checkout with `pattern all:dist: no matching files found` until
+`web/dist` exists. `test` and `vet` depend on `ui` for this reason; running
+`go test ./...`/`go vet ./...` directly only works once `make ui` (or any
+target that pulls it in) has populated `web/dist` at least once.
 
 ## CI / the release pipeline
 
@@ -321,6 +329,6 @@ every `v*` tag push and has three stages:
 |---|---|---|
 | `unknown TARGET=foo (see: make help)` | Typo, or `foo` is not in the table above | `make help` lists every valid name |
 | `missing: zig (cross-compiler for TARGET=...)` | Cross build, zig not installed | Install zig, or use `TARGET=host` when already on that architecture |
-| `error: this host can't run linux/X containers (no binfmt/QEMU registered for it)` | Cross image build, no binfmt handlers | `docker run --privileged --rm tonistiigi/binfmt --install all` (one-time, host-wide) |
+| `error: this host can't run linux/X containers (no working QEMU/binfmt for it)` | Cross image build, no binfmt handlers | `sudo docker run --privileged --rm docker.io/tonistiigi/binfmt --install all` (one-time, host-wide) |
 | `no value specified for --platform=` | An old podman/docker invoked directly, bypassing `make image` | Use `make image`, which always passes `--platform` explicitly, or add `--platform=linux/$(uname -m)` manually |
 | Image build takes 6+ minutes every time | Build cache was pruned, or this is the first build on this host | Expected once; subsequent builds reuse `id=ovcp-build-cache` and drop to ~2 minutes |

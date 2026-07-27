@@ -50,15 +50,17 @@ different purpose:
 - The **control socket** (`OVCP_CTRL_SOCK`) is ovcp's own protocol,
   root-only, used by a separate `ovcp` invocation (`vpn`, `dns`,
   `telegram`, `debug`, `stats -follow`) to reach a running `serve`. Only
-  `vpn`'s `status`/`kill`/`reconnect` and `stats -follow` actually proxy
-  through to the management-socket connection above. Everything else
-  answers from in-process state instead: `vpn`/`dns start|stop|restart`
-  and `telegram start|stop|restart|status` drive their own `Supervisor`/
-  `Poller` (see Supervisor design, below); `debug on`/`off` flips an
-  in-process log-level variable. Nothing dials the management socket
-  except `serve` itself. `dns block-internet` is not a control-socket op
-  at all — it reads/writes a stored setting directly and works without
-  `serve` running.
+  `kill` and the connected-client list (`clients`, used by the top-level
+  `ovcp status` and by `stats -follow`) actually proxy through to the
+  management-socket connection above. Everything else answers from
+  in-process state instead: `vpn`/`dns start|stop|restart|status` drive
+  their own `Supervisor` (see Supervisor design, below); `vpn reconnect`
+  sends `SIGUSR1` straight to the openvpn child, also without touching
+  mgmt; `telegram start|stop|restart|status` drives its own `Poller`;
+  `debug on`/`off` flips an in-process log-level variable. Nothing dials
+  the management socket except `serve` itself. `dns block-internet` is
+  not a control-socket op at all — it reads/writes a stored setting
+  directly and works without `serve` running.
 
 Exact defaults, flags, and environment variables for both sockets are
 documented in `man ovcp`, `ENVIRONMENT`.
@@ -111,18 +113,21 @@ or OpenVPN restart never leaves it listening on a stale address
 
 `ovcp` runs as a single root-owned process; the admin UI, the REST API, and
 PKI operations all execute in the same process and the same privilege
-level. A privilege-separated design — a root supervisor process plus a
-non-root HTTP worker communicating over IPC — was evaluated and not
-adopted.
+level. Splitting this — a root supervisor plus a non-root HTTP worker
+talking over IPC — is unresolved: no design pass has been done, and it
+sits on the TODO list.
 
-The reasoning: reaching the admin UI at all already requires defeating the
-VPN's own authentication, CSRF protection, RBAC, and optional TOTP. A
-second process and an IPC protocol would add implementation and audit
-surface without changing the effective trust boundary, since compromising
-the HTTP worker still yields the same PKI and configuration access an
-attacker would need to target the root process directly. Process
-containment is instead delegated to the OS: the shipped systemd unit
-sandboxes the whole process (`ProtectSystem=strict`, `NoNewPrivileges`,
+Current leaning against it: reaching the admin UI at all already requires
+defeating the VPN's own authentication, CSRF protection, RBAC, and
+optional TOTP. A second process and an IPC protocol would add
+implementation and audit surface without obviously changing the effective
+trust boundary, since compromising the HTTP worker still yields the same
+PKI and configuration access an attacker would need to target the root
+process directly. Any real design pass would also have to solve how the
+unprivileged side reaches PKI ops and OpenVPN control without just
+re-growing root through the IPC channel. Until that happens, process
+containment is delegated to the OS: the shipped systemd unit sandboxes the
+whole process (`ProtectSystem=strict`, `NoNewPrivileges`,
 `MemoryDenyWriteExecute`, and more — see `deploy/systemd/ovcp.service`).
 
 File modes, capability requirements, and container privilege flags are
@@ -132,8 +137,9 @@ documented in `man ovcp`, `PRIVILEGES`.
 exactly one owner: `cmd/ovcp`'s `ensureSkeleton`. `internal/store`,
 `internal/pki`, and `internal/controller` no longer create or `chmod` their
 own directories — they trust the tree already exists, because every
-stateful entry point (`cliContext.openStore`, `runServe`) calls
-`ensureSkeleton` first. It's idempotent and cheap, so it runs on every
+stateful command reaches it through `cliContext.openStore`, which calls
+`ensureSkeleton` first (`serve` included: `cmdServe` opens the store, then
+calls `runServe`). It's idempotent and cheap, so it runs on every
 invocation rather than once at install time; `ovcp init -skeleton` exposes
 it directly, for packaging scripts and as a permissions-repair command.
 

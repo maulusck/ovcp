@@ -145,7 +145,8 @@ Four documents, four altitudes, nothing duplicated between them:
   variable, every file ovcp reads or writes, and deployment recipes for
   systemd, containers, and SELinux. The same page renders into the web
   UI's **Docs** tab at build time — no terminal needed to read it, one
-  source either way.
+  source either way. From a checkout, before installing anything:
+  `make man`.
 - **[`docs/BUILD.md`](docs/BUILD.md)** — building the binary, cross-compiling
   for another arch/libc, the container image, and distro/Void packages.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — internal design:
