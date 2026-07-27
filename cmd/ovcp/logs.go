@@ -80,7 +80,7 @@ func cmdLogs(fs *flag.FlagSet) func(ctx *cliContext) {
 }
 
 func printLogConfigText(c controller.LogConfig) {
-	fmt.Println("enabled:          ", c.Enabled)
+	fmt.Println("enabled:          ", boolText(c.Enabled))
 	fmt.Println("retention-days:   ", c.RetentionDays)
 	fmt.Println("keep-uncompressed:", c.KeepUncompressed)
 }
@@ -172,5 +172,5 @@ func printLogStatusText(rows []controller.LogSourceStatus, cfg controller.LogCon
 		}
 		fmt.Printf("%-8s %8d bytes  %d generations  %s\n", r.Name, r.CurrentSize, r.Generations, age)
 	}
-	fmt.Printf("rotation: %v (retention %dd, keep %d uncompressed)\n", cfg.Enabled, cfg.RetentionDays, cfg.KeepUncompressed)
+	fmt.Printf("rotation: %s (retention %dd, keep %d uncompressed)\n", boolText(cfg.Enabled), cfg.RetentionDays, cfg.KeepUncompressed)
 }

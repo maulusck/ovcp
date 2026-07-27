@@ -36,8 +36,8 @@
   let search = $state({ open: false, query: '' })
   let sort = $state({ key: null, desc: false })
   const SORT_GETTERS = {
-    cn: (c) => c.CN, recv: (c) => c.BytesRecv, sent: (c) => c.BytesSent,
-    since: (c) => c.ConnectedSince,
+    cn: (c) => c.CN, real: (c) => c.RealAddress, vpnAddr: (c) => c.VirtualAddress,
+    recv: (c) => c.BytesRecv, sent: (c) => c.BytesSent, since: (c) => c.ConnectedSince,
   }
   const filtered = $derived.by(() => {
     const out = vpn.clientList.filter((c) => matchesQuery(c, search.query, (x) => x.CN))
@@ -81,7 +81,8 @@
     <table>
       <thead><tr>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'cn')}>Common name{sortMark(sort, 'cn')}</button></th>
-        <th>Real address</th><th>VPN address</th>
+        <th><button class="th-sort" onclick={() => toggleSort(sort, 'real')}>Real address{sortMark(sort, 'real')}</button></th>
+        <th><button class="th-sort" onclick={() => toggleSort(sort, 'vpnAddr')}>VPN address{sortMark(sort, 'vpnAddr')}</button></th>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'recv')}>Received{sortMark(sort, 'recv')}</button></th>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'sent')}>Sent{sortMark(sort, 'sent')}</button></th>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'since')}>Connected since{sortMark(sort, 'since')}</button></th>

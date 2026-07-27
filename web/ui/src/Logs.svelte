@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte'
-  import { api, downloadBlob, copyToClipboard, matchesQuery, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
+  import { api, downloadBlob, copyToClipboard, matchesQuery, sortRows, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
   import Msg from './Msg.svelte'
   let { isAdmin, canOperate } = $props()
 
@@ -20,7 +20,7 @@
           .map(k => `${k}=${j[k]}`).join(' ')
         raw = j.time; level = (j.level || 'info').toLowerCase()
         msg = extra ? `${j.msg} ${extra}` : j.msg
-        return { time: fmtTimestamp(new Date(raw)), level, msg }
+        return { time: fmtTimestamp(new Date(raw)), ts: new Date(raw).getTime(), level, msg }
       } catch { /* not JSON after all — fall through to text parsing */ }
     }
     let m = line.match(/^time=(\S+)\s+level=(\w+)\s+(.*)$/)
@@ -32,7 +32,7 @@
         : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
       // year is a parsing scratch value only — never shown (fmtTimeNoYear omits it)
       const d = new Date(m[1] + ' 2000')
-      return { time: isNaN(d) ? '' : fmtTimeNoYear(d), level, msg }
+      return { time: isNaN(d) ? '' : fmtTimeNoYear(d), ts: isNaN(d) ? 0 : d.getTime(), level, msg }
     } else {
       m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(.*)$/)
       if (m) { raw = m[1]; msg = m[2] }
@@ -40,7 +40,7 @@
         : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
     }
     const d = raw && new Date(raw.replace(' ', 'T'))
-    return { time: d && !isNaN(d) ? fmtTimestamp(d) : '', level, msg }
+    return { time: d && !isNaN(d) ? fmtTimestamp(d) : '', ts: d && !isNaN(d) ? d.getTime() : 0, level, msg }
   }
 
   // the two log panels render as a table like the audit panel; audit stays bespoke
@@ -128,16 +128,28 @@
     audit: { open: false, query: '' }, openvpn: { open: false, query: '' },
     ovcp: { open: false, query: '' }, dnsmasq: { open: false, query: '' },
   })
-  const filteredEntries = $derived(
-    entries.filter((e) => matchesQuery(e, search.audit.query, (x) => x.Actor, (x) => x.Action, (x) => x.Detail)))
+  const AUDIT_SORT_GETTERS = { ts: (e) => e.TS, actor: (e) => e.Actor, action: (e) => e.Action, detail: (e) => e.Detail }
+  let auditSort = $state({ key: null, desc: false })
+  const filteredEntries = $derived.by(() => {
+    const out = entries.filter((e) => matchesQuery(e, search.audit.query, (x) => x.Actor, (x) => x.Action, (x) => x.Detail))
+    return auditSort.key ? sortRows(out, AUDIT_SORT_GETTERS[auditSort.key], auditSort.desc) : out
+  })
 
   // level-only filter, openvpn/ovcp panels only (audit has no level) —
   // 'all' skips it entirely so the common case parses each line once, not twice.
   const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 }
   let levelFilter = $state({ openvpn: 'all', ovcp: 'all', dnsmasq: 'all' })
-  const visibleLines = (id) => lines[id]
-    .filter((line) => matchesQuery(line, search[id].query, (x) => x))
-    .filter((line) => levelFilter[id] === 'all' || LEVEL_RANK[parseLine(line).level] >= LEVEL_RANK[levelFilter[id]])
+  const LOG_SORT_GETTERS = {
+    ts: (line) => parseLine(line).ts, level: (line) => LEVEL_RANK[parseLine(line).level] ?? 1,
+    msg: (line) => parseLine(line).msg,
+  }
+  let logSort = $state({ openvpn: { key: null, desc: false }, ovcp: { key: null, desc: false }, dnsmasq: { key: null, desc: false } })
+  const visibleLines = (id) => {
+    const out = lines[id]
+      .filter((line) => matchesQuery(line, search[id].query, (x) => x))
+      .filter((line) => levelFilter[id] === 'all' || LEVEL_RANK[parseLine(line).level] >= LEVEL_RANK[levelFilter[id]])
+    return logSort[id].key ? sortRows(out, LOG_SORT_GETTERS[logSort[id].key], logSort[id].desc) : out
+  }
 
   async function toggleDebug(e) {
     const want = e.target.checked
@@ -261,7 +273,12 @@
       <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
       <div class="scrollbox" bind:this={boxes.audit} onpointerup={(e) => fitToContent(e.currentTarget)}>
         <table class="logtable">
-          <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+          <thead><tr>
+            <th><button class="th-sort" onclick={() => toggleSort(auditSort, 'ts')}>Time{sortMark(auditSort, 'ts')}</button></th>
+            <th><button class="th-sort" onclick={() => toggleSort(auditSort, 'actor')}>Actor{sortMark(auditSort, 'actor')}</button></th>
+            <th><button class="th-sort" onclick={() => toggleSort(auditSort, 'action')}>Action{sortMark(auditSort, 'action')}</button></th>
+            <th><button class="th-sort" onclick={() => toggleSort(auditSort, 'detail')}>Detail{sortMark(auditSort, 'detail')}</button></th>
+          </tr></thead>
           <tbody>
             {#each filteredEntries as e}
               <tr>
@@ -293,7 +310,11 @@
       <!-- svelte-ignore a11y_no_static_element_interactions (pointerup only clamps the resize drag, it's not an interactive control) -->
       <div class="scrollbox" bind:this={boxes[l.id]} onpointerup={(e) => fitToContent(e.currentTarget)}>
         <table class="logtable">
-          <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
+          <thead><tr>
+            <th><button class="th-sort" onclick={() => toggleSort(logSort[l.id], 'ts')}>Time{sortMark(logSort[l.id], 'ts')}</button></th>
+            <th><button class="th-sort" onclick={() => toggleSort(logSort[l.id], 'level')}>Level{sortMark(logSort[l.id], 'level')}</button></th>
+            <th><button class="th-sort" onclick={() => toggleSort(logSort[l.id], 'msg')}>Message{sortMark(logSort[l.id], 'msg')}</button></th>
+          </tr></thead>
           <tbody>
             {#each visibleLines(l.id) as line}
               {@const p = parseLine(line)}

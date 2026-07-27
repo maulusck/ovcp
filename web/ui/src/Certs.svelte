@@ -21,7 +21,10 @@
 
   let search = $state({ open: false, query: '' })
   let sort = $state({ key: null, desc: false })
-  const SORT_GETTERS = { cn: (c) => c.CN, kind: (c) => c.Kind, expiry: (c) => new Date(c.NotAfter).getTime() }
+  const SORT_GETTERS = {
+    cn: (c) => c.CN, kind: (c) => c.Kind, expiry: (c) => new Date(c.NotAfter).getTime(),
+    status: (c) => c.Status, serial: (c) => c.Serial, dns: (c) => c.IncludeDNS,
+  }
 
   const filtered = $derived.by(() => {
     let out = certs
@@ -213,9 +216,12 @@
       <thead><tr>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'cn')}>Common name{sortMark(sort, 'cn')}</button></th>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'kind')}>Kind{sortMark(sort, 'kind')}</button></th>
-        <th>Status</th>
+        <th><button class="th-sort" onclick={() => toggleSort(sort, 'status')}>Status{sortMark(sort, 'status')}</button></th>
         <th><button class="th-sort" onclick={() => toggleSort(sort, 'expiry')}>Expires{sortMark(sort, 'expiry')}</button></th>
-        <th>Serial</th><th></th><th class="dns-col" title="Resolve via internal DNS while connected">DNS</th>
+        <th><button class="th-sort" onclick={() => toggleSort(sort, 'serial')}>Serial{sortMark(sort, 'serial')}</button></th><th></th>
+        <th class="dns-col" title="Resolve via internal DNS while connected">
+          <button class="th-sort" onclick={() => toggleSort(sort, 'dns')}>DNS{sortMark(sort, 'dns')}</button>
+        </th>
         {#if canOperate}<th></th>{/if}
       </tr></thead>
       <tbody>
@@ -237,7 +243,7 @@
             <td class={status(c).cls}>{status(c).text}</td>
             <td>{new Date(c.NotAfter).toISOString().slice(0, 10)}</td>
             <td>
-              <button class="serial" title={c.Serial + ' — click to copy'}
+              <button class="mono serial" title={c.Serial + ' — click to copy'}
                 onclick={() => copySerial(c.Serial)}>
                 {copied === c.Serial ? 'copied' : c.Serial.slice(0, 12) + '…'}
               </button>
@@ -268,10 +274,7 @@
 
 <style>
   .soon { color: var(--amber); }
-  .serial {
-    background: none; border: 0; padding: 0; color: var(--dim);
-    font-family: var(--mono); font-size: 13px; cursor: copy;
-  }
+  .serial { background: none; border: 0; padding: 0; color: var(--dim); cursor: copy; }
   .serial:hover { color: var(--text); text-decoration: underline dotted; }
   .dl { color: var(--amber); font-size: 12px; font-family: system-ui, sans-serif; }
   .dns-col { text-align: center; }

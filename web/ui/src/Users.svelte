@@ -8,13 +8,25 @@
   let form = $state({ username: '', password: '', role: 'operator' })
   let enrolled = $state(null) // {username, secret, url, qr}
 
+  const STATUS_KEY = 'ovcp_users_status'
+  let statusFilter = $state(localStorage.getItem(STATUS_KEY) || 'all')
+  const ROLE_KEY = 'ovcp_users_role'
+  let roleFilter = $state(localStorage.getItem(ROLE_KEY) || 'all')
+  $effect(() => localStorage.setItem(STATUS_KEY, statusFilter))
+  $effect(() => localStorage.setItem(ROLE_KEY, roleFilter))
+
   let search = $state({ open: false, query: '' })
   let sort = $state({ key: null, desc: false })
   const SORT_GETTERS = {
     username: (u) => u.Username, role: (u) => u.Role, created: (u) => u.CreatedAt,
+    status: (u) => u.Disabled, totp: (u) => u.TOTP,
   }
   const filtered = $derived.by(() => {
-    const out = users.filter((u) => matchesQuery(u, search.query, (x) => x.Username))
+    let out = users
+    if (statusFilter === 'enabled') out = out.filter((u) => !u.Disabled)
+    else if (statusFilter === 'disabled') out = out.filter((u) => u.Disabled)
+    if (roleFilter !== 'all') out = out.filter((u) => u.Role === roleFilter)
+    out = out.filter((u) => matchesQuery(u, search.query, (x) => x.Username))
     return sort.key ? sortRows(out, SORT_GETTERS[sort.key], sort.desc) : out
   })
 
@@ -115,7 +127,7 @@
       <h2>2FA enrollment — {enrolled.username}</h2>
       <p class="muted small">Scan with an authenticator app, or enter the secret manually. This QR is shown once.</p>
       <img class="qr" src={enrolled.qr} alt="TOTP QR code" width="160" height="160" />
-      <p class="secret">secret: <code>{enrolled.secret}</code></p>
+      <p class="mono">secret: <code>{enrolled.secret}</code></p>
       <button type="button" class="ghost" onclick={() => (enrolled = null)}>Done</button>
     </div>
   {/if}
@@ -127,6 +139,23 @@
         <input type="search" class="search-input" bind:value={search.query} placeholder="Filter by username…" use:autofocus />
       {/if}
     </h2>
+    <div class="row">
+      <label class="poll-pick">Status
+        <select bind:value={statusFilter}>
+          <option value="all">all</option>
+          <option value="enabled">enabled</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </label>
+      <label class="poll-pick">Role
+        <select bind:value={roleFilter}>
+          <option value="all">all</option>
+          <option value="admin">admin</option>
+          <option value="operator">operator</option>
+          <option value="readonly">readonly</option>
+        </select>
+      </label>
+    </div>
     {#if users.length === 0}
       <p class="muted">No users yet.</p>
     {:else if filtered.length === 0}
@@ -136,7 +165,8 @@
         <thead><tr>
           <th><button class="th-sort" onclick={() => toggleSort(sort, 'username')}>Username{sortMark(sort, 'username')}</button></th>
           <th><button class="th-sort" onclick={() => toggleSort(sort, 'role')}>Role{sortMark(sort, 'role')}</button></th>
-          <th>Status</th><th>2FA</th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'status')}>Status{sortMark(sort, 'status')}</button></th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'totp')}>2FA{sortMark(sort, 'totp')}</button></th>
           <th><button class="th-sort" onclick={() => toggleSort(sort, 'created')}>Created{sortMark(sort, 'created')}</button></th>
           <th></th>
         </tr></thead>
@@ -173,5 +203,4 @@
 
 <style>
   .qr { background: #fff; padding: 8px; border-radius: 4px; }
-  .secret { font-family: var(--mono); font-size: 13px; }
 </style>

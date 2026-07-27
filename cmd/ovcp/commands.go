@@ -114,6 +114,16 @@ func parseBoolArg(s string) (bool, error) {
 	return false, fmt.Errorf("want on|off (or true|false, 1|0), got %q", s)
 }
 
+// boolText renders a bool for humans as on/off, matching parseBoolArg's own
+// vocabulary — status output shouldn't disagree with the "-flag on|off"
+// usage string that set it.
+func boolText(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
 var (
 	vpnOps    = []string{"start", "stop", "restart", "reconnect", "status", "kill", "config"}
 	vpnOpDesc = map[string]string{
@@ -538,12 +548,15 @@ var certSortGetters = map[string]func(store.Cert) string{
 	"kind":   func(c store.Cert) string { return c.Kind },
 	"expiry": func(c store.Cert) string { return c.NotAfter.Format(time.RFC3339) },
 	"serial": func(c store.Cert) string { return c.Serial },
+	"status": func(c store.Cert) string { return c.Status() },
 }
 
 var userSortGetters = map[string]func(store.User) string{
 	"username": func(u store.User) string { return u.Username },
 	"role":     func(u store.User) string { return u.Role },
 	"created":  func(u store.User) string { return u.CreatedAt.Format(time.RFC3339) },
+	"status":   func(u store.User) string { return boolText(!u.Disabled) },
+	"2fa":      func(u store.User) string { return boolText(u.TOTPSecret != "") },
 }
 
 // certStatus renders c.Status() for the text/-json list output — same
@@ -603,7 +616,7 @@ func filterSortCerts(certs []store.Cert, status, kind, sortBy string, desc bool)
 func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 	status := fs.String("status", "all", "all|active|revoked")
 	kind := fs.String("kind", "all", "all|client|server")
-	sortBy := fs.String("sort", "", "cn|kind|expiry|serial (default: issued order)")
+	sortBy := fs.String("sort", "", "cn|kind|expiry|serial|status (default: issued order)")
 	desc := fs.Bool("desc", false, "reverse sort order")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
@@ -617,6 +630,7 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 			rows = append(rows, certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter})
 		}
 		output(rows, func(rows []certOut) {
+			fmt.Printf("%-10s %-10s %-24s %-18s %s\n", "STATUS", "KIND", "CN", "EXPIRES", "SERIAL")
 			for _, c := range rows {
 				fmt.Printf("%s %-10s %-24s expires %s  %s\n",
 					coloredStatus(c.Status), c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
@@ -889,7 +903,7 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 			lfs := newFlags("record list")
 			status := lfs.String("status", "all", "all|active|revoked")
 			kind := lfs.String("kind", "all", "all|client|server")
-			sortBy := lfs.String("sort", "", "cn|kind|expiry|serial (default: issued order)")
+			sortBy := lfs.String("sort", "", "cn|kind|expiry|serial|status (default: issued order)")
 			desc := lfs.Bool("desc", false, "reverse sort order")
 			lfs.Parse(rest)
 			s := ctx.openStore()
@@ -905,6 +919,7 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 			}
 			output(recordListOut{rows, string(customData)}, func(o recordListOut) {
 				fmt.Println("Certificate records:")
+				fmt.Printf("%-10s %-10s %-24s %-18s %-8s %s\n", "STATUS", "KIND", "CN", "EXPIRES", "DNS", "SERIAL")
 				for _, r := range o.Certs {
 					dns := "excluded"
 					if r.IncludeDNS {
@@ -1033,7 +1048,7 @@ func cmdDNSConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		output(api.LoadDNSConfig(s), func(c api.DNSConfig) {
-			fmt.Println("block-internet:", c.BlockInternet)
+			fmt.Println("block-internet:", boolText(c.BlockInternet))
 		})
 		warnDNSLeak(s)
 	}
@@ -1059,7 +1074,7 @@ func cmdDNSConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		s.Audit("cli", "dns_block_internet_"+action, "")
 		warnDNSLeak(s)
 		output(cfg, func(c api.DNSConfig) {
-			fmt.Println("block-internet:", c.BlockInternet, "(restart dns to apply)")
+			fmt.Println("block-internet:", boolText(c.BlockInternet), "(restart dns to apply)")
 			fmt.Println("saved")
 		})
 	}
@@ -1209,9 +1224,9 @@ func printConfigText(c ovpnconf.Config) {
 	fmt.Println("subnet:     ", c.Subnet)
 	fmt.Println("cipher:     ", c.Cipher)
 	fmt.Println("dns:        ", strings.Join(c.DNS, ", "))
-	fmt.Println("push-internal-dns:", c.PushInternalDNS)
+	fmt.Println("push-internal-dns:", boolText(c.PushInternalDNS))
 	fmt.Println("routes:     ", strings.Join(c.Routes, ", "))
-	fmt.Println("redirect-gw:", c.RedirectGW)
+	fmt.Println("redirect-gw:", boolText(c.RedirectGW))
 	if c.Extra != "" {
 		fmt.Println("extra:")
 		fmt.Println(c.Extra)
@@ -1513,7 +1528,7 @@ func cmdTelegramConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		output(telegram.ConfigStatus(s), func(st controller.TelegramStatus) {
-			fmt.Println("token-set:", st.TokenSet)
+			fmt.Println("token-set:", boolText(st.TokenSet))
 			fmt.Println("admin:    ", st.Admin)
 		})
 	}
@@ -1546,7 +1561,7 @@ func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 			s.Audit("cli", "telegram_token_change", "")
 		}
 		output(telegram.ConfigStatus(s), func(st controller.TelegramStatus) {
-			fmt.Println("token-set:", st.TokenSet)
+			fmt.Println("token-set:", boolText(st.TokenSet))
 			fmt.Println("admin:    ", st.Admin)
 			fmt.Println("saved; run 'ovcp telegram start' (or restart serve) to bring the bot up")
 		})
@@ -1623,21 +1638,37 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 
 		case "list":
 			lfs := newFlags("user list")
-			sortBy := lfs.String("sort", "", "username|role|created (default: today's order)")
+			status := lfs.String("status", "all", "all|enabled|disabled")
+			role := lfs.String("role", "all", "all|admin|operator|readonly")
+			sortBy := lfs.String("sort", "", "username|role|created|status|2fa (default: today's order)")
 			desc := lfs.Bool("desc", false, "reverse sort order")
 			lfs.Parse(rest)
 			users, err := s.ListUsers()
 			die(err)
-			die(sortByFlag(users, userSortGetters, *sortBy, *desc))
-			rows := []api.UserSummary{}
+			var filtered []store.User
 			for _, u := range users {
+				if *status == "enabled" && u.Disabled {
+					continue
+				}
+				if *status == "disabled" && !u.Disabled {
+					continue
+				}
+				if *role != "all" && u.Role != *role {
+					continue
+				}
+				filtered = append(filtered, u)
+			}
+			die(sortByFlag(filtered, userSortGetters, *sortBy, *desc))
+			rows := []api.UserSummary{}
+			for _, u := range filtered {
 				rows = append(rows, api.NewUserSummary(u))
 			}
 			output(rows, func(rows []api.UserSummary) {
+				fmt.Printf("%-20s %-9s %-8s %s\n", "USERNAME", "ROLE", "STATUS", "2FA")
 				for _, u := range rows {
 					st := fmt.Sprintf("%-8s", "enabled")
 					if u.Disabled {
-						st = red(fmt.Sprintf("%-8s", "DISABLED"))
+						st = red(fmt.Sprintf("%-8s", "disabled"))
 					} else {
 						st = green(st)
 					}
@@ -1731,14 +1762,24 @@ type totpOut struct {
 	URL    string `json:"url"`
 }
 
+var auditSortGetters = map[string]func(store.AuditEntry) string{
+	"ts":     func(e store.AuditEntry) string { return e.TS.Format(time.RFC3339) },
+	"actor":  func(e store.AuditEntry) string { return e.Actor },
+	"action": func(e store.AuditEntry) string { return e.Action },
+}
+
 func cmdAudit(fs *flag.FlagSet) func(ctx *cliContext) {
+	sortBy := fs.String("sort", "", "ts|actor|action (default: newest first)")
+	desc := fs.Bool("desc", false, "reverse sort order")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		tail, err := s.AuditTail(50)
 		die(err)
 		slices.Reverse(tail) // newest first, in both output modes
+		die(sortByFlag(tail, auditSortGetters, *sortBy, *desc))
 		output(tail, func(tail []store.AuditEntry) {
+			fmt.Printf("%-25s %-12s %-16s %s\n", "TIME", "ACTOR", "ACTION", "DETAIL")
 			for _, e := range tail {
 				fmt.Printf("%s %-12s %-16s %s\n", e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail)
 			}

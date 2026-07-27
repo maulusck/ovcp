@@ -332,6 +332,9 @@
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 6px; padding: 18px; overflow-x: auto;
   }
+  /* a text child's own margin-bottom would otherwise stack on top of this
+     padding (buttons have no such margin, so they never had the problem) */
+  :global(.card > :last-child) { margin-bottom: 0; }
   :global(h2) { font-size: 15px; font-weight: 600; margin: 0 0 12px; letter-spacing: .02em; }
   /* was the raw browser default (~1em/16px) everywhere — no rule existed */
   :global(p) { margin: 8px 0; }
@@ -446,6 +449,9 @@
     font-family: var(--mono); font-size: 11px; color: var(--dim);
     border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px;
   }
+  /* one monospace value/label, full-strength color — Users' 2FA secret. .status-line
+     is this same size/family plus flex+dim, for a de-emphasized status row instead. */
+  :global(.mono) { font-family: var(--mono); font-size: 12px; }
   /* one monospace status row — Settings' Telegram line, Dashboard's server-status card */
   :global(.status-line) { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
   :global(.status-line.warn) { color: var(--amber); }

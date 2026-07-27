@@ -231,7 +231,7 @@ commas, so it passes through the comma\-split unchanged
 Also available from the web UI (Certs tab), a plain multi\-line field.
 .RE
 .TP
-.B certificate list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
+.B certificate list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial|status] [\fB\-desc\fR]
 List issued certificates with status (valid, expiring, REVOKED, expired;
 expiring is anything within 30 days of \fBNotAfter\fR, matching the web
 UI's Certs tab), colored accordingly (see \fB\-no\-color\fR).
@@ -489,7 +489,7 @@ turning this on without also pushing the internal resolver, or combining
 it with manually pushed DNS servers (\fBvpn config set \-dns\fR), leaves a
 documented leak that both commands warn about on save (non\-fatal).
 .TP
-.B record list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial] [\fB\-desc\fR]
+.B record list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial|status] [\fB\-desc\fR]
 .TQ
 .B record edit
 .TQ
@@ -544,15 +544,16 @@ rotation timestamp.
 .TP
 .B user add \fB\-name\fR \fINAME\fR [\fB\-role\fR admin|operator|readonly]
 .TQ
-.B user list [\fB\-sort\fR username|role|created] [\fB\-desc\fR]
+.B user list [\fB\-status\fR all|enabled|disabled] [\fB\-role\fR all|admin|operator|readonly] [\fB\-sort\fR username|role|created|status|2fa] [\fB\-desc\fR]
 .TQ
 .B user del|disable|enable|passwd \fB\-name\fR \fINAME\fR
 .TQ
 .B user totp \fB\-name\fR \fINAME\fR [\fB\-off\fR]
 Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
 (certificates, disconnects, default for \fBadd\fR), \fBreadonly\fR.
-\fBuser list\fR's \fB\-sort\fR reorders (default: today's order); \fB\-desc\fR
-reverses it, and its enabled/DISABLED status is colored (see
+\fBuser list\fR's \fB\-status\fR/\fB\-role\fR filter before printing (default
+\fBall\fR); \fB\-sort\fR reorders the filtered list (default: today's order);
+\fB\-desc\fR reverses it, and its enabled/disabled status is colored (see
 \fB\-no\-color\fR). Same as the web UI's Users tab \(en see
 \fBMACHINE\-READABLE OUTPUT\fR for \fB\-json\fR's fields per subcommand.
 .B user totp
@@ -562,9 +563,10 @@ CLI \(en unlike the REST API, which refuses to delete or disable the
 caller's own account. Take care when scripting either against the
 currently\-authenticated admin.
 .TP
-.B audit
+.B audit [\fB\-sort\fR ts|actor|action] [\fB\-desc\fR]
 Print the last 50 audit entries (logins, issues, revocations, kills,
-config changes), newest first.
+config changes), newest first by default; \fB\-sort\fR reorders them,
+\fB\-desc\fR reverses it.
 .TP
 .B debug on|off [\fB\-ctrl\fR \fIPATH\fR]
 Toggle verbose logging on a running \fBserve\fR (over the control socket,

@@ -396,7 +396,7 @@ func TestLogsCommand(t *testing.T) {
 		t.Fatalf("init: %+v", r)
 	}
 	if r := run(t, env, "logs", "config", "get"); r.code != 0 ||
-		!strings.Contains(r.stdout, "enabled:           true") ||
+		!strings.Contains(r.stdout, "enabled:           on") ||
 		!strings.Contains(r.stdout, "retention-days:    14") ||
 		!strings.Contains(r.stdout, "keep-uncompressed: 2") {
 		t.Fatalf("logs config get defaults: %+v", r)
@@ -405,7 +405,7 @@ func TestLogsCommand(t *testing.T) {
 		t.Fatalf("logs config set: %+v", r)
 	}
 	if r := run(t, env, "logs", "config", "get"); r.code != 0 ||
-		!strings.Contains(r.stdout, "enabled:           false") ||
+		!strings.Contains(r.stdout, "enabled:           off") ||
 		!strings.Contains(r.stdout, "retention-days:    7") ||
 		!strings.Contains(r.stdout, "keep-uncompressed: 2") {
 		t.Fatalf("logs config get after set: %+v", r)
@@ -466,13 +466,13 @@ func TestListFilterSort(t *testing.T) {
 
 	r := run(t, env, "certificate", "list", "-status", "all", "-sort", "cn")
 	rows := strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(rows) != 3 || !strings.Contains(rows[0], "alice") {
-		t.Fatalf("-sort cn should put alice first: %+v", r)
+	if len(rows) != 4 || !strings.Contains(rows[1], "alice") {
+		t.Fatalf("-sort cn should put alice first (after the header row): %+v", r)
 	}
 	r = run(t, env, "certificate", "list", "-status", "all", "-sort", "cn", "-desc")
 	rows = strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if len(rows) != 3 || !strings.Contains(rows[0], "vpn.example.com") {
-		t.Fatalf("-sort cn -desc should put vpn.example.com first: %+v", r)
+	if len(rows) != 4 || !strings.Contains(rows[1], "vpn.example.com") {
+		t.Fatalf("-sort cn -desc should put vpn.example.com first (after the header row): %+v", r)
 	}
 
 	// an unrecognized -sort value must error, not silently fall back to
@@ -536,12 +536,27 @@ func TestUserListSort(t *testing.T) {
 		}
 	}
 	r := run(t, env, "user", "list", "-sort", "username")
-	if !strings.HasPrefix(strings.TrimSpace(r.stdout), "alice") {
-		t.Fatalf("-sort username should put alice first: %+v", r)
+	rows := strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(rows) != 4 || !strings.HasPrefix(rows[1], "alice") {
+		t.Fatalf("-sort username should put alice first (after the header row): %+v", r)
 	}
 	r = run(t, env, "user", "list", "-sort", "username", "-desc")
-	if !strings.HasPrefix(strings.TrimSpace(r.stdout), "charlie") {
-		t.Fatalf("-sort username -desc should put charlie first: %+v", r)
+	rows = strings.Split(strings.TrimSpace(r.stdout), "\n")
+	if len(rows) != 4 || !strings.HasPrefix(rows[1], "charlie") {
+		t.Fatalf("-sort username -desc should put charlie first (after the header row): %+v", r)
+	}
+
+	if r := run(t, addUser, "user", "add", "-name", "dana", "-role", "readonly"); r.code != 0 {
+		t.Fatalf("user add dana: %+v", r)
+	}
+	if r := run(t, env, "user", "disable", "-name", "bob"); r.code != 0 {
+		t.Fatalf("user disable bob: %+v", r)
+	}
+	if r := run(t, env, "user", "list", "-status", "disabled"); !strings.Contains(r.stdout, "bob") || strings.Contains(r.stdout, "alice") {
+		t.Fatalf("-status disabled should show only bob: %+v", r)
+	}
+	if r := run(t, env, "user", "list", "-role", "readonly"); !strings.Contains(r.stdout, "dana") || strings.Contains(r.stdout, "alice") {
+		t.Fatalf("-role readonly should show only dana: %+v", r)
 	}
 }
 
@@ -975,8 +990,8 @@ func TestUserManagement(t *testing.T) {
 	if r := run(t, env, "user", "disable", "-name", "bob"); r.code != 0 {
 		t.Fatalf("user disable: %+v", r)
 	}
-	if r := run(t, env, "user", "list"); !strings.Contains(r.stdout, "DISABLED") {
-		t.Fatalf("expected DISABLED: %+v", r)
+	if r := run(t, env, "user", "list"); !strings.Contains(r.stdout, "disabled") {
+		t.Fatalf("expected disabled: %+v", r)
 	}
 	if r := run(t, env, "user", "enable", "-name", "bob"); r.code != 0 {
 		t.Fatalf("user enable: %+v", r)
@@ -1360,20 +1375,21 @@ func TestDNSCommand(t *testing.T) {
 		t.Fatalf("dns reconnect must not exist: %+v", r)
 	}
 
-	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "false") {
+	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "off") {
 		t.Fatalf("dns config get default: %+v", r)
 	}
-	// on/true/1 (and off/false/0) are all the same boolean vocabulary — exercise both spellings.
+	// on/true/1 (and off/false/0) are all the same boolean vocabulary going in — exercise both
+	// spellings; text output always comes back as on/off (boolText).
 	if r := run(t, env, "dns", "config", "set", "-block-internet", "on"); r.code != 0 {
 		t.Fatalf("dns config set on: %+v", r)
 	}
-	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "true") {
+	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "on") {
 		t.Fatalf("dns config get after on: %+v", r)
 	}
 	if r := run(t, env, "dns", "config", "set", "-block-internet", "0"); r.code != 0 {
 		t.Fatalf("dns config set 0: %+v", r)
 	}
-	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "false") {
+	if r := run(t, env, "dns", "config", "get"); r.code != 0 || !strings.Contains(r.stdout, "off") {
 		t.Fatalf("dns config get after 0: %+v", r)
 	}
 	if r := run(t, env, "dns", "config", "set", "-block-internet", "bogus"); r.code == 0 {

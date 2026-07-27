@@ -17,7 +17,7 @@
 
   let sort = $state({ key: null, desc: false })
   const SORT_GETTERS = {
-    cn: (s) => s.CN, disconnected: (s) => s.DisconnectedAt,
+    cn: (s) => s.CN, real: (s) => s.RealAddress, disconnected: (s) => s.DisconnectedAt,
     duration: (s) => new Date(s.DisconnectedAt) - new Date(s.ConnectedAt),
     recv: (s) => s.BytesRecv, sent: (s) => s.BytesSent,
   }
@@ -165,7 +165,7 @@
       <table>
         <thead><tr>
           <th><button class="th-sort" onclick={() => toggleSort(sort, 'cn')}>Common name{sortMark(sort, 'cn')}</button></th>
-          <th>Real address</th>
+          <th><button class="th-sort" onclick={() => toggleSort(sort, 'real')}>Real address{sortMark(sort, 'real')}</button></th>
           <th><button class="th-sort" onclick={() => toggleSort(sort, 'disconnected')}>Disconnected{sortMark(sort, 'disconnected')}</button></th>
           <th><button class="th-sort" onclick={() => toggleSort(sort, 'duration')}>Duration{sortMark(sort, 'duration')}</button></th>
           <th><button class="th-sort" onclick={() => toggleSort(sort, 'recv')}>Received{sortMark(sort, 'recv')}</button></th>
