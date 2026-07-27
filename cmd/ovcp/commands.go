@@ -647,7 +647,7 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 	years := fs.Int("ca-years", 10, "CA validity")
 	days := fs.Int("server-days", 825, "server cert validity (days)")
 	admin := fs.String("admin", "admin", "initial admin username ('' to skip)")
-	mgmt := fs.String("mgmt", mgmtSock(), "mgmt socket")
+	mgmt := mgmtFlag(fs)
 	return func(ctx *cliContext) {
 		if *skeleton {
 			die(ensureSkeleton(ctx.dataDir))
@@ -750,8 +750,8 @@ type initOut struct {
 
 func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
 	listen := fs.String("listen", cmp.Or(os.Getenv("OVCP_LISTEN"), "127.0.0.1:8443"), "admin UI listen addr(s), comma-separated")
-	mgmt := fs.String("mgmt", mgmtSock(), "mgmt socket")
-	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
+	mgmt := mgmtFlag(fs)
+	ctrl := ctrlFlag(fs, "")
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
@@ -831,7 +831,7 @@ func printStatusText(st statusOut) {
 }
 
 func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
-	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
+	ctrl := ctrlFlag(fs, "")
 	return func(ctx *cliContext) {
 		st := statusOut{Clients: []controller.VPNClient{}}
 		// process line first (from serve); if serve/openvpn is down, there
@@ -876,7 +876,7 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 }
 
 func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
-	ctrl := fs.String("ctrl", ctrlSock(), "serve control socket")
+	ctrl := ctrlFlag(fs, "")
 	cn := fs.String("cn", "", "client CN (required)")
 	return func(ctx *cliContext) {
 		if *cn == "" {
@@ -1003,7 +1003,7 @@ func activeCertByCN(certs []store.Cert, cn string) (store.Cert, bool) {
 // cmdVPN (vpn, which special-cases kill before falling through to this).
 func runProcOp(ctx *cliContext, name, op string, rest []string, wirePrefix string) {
 	ofs := newFlags(name + " " + op)
-	ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+	ctrl := ctrlFlag(ofs, "")
 	ofs.Parse(rest)
 	r, err := controller.Control(*ctrl, wirePrefix+op)
 	die(err)
@@ -1507,7 +1507,7 @@ func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		op, rest := opArg(fs, "debug", debugOps, debugOpDesc)
 		ofs := newFlags("debug " + op)
-		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+		ctrl := ctrlFlag(ofs, "")
 		ofs.Parse(rest)
 		_, err := controller.Control(*ctrl, "debug "+op)
 		die(err)
@@ -1577,7 +1577,7 @@ func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 
 		ofs := newFlags("telegram " + op)
-		ctrl := ofs.String("ctrl", ctrlSock(), "serve control socket")
+		ctrl := ctrlFlag(ofs, "")
 		ofs.Parse(rest)
 
 		var st controller.TelegramStatus

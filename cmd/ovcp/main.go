@@ -332,14 +332,26 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	slog.Info("ovcp stopped", "uptime", time.Since(controller.ProcessStartedAt).Round(time.Second))
 }
 
+// sockPath resolves a unix socket path: env var override, else the default —
+// the one place either socket's env-var-vs-default precedence is decided.
+func sockPath(env, def string) string { return cmp.Or(os.Getenv(env), def) }
+
 // ctrlSock is the serve control socket path (CLI ↔ serve for vpn ops).
-func ctrlSock() string {
-	return cmp.Or(os.Getenv("OVCP_CTRL_SOCK"), "/run/ovcp/control.sock")
-}
+func ctrlSock() string { return sockPath("OVCP_CTRL_SOCK", "/run/ovcp/control.sock") }
 
 // mgmtSock is the openvpn management socket path (CLI/serve ↔ openvpn).
-func mgmtSock() string {
-	return cmp.Or(os.Getenv("OVCP_MGMT_SOCK"), "/run/ovcp/mgmt.sock")
+func mgmtSock() string { return sockPath("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock") }
+
+// ctrlFlag/mgmtFlag register the -ctrl/-mgmt flags every command shares —
+// CLI flag > env var (ctrlSock/mgmtSock's default) > hardcoded path, decided
+// once here instead of re-declared at every call site. note appends
+// command-specific help text (e.g. stats' "-follow only").
+func ctrlFlag(fs *flag.FlagSet, note string) *string {
+	return fs.String("ctrl", ctrlSock(), "serve control socket"+note)
+}
+
+func mgmtFlag(fs *flag.FlagSet) *string {
+	return fs.String("mgmt", mgmtSock(), "mgmt socket")
 }
 
 // newSupervisor wires the single openvpn worker controller from data paths.
