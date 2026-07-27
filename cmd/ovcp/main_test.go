@@ -1301,8 +1301,14 @@ func TestCustomOptsNoChange(t *testing.T) {
 	if err := os.WriteFile(touch, []byte("#!/bin/sh\necho 'client-to-client' >> \"$1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if r := run(t, withEnv(env, "EDITOR="+touch), "vpn", "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "saved") {
+	r := run(t, withEnv(env, "EDITOR="+touch), "vpn", "config", "edit")
+	if r.code != 0 || !strings.Contains(r.stdout, "saved") {
 		t.Fatalf("an editor that changed content should report 'saved': %+v", r)
+	}
+	// the actual bug: edit used to save silently, with no diff shown and no
+	// validation run — it now saves through the same path `set` does.
+	if !strings.Contains(r.stdout, "client-to-client") {
+		t.Fatalf("edit should show its diff, not just 'saved': %+v", r)
 	}
 }
 

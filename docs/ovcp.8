@@ -271,7 +271,8 @@ raw extra directives \(en the same values \fBGET /api/vpn/config\fR (web UI
 Settings tab) reads.
 .TP
 .B vpn config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-push\-internal\-dns\fR on|off] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR on|off] [\fB\-extra\fR \fIOPTS\fR|\fB\-\fR]
-Change one or more server settings and persist them \(en the CLI/env\-var
+Change one or more server settings and persist them, printing the same
+\fB+\fR/\fB\-\fR diff \fBpreview\fR below shows \(en the CLI/env\-var
 equivalent of the web UI's Settings tab \fBPUT /api/vpn/config\fR, for
 containers and non\-attended initialization where there is no browser to
 click Save. Every flag defaults to its zero value, meaning \(lqleave this

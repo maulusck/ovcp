@@ -1290,6 +1290,40 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 	}
 }
 
+// printDiff renders a server.conf diff — shared by preview (dry-run) and
+// saveVPNConfig (what set/edit are about to persist), one rendering not two.
+func printDiff(diff []string) {
+	if len(diff) == 0 {
+		fmt.Println("no changes vs. the saved server.conf")
+		return
+	}
+	for _, l := range diff {
+		if strings.HasPrefix(l, "+") {
+			fmt.Println(green(l))
+		} else {
+			fmt.Println(red(l))
+		}
+	}
+}
+
+// saveVPNConfig validates cfg, shows its diff against cur, and persists it —
+// the one path vpn config set and edit both save through, so a change made
+// via either can't skip validation or go unshown (edit used to hand-roll
+// its own save, silently skipping both).
+func saveVPNConfig(ctx *cliContext, s *store.Store, cur, cfg ovpnconf.Config, auditDetail string) {
+	die(cfg.Validate())
+	diff := ovpnconf.Diff(cur.Render(), cfg.Render())
+	enc, _ := json.Marshal(cfg)
+	die(s.SetSetting("vpn_config", string(enc)))
+	die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
+	s.Audit("cli", "config_change", auditDetail)
+	warnDNSLeak(s)
+	output(cfg, func(c ovpnconf.Config) {
+		printDiff(diff)
+		fmt.Println("saved; run `ovcp vpn restart` to apply")
+	})
+}
+
 // cmdVPNConfigSet applies flag overrides and persists — PUT /api/vpn/config's CLI twin.
 func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	apply := configFlags(fs)
@@ -1297,15 +1331,10 @@ func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		raw, _ := s.GetSetting("vpn_config")
-		cfg, err := apply(ovpnconf.Load(raw))
+		cur := ovpnconf.Load(raw)
+		cfg, err := apply(cur)
 		die(err)
-		die(cfg.Validate())
-		enc, _ := json.Marshal(cfg)
-		die(s.SetSetting("vpn_config", string(enc)))
-		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
-		s.Audit("cli", "config_change", "")
-		warnDNSLeak(s)
-		output(cfg, func(c ovpnconf.Config) { fmt.Println("saved; run `ovcp vpn restart` to apply") })
+		saveVPNConfig(ctx, s, cur, cfg, "")
 	}
 }
 
@@ -1322,19 +1351,7 @@ func cmdVPNConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
 		die(err)
 		die(cfg.Validate())
 		diff := ovpnconf.Diff(cur.Render(), cfg.Render())
-		output(previewOut{diff, len(diff) > 0}, func(o previewOut) {
-			if !o.Changed {
-				fmt.Println("no changes vs. the saved server.conf")
-				return
-			}
-			for _, l := range o.Diff {
-				if strings.HasPrefix(l, "+") {
-					fmt.Println(green(l))
-				} else {
-					fmt.Println(red(l))
-				}
-			}
-		})
+		output(previewOut{diff, len(diff) > 0}, func(o previewOut) { printDiff(o.Diff) })
 		if w := api.DNSLeakWarning(cfg, api.LoadDNSConfig(s)); w != "" {
 			fmt.Fprintln(os.Stderr, "warning:", w)
 		}
@@ -1346,25 +1363,24 @@ type previewOut struct {
 	Changed bool     `json:"changed"`
 }
 
-// cmdVPNConfigEdit edits the server config's raw extra directives in $EDITOR —
-// unchanged behavior from the old standalone `custom-opts` command.
+// cmdVPNConfigEdit edits the server config's raw extra directives in $EDITOR,
+// then saves through the same path -extra - on `set` would — unchanged
+// behavior from the old standalone `custom-opts` command, now sharing its
+// validation/diff/persist with set instead of duplicating a subset of it.
 func cmdVPNConfigEdit(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		raw, _ := s.GetSetting("vpn_config")
-		cfg := ovpnconf.Load(raw)
-		extra, changed := editText(cfg.Extra)
+		cur := ovpnconf.Load(raw)
+		extra, changed := editText(cur.Extra)
 		if !changed {
 			output(msg("no change"), printMsg)
 			return
 		}
+		cfg := cur
 		cfg.Extra = extra
-		enc, _ := json.Marshal(cfg)
-		die(s.SetSetting("vpn_config", string(enc)))
-		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
-		s.Audit("cli", "config_change", "custom options")
-		output(msg("saved; run `ovcp vpn restart` to apply"), printMsg)
+		saveVPNConfig(ctx, s, cur, cfg, "custom options")
 	}
 }
 
