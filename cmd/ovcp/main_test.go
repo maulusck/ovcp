@@ -1088,10 +1088,12 @@ func TestUnreachableServe(t *testing.T) {
 	}
 	// status is deliberately soft: no worker to report on isn't a CLI error.
 	// certs still come from the store directly (no serve needed) — 2 here:
-	// the server cert plus AllCerts' synthetic CA row. Telegram is silently
-	// omitted rather than failing the whole command.
+	// the server cert plus AllCerts' synthetic CA row. dns-status/telegram-status
+	// share the same unreachable control socket as the status call above, so
+	// they're "unknown", not a false "stopped" or a silently missing line.
 	if r := run(t, env, "status"); r.code != 0 || !strings.Contains(r.stdout, "OpenVPN: unknown") ||
-		!strings.Contains(r.stdout, "Certs: 2") || strings.Contains(r.stdout, "Telegram:") {
+		!strings.Contains(r.stdout, "DNS: unknown") || !strings.Contains(r.stdout, "Telegram: unknown") ||
+		!strings.Contains(r.stdout, "Certs: 2") {
 		t.Fatalf("status with no serve running: %+v", r)
 	}
 

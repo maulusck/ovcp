@@ -806,9 +806,14 @@ func printStatusText(st statusOut) {
 				c.ConnectedSince.Format(time.RFC3339))
 		}
 	}
-	if st.DNSRunning {
+	switch {
+	case st.Error != "" && !st.Running:
+		// same control socket the OpenVPN line above already reported
+		// unreachable — dns-status would fail identically, not really "stopped".
+		fmt.Println("DNS: unknown")
+	case st.DNSRunning:
 		fmt.Println(green(fmt.Sprintf("DNS: running (pid %d, up %s)", st.DNSPid, st.DNSUptime)))
-	} else {
+	default:
 		fmt.Println(red("DNS: stopped"))
 	}
 	if st.OvcpUptime != "" {
@@ -820,6 +825,8 @@ func printStatusText(st statusOut) {
 		fmt.Printf("Certs: %d, %d expiring\n", st.CertsTotal, st.CertsExpiring)
 	}
 	switch {
+	case st.Error != "" && !st.Running:
+		fmt.Println("Telegram: unknown")
 	case st.Telegram == nil:
 	case !st.Telegram.TokenSet:
 		fmt.Println("Telegram: not configured")
@@ -857,9 +864,15 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 			}
 		}
 
-		if dr, err := controller.Control(*ctrl, "dns-status"); err == nil && dr.Pid != 0 {
-			st.DNSRunning, st.DNSPid = true, dr.Pid
-			st.DNSUptime = fmtUptime(dr.StartedAt)
+		// dns-status/telegram-status share the same control socket the status
+		// call above already dialed — if that failed, these would fail
+		// identically; skip the guaranteed-redundant round trips.
+		serveUnreachable := st.Error != "" && !st.Running
+		if !serveUnreachable {
+			if dr, err := controller.Control(*ctrl, "dns-status"); err == nil && dr.Pid != 0 {
+				st.DNSRunning, st.DNSPid = true, dr.Pid
+				st.DNSUptime = fmtUptime(dr.StartedAt)
+			}
 		}
 
 		s := ctx.openStore()
@@ -867,8 +880,10 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 		if certs, err := s.AllCerts(ctx.p); err == nil {
 			st.CertsTotal, st.CertsExpiring = store.CertCounts(certs)
 		}
-		if tg, err := controller.TelegramGetStatus(*ctrl); err == nil {
-			st.Telegram = &tg
+		if !serveUnreachable {
+			if tg, err := controller.TelegramGetStatus(*ctrl); err == nil {
+				st.Telegram = &tg
+			}
 		}
 
 		output(st, printStatusText)

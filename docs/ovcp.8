@@ -383,6 +383,10 @@ clients, via the control socket, see \fBOVCP_CTRL_SOCK\fR), cert counts
 Telegram bot's state \(en everything \fBovcp vpn|dns|telegram status\fR and
 \fBcertificate list\fR each report individually, in one place. Traffic
 history and per\-client sessions are \fBstats\fR's job, not this command's.
+\fBserve\fR unreachable reports openvpn as \fIunknown\fR (not \fIstopped\fR)
+with the connection error, and dns/Telegram \fIunknown\fR too \(en same
+socket, so a real answer for one but not the others isn't possible. Cert
+counts are unaffected, read straight from the database either way.
 .TP
 .B stats [\fB\-cn\fR \fINAME\fR] [\fB\-follow\fR] [\fB\-interval\fR \fIN\fR] [\fB\-ctrl\fR \fIPATH\fR]
 .TQ
