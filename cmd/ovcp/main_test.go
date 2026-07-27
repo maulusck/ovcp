@@ -1293,15 +1293,15 @@ func TestCustomOptsNoChange(t *testing.T) {
 	if err := os.WriteFile(noop, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if r := run(t, withEnv(env, "EDITOR="+noop), "vpn", "config", "edit"); r.code != 0 || !strings.Contains(r.stdout, "no change") {
-		t.Fatalf("no-op editor should report 'no change': %+v", r)
+	if r := run(t, withEnv(env, "EDITOR="+noop), "vpn", "config", "set", "-extra", "-"); r.code != 0 || !strings.Contains(r.stdout, "no changes") {
+		t.Fatalf("no-op editor should report 'no changes': %+v", r)
 	}
 
 	touch := filepath.Join(t.TempDir(), "touch-editor.sh")
 	if err := os.WriteFile(touch, []byte("#!/bin/sh\necho 'client-to-client' >> \"$1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r := run(t, withEnv(env, "EDITOR="+touch), "vpn", "config", "edit")
+	r := run(t, withEnv(env, "EDITOR="+touch), "vpn", "config", "set", "-extra", "-")
 	if r.code != 0 || !strings.Contains(r.stdout, "saved") {
 		t.Fatalf("an editor that changed content should report 'saved': %+v", r)
 	}
@@ -1309,6 +1309,12 @@ func TestCustomOptsNoChange(t *testing.T) {
 	// validation run — it now saves through the same path `set` does.
 	if !strings.Contains(r.stdout, "client-to-client") {
 		t.Fatalf("edit should show its diff, not just 'saved': %+v", r)
+	}
+
+	// bare `set` (no flags at all) is also an empty diff — must not silently
+	// re-write server.conf/re-audit a no-op, same guard -extra -'s no-op needs.
+	if r := run(t, env, "vpn", "config", "set"); r.code != 0 || !strings.Contains(r.stdout, "no changes") || strings.Contains(r.stdout, "saved; run") {
+		t.Fatalf("bare set with no flags should report 'no changes', not persist: %+v", r)
 	}
 }
 

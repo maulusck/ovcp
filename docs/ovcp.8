@@ -77,7 +77,7 @@ self\-clearing once the window passes; a separate, looser limit locks out
 the username alone after 20 attempts in the same window, to catch a brute
 force spread across many source IPs.
 .PP
-\fBvpn config set \-extra\fR / \fBvpn config edit\fR (server config) and
+\fBvpn config set \-extra\fR (server config) and
 \fBcertificate issue \-export\fR's \fB\-custom\-opts\fR (one client's profile) both
 append raw openvpn directives verbatim, with no parsing or validation.
 Neither needs a role beyond what already gates that surface: server config
@@ -283,13 +283,15 @@ has been saved yet). \fB\-dns\fR and \fB\-routes\fR take a comma\-separated
 list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
 appending to it. \fB\-extra\fR takes the same three forms as
 \fBcertificate issue \-export\fR's \fB\-custom\-opts\fR (comma list, \fB$(cat
-FILE)\fR, or a bare \fB\-\fR for \fB$EDITOR\fR) \(en equivalent to
-\fBvpn config edit\fR below, just scriptable inline. \fB\-redirect\-gw\fR and
+FILE)\fR, or a bare \fB\-\fR to open the current directives in \fB$EDITOR\fR,
+same idiom as \fBgit commit\fR / \fBcrontab \-e\fR). \fB\-redirect\-gw\fR and
 \fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
 or \fB1\fR/\fB0\fR, case\-insensitive \(en the same boolean vocabulary as
 \fBdns config set \-block\-internet\fR below. Rejects an invalid combination
 (bad CIDR, disallowed cipher, port out of range, an unrecognized boolean
-value) without writing anything. Takes effect on the next
+value) without writing anything; an empty diff \(en no flags changed
+anything, including an \fB$EDITOR\fR session that saved unmodified \(en
+is reported but not written either. Takes effect on the next
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload its configuration.
 .RS
@@ -322,17 +324,6 @@ or writing anything \(en the CLI twin of the web UI's \fBPreview\fR
 button (\fBPOST /api/vpn/config/preview\fR). Safe to run anytime: nothing is
 saved until the same flags are run through \fBvpn config set\fR instead \(en
 \fBvpn config get\fR right after a \fBpreview\fR still shows the old values.
-.TP
-.B vpn config edit
-Edit the server config's raw extra directives in \fB$EDITOR\fR (falls
-back to \fBvi\fR), same idiom as \fBgit commit\fR / \fBcrontab \-e\fR.
-Saved text is appended verbatim to the next rendered \fIserver.conf\fR,
-unvalidated \(en a bad line fails on the next restart. Equivalent to
-\fBvpn config set \-extra \-\fR. Also available from the web UI (Settings,
-admin role, a plain multi\-line field); all three write the same
-persisted value. Takes effect on the next
-.B ovcp vpn restart
-\(en openvpn does not hot\-reload its configuration.
 .TP
 .B ca rotate
 Re\-encrypt the CA private key under a new passphrase (prompts for the
@@ -502,8 +493,8 @@ prints every certificate (not just currently-connected ones) with its DNS
 include/exclude status, same filters/sort/coloring as \fBcertificate
 list\fR, plus \fIcustom.hosts\fR' raw content.
 .B edit
-opens the custom entries in \fB$EDITOR\fR (fallback vi), same as
-\fBvpn config edit\fR.
+opens the custom entries in \fB$EDITOR\fR (fallback vi), same idiom as
+\fBvpn config set \-extra \-\fR's \fB$EDITOR\fR trigger.
 .B include
 and
 .B exclude
@@ -723,7 +714,7 @@ cert/key.
 .B certificate revoke
 \fB{serial, crlPath}\fR.
 .TP
-.B ca rotate, vpn config edit, backup restore, user del,
+.B ca rotate, backup restore, user del,
 .B user passwd, user totp \-off, record edit|include|exclude, init \-skeleton,
 .B logs rotate
 \fB{message}\fR \(en a confirmation string, nothing structured beyond it.
@@ -1107,7 +1098,7 @@ edit the server's own extra directives:
 .RS
 ovcp certificate issue \-cn dana\-phone \-export \-remote vpn.example.com \e
   \-custom\-opts "block\-outside\-dns,ping\-restart 30" > dana\-phone.ovpn
-ovcp vpn config edit
+ovcp vpn config set \-extra \-
 .RE
 .fi
 Move the server to TCP/443 and stop routing all client traffic through

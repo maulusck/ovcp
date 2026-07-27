@@ -130,12 +130,12 @@ var (
 		"start": "bring the tunnel up", "stop": "bring it down",
 		"restart": "full stop + fresh start", "reconnect": "SIGUSR1, no restart",
 		"status": "pid, uptime, connected clients", "kill": "disconnect one client (-cn NAME)",
-		"config": "get|set|preview|edit server settings",
+		"config": "get|set|preview server settings",
 	}
-	vpnConfigOps = []string{"get", "set", "preview", "edit"}
+	vpnConfigOps = []string{"get", "set", "preview"}
 	configOpDesc = map[string]string{ // shared by every "<x> config" dispatch below
 		"get": "print the persisted config", "set": "change and persist settings",
-		"preview": "show a set's diff, unsaved", "edit": "$EDITOR for raw extra directives",
+		"preview": "show a set's diff, unsaved",
 	}
 	dnsOps    = []string{"start", "stop", "restart", "status", "config"} // no reconnect: dnsmasq has no such signal
 	dnsOpDesc = map[string]string{
@@ -1082,10 +1082,10 @@ func cmdDNSConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 
 // vpnConfigBodies wires vpn's config sub-ops through configOp — get/set
 // mirror the web UI's GET/PUT /api/vpn/config exactly (same ovpnconf.Config,
-// same wire shape); edit is the raw-directives $EDITOR flow.
+// same wire shape).
 var vpnConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
 	"get": cmdVPNConfigGet, "set": cmdVPNConfigSet,
-	"preview": cmdVPNConfigPreview, "edit": cmdVPNConfigEdit,
+	"preview": cmdVPNConfigPreview,
 }
 
 // cmdVPN drives the openvpn worker's lifecycle, plus `kill` (disconnect one
@@ -1291,7 +1291,7 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 }
 
 // printDiff renders a server.conf diff — shared by preview (dry-run) and
-// saveVPNConfig (what set/edit are about to persist), one rendering not two.
+// set (what it's about to persist), one rendering not two.
 func printDiff(diff []string) {
 	if len(diff) == 0 {
 		fmt.Println("no changes vs. the saved server.conf")
@@ -1306,25 +1306,12 @@ func printDiff(diff []string) {
 	}
 }
 
-// saveVPNConfig validates cfg, shows its diff against cur, and persists it —
-// the one path vpn config set and edit both save through, so a change made
-// via either can't skip validation or go unshown (edit used to hand-roll
-// its own save, silently skipping both).
-func saveVPNConfig(ctx *cliContext, s *store.Store, cur, cfg ovpnconf.Config, auditDetail string) {
-	die(cfg.Validate())
-	diff := ovpnconf.Diff(cur.Render(), cfg.Render())
-	enc, _ := json.Marshal(cfg)
-	die(s.SetSetting("vpn_config", string(enc)))
-	die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
-	s.Audit("cli", "config_change", auditDetail)
-	warnDNSLeak(s)
-	output(cfg, func(c ovpnconf.Config) {
-		printDiff(diff)
-		fmt.Println("saved; run `ovcp vpn restart` to apply")
-	})
-}
-
-// cmdVPNConfigSet applies flag overrides and persists — PUT /api/vpn/config's CLI twin.
+// cmdVPNConfigSet applies flag overrides and persists — PUT /api/vpn/config's
+// CLI twin. -extra - opens $EDITOR on the raw directives inline (configFlags);
+// there's no separate `edit` op to keep in sync with this validate/diff/persist
+// sequence, just this one path every vpn config change saves through. An empty
+// diff never writes or audits — true whether that's zero flags passed, values
+// matching what's already saved, or an $EDITOR session that changed nothing.
 func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	apply := configFlags(fs)
 	return func(ctx *cliContext) {
@@ -1334,7 +1321,21 @@ func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		cur := ovpnconf.Load(raw)
 		cfg, err := apply(cur)
 		die(err)
-		saveVPNConfig(ctx, s, cur, cfg, "")
+		die(cfg.Validate())
+		diff := ovpnconf.Diff(cur.Render(), cfg.Render())
+		if len(diff) == 0 {
+			output(cfg, func(c ovpnconf.Config) { printDiff(diff) })
+			return
+		}
+		enc, _ := json.Marshal(cfg)
+		die(s.SetSetting("vpn_config", string(enc)))
+		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
+		s.Audit("cli", "config_change", "")
+		warnDNSLeak(s)
+		output(cfg, func(c ovpnconf.Config) {
+			printDiff(diff)
+			fmt.Println("saved; run `ovcp vpn restart` to apply")
+		})
 	}
 }
 
@@ -1361,27 +1362,6 @@ func cmdVPNConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
 type previewOut struct {
 	Diff    []string `json:"diff"`
 	Changed bool     `json:"changed"`
-}
-
-// cmdVPNConfigEdit edits the server config's raw extra directives in $EDITOR,
-// then saves through the same path -extra - on `set` would — unchanged
-// behavior from the old standalone `custom-opts` command, now sharing its
-// validation/diff/persist with set instead of duplicating a subset of it.
-func cmdVPNConfigEdit(_ *flag.FlagSet) func(ctx *cliContext) {
-	return func(ctx *cliContext) {
-		s := ctx.openStore()
-		defer s.Close()
-		raw, _ := s.GetSetting("vpn_config")
-		cur := ovpnconf.Load(raw)
-		extra, changed := editText(cur.Extra)
-		if !changed {
-			output(msg("no change"), printMsg)
-			return
-		}
-		cfg := cur
-		cfg.Extra = extra
-		saveVPNConfig(ctx, s, cur, cfg, "custom options")
-	}
 }
 
 // cmdCA wraps the CA-level ops (passphrase rotation, cert renewal) — the
