@@ -121,6 +121,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.U
 		}
 	}
 
+	// Telegram's status is a mutex-guarded bool plus two indexed settings
+	// reads — cheap enough for this cadence, unlike cert counts (a table
+	// scan over data that only changes on issue/revoke/renew, not on a timer).
+	out["telegram"] = s.Telegram.Status()
+
 	jsonOK(w, out)
 }
 

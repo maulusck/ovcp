@@ -1,6 +1,6 @@
 <script>
   import { api, apiBlob, downloadBlob, procOp, flash } from './api.js'
-  import { expectRecovery, expectDnsRecovery } from './status.svelte.js'
+  import { expectRecovery, expectDnsRecovery, telegram, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { isAdmin, dnsAvailable } = $props()
   let cfg = $state(null)
@@ -172,13 +172,11 @@
     } catch (x) { flash(v => backupErr = v, x.error || 'backup failed') }
   }
 
-  let tg = $state(null) // {running, tokenSet, admin, chatLinked}
+  // telegram itself (running/tokenSet/admin/chatLinked) lives in the shared,
+  // app-wide polled state (status.svelte.js), same as vpn/dns — actions
+  // below only trigger a refresh, same as vpn/dns's own procOp calls do.
   let tgErr = $state('')
   let tgOk = $state('')
-  async function loadTelegram() {
-    try { tg = await api('GET', '/telegram/config') } catch (x) { flash(v => tgErr = v, x.error) }
-  }
-  loadTelegram()
 
   // Token and admin are independent identities (rotating one must never touch
   // the other, or re-saving an unchanged admin would silently re-link the chat).
@@ -187,7 +185,8 @@
     if (!token) return
     tgErr = ''; tgOk = ''
     try {
-      tg = await api('PUT', '/telegram/config', { Token: token })
+      await api('PUT', '/telegram/config', { Token: token })
+      pollOnce()
       flash(v => tgOk = v, 'Token set. Start the bot below to bring it up.')
     } catch (x) { flash(v => tgErr = v, x.error) }
   }
@@ -197,7 +196,8 @@
     if (!admin) return
     tgErr = ''; tgOk = ''
     try {
-      tg = await api('PUT', '/telegram/config', { Admin: admin })
+      await api('PUT', '/telegram/config', { Admin: admin })
+      pollOnce()
       flash(v => tgOk = v, 'Admin set.')
     } catch (x) { flash(v => tgErr = v, x.error) }
   }
@@ -205,7 +205,8 @@
   async function telegramOp(op, done) {
     tgErr = ''; tgOk = ''
     try {
-      tg = await procOp('/telegram/', op)
+      await procOp('/telegram/', op)
+      pollOnce()
       flash(v => tgOk = v, done)
     } catch (x) { flash(v => tgErr = v, x.error) }
   }
@@ -213,11 +214,11 @@
   const tgStop = () => telegramOp('stop', 'Stopped.')
   const tgRestart = () => telegramOp('restart', 'Restarted.')
 
-  const tgState = $derived(!tg?.tokenSet ? 'na' : tg.running ? 'ok' : 'down')
+  const tgState = $derived(!telegram.tokenSet ? 'na' : telegram.running ? 'ok' : 'down')
   const tgLabel = $derived(
     tgState === 'na' ? 'not configured' :
     tgState !== 'ok' ? 'stopped' :
-    `running · admin: ${tg.admin}` + (tg.chatLinked ? '' : ' · chat not linked yet, message the bot once'))
+    `running · admin: ${telegram.admin}` + (telegram.chatLinked ? '' : ' · chat not linked yet, message the bot once'))
 </script>
 
 <div class="card">
@@ -404,15 +405,13 @@
     <p class="muted small">Notify-only, plus a Start/Stop/Restart menu from one linked admin chat — see Docs for details.</p>
     <Msg type="err" text={tgErr} />
     <Msg type="ok" text={tgOk} />
-    {#if tg}
-      <p class="status-line"><span class="status-dot {tgState}"></span> {tgLabel}</p>
-    {/if}
+    <p class="status-line"><span class="status-dot {tgState}"></span> {tgLabel}</p>
     <div class="row">
       <button type="button" class="ghost" onclick={setTelegramToken}
-        title="Set the bot token, independently of admin">{tg?.tokenSet ? 'Regenerate token' : 'Set token'}</button>
+        title="Set the bot token, independently of admin">{telegram.tokenSet ? 'Regenerate token' : 'Set token'}</button>
       <button type="button" class="ghost" onclick={setTelegramAdmin}
-        title="Set the admin identity, independently of token">{tg?.admin ? 'Change admin' : 'Set admin'}</button>
-      {#if tg?.tokenSet}
+        title="Set the admin identity, independently of token">{telegram.admin ? 'Change admin' : 'Set admin'}</button>
+      {#if telegram.tokenSet}
         <button type="button" class="ghost" onclick={tgStart} title="Bring the poller up">Start</button>
         <button type="button" class="ghost" onclick={tgStop} title="Stop the poller; bot goes quiet">Stop</button>
         <button type="button" class="ghost" onclick={tgRestart} title="Full stop + fresh start of the poller">Restart</button>

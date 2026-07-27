@@ -271,7 +271,10 @@ func TestExportRenew(t *testing.T) {
 	}
 
 	rows := e.req("GET", "/api/certs", "", false)
-	var certs []struct{ CN, Serial string; Revoked bool }
+	var certs []struct {
+		CN, Serial string
+		Revoked    bool
+	}
 	json.NewDecoder(rows.Body).Decode(&certs)
 	var outgoingRevoked, replacementActive bool
 	for _, c := range certs {
@@ -320,11 +323,15 @@ func TestStatusVPNDown(t *testing.T) {
 	e.login("viewer")
 	r := e.req("GET", "/api/status", "", false)
 	var out struct {
-		VPNUp bool `json:"vpn_up"`
+		VPNUp    bool                      `json:"vpn_up"`
+		Telegram controller.TelegramStatus `json:"telegram"`
 	}
 	json.NewDecoder(r.Body).Decode(&out)
 	if r.StatusCode != 200 || out.VPNUp {
 		t.Fatal("vpn down must be 200 vpn_up=false")
+	}
+	if out.Telegram.TokenSet {
+		t.Fatalf("telegram should read not-configured by default: %+v", out.Telegram)
 	}
 }
 

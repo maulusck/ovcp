@@ -1,16 +1,13 @@
 <script>
   import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
-  import { vpn, dns, pollOnce } from './status.svelte.js'
+  import { vpn, dns, telegram, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { canOperate, goToCert, dnsAvailable, caCN, caNotAfter, caStatus } = $props()
   let err = $state('')
 
-  // Server status card: cert count/warnings, the DNS leak check, and
-  // telegram config all already exist server-side — this just surfaces them
-  // here too, one-shot on mount (like Settings' own tg fetch), not part of
-  // the app-wide vpn/dns poll since none of these change more than once in
-  // a while. vpn/dns process state itself is already polled app-wide
-  // (status.svelte.js) — reused here, not re-fetched.
+  // cert count/DNS leak check: a DB scan / config read, not a cheap
+  // point-check — one-shot on mount, unlike vpn/dns/telegram below
+  // (status.svelte.js), which are already polled app-wide.
   let certSummary = $state({ total: 0, warn: 0 })
   api('GET', '/certs').then((certs) => {
     certSummary = { total: certs.length, warn: certs.filter((c) => c.Status === 'expiring' || c.Status === 'expired').length }
@@ -21,9 +18,6 @@
     if (!dnsAvailable) return
     api('GET', '/dns/config').then((d) => (dnsWarning = d.warning || '')).catch(() => {})
   })
-
-  let tg = $state(null) // {running, tokenSet, admin, chatLinked}
-  api('GET', '/telegram/config').then((r) => (tg = r)).catch(() => {})
 
   // no local poll loop: App.svelte already polls status app-wide (for the
   // header pill) and caches the full client list on the shared vpn state.
@@ -55,9 +49,7 @@
   {#if dnsAvailable}
     <p class="status-line"><span class="status-dot {dns.up ? 'ok' : 'down'}"></span> dns {dns.up ? `up · ${dns.uptime}` : 'down'}</p>
   {/if}
-  {#if tg}
-    <p class="status-line"><span class="status-dot {!tg.tokenSet ? 'na' : tg.running ? 'ok' : 'down'}"></span> telegram: {!tg.tokenSet ? 'not configured' : tg.running ? 'running' : 'stopped'}</p>
-  {/if}
+  <p class="status-line"><span class="status-dot {!telegram.tokenSet ? 'na' : telegram.running ? 'ok' : 'down'}"></span> telegram: {!telegram.tokenSet ? 'not configured' : telegram.running ? 'running' : 'stopped'}</p>
   {#if dnsWarning}<p class="status-line warn">{dnsWarning}</p>{/if}
 </div>
 

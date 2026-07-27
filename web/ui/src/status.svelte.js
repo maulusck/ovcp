@@ -3,6 +3,7 @@ import { api } from './api.js'
 
 export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', ovcpUptime: '', reloadLabel: '' }) // ok | down | reloading
 export const dns = $state({ up: false, phase: 'down', uptime: '', reloadLabel: '' }) // ok | down | reloading; dnsmasq is optional — App.svelte overrides to "na" when never installed
+export const telegram = $state({ running: false, tokenSet: false, admin: '', chatLinked: false })
 
 let deadline = 0
 let dnsDeadline = 0
@@ -43,6 +44,7 @@ export async function pollOnce() {
     } else {
       dns.phase = 'down'
     }
+    if (d.telegram) Object.assign(telegram, d.telegram)
     return d
   } catch {
     if (!(vpn.phase === 'reloading' && Date.now() < deadline)) {
