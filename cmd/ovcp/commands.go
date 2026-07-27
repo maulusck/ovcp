@@ -129,7 +129,7 @@ var (
 	vpnOpDesc = map[string]string{
 		"start": "bring the tunnel up", "stop": "bring it down",
 		"restart": "full stop + fresh start", "reconnect": "SIGUSR1, no restart",
-		"status": "pid, uptime, connected clients", "kill": "disconnect one client (-cn NAME)",
+		"status": "pid, uptime", "kill": "disconnect one client (-cn NAME)",
 		"config": "get|set|preview server settings",
 	}
 	vpnConfigOps = []string{"get", "set", "preview"}
@@ -193,7 +193,7 @@ var commands = []command{
 	{name: "certificate", alias: "cert", desc: "issue, list, revoke, renew certs", sub: certOps, subDesc: certOpDesc, run: cmdCertificate},
 	{name: "ca", desc: "CA passphrase rotation or cert renewal, CLI-only", sub: caOps, subDesc: caOpDesc, run: cmdCA},
 	{name: "backup", desc: "encrypted export/import: CA, config, database", sub: backupOps, subDesc: backupOpDesc, run: cmdBackup},
-	{name: "status", desc: "VPN process + connected clients", run: cmdStatus},
+	{name: "status", desc: "full-system overview: vpn, dns, certs, telegram", run: cmdStatus},
 	{name: "stats", desc: "traffic history, live follow, sampling config", run: cmdStats},
 	{name: "vpn", desc: "manage the openvpn worker", sub: vpnOps, subDesc: vpnOpDesc, run: cmdVPN},
 	{name: "dns", desc: "manage the dnsmasq worker", sub: dnsOps, subDesc: dnsOpDesc, run: cmdDNS},
