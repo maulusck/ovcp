@@ -160,8 +160,7 @@
   let copied = $state('')
   async function copyText(panel, text) {
     if (!(await copyToClipboard(text, 'Log text'))) return
-    copied = panel
-    setTimeout(() => (copied = ''), 1200)
+    flash(v => copied = v, panel, 1200)
   }
   const auditText = () => filteredEntries.map(e =>
     `${fmtTimestamp(new Date(e.TS))} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')

@@ -86,8 +86,7 @@
   let copied = $state('')
   async function copySerial(serial) {
     if (!(await copyToClipboard(serial, 'Serial'))) return
-    copied = serial
-    setTimeout(() => (copied = ''), 1200)
+    flash(v => copied = v, serial, 1200)
   }
 
   async function revoke(serial, cn) {

@@ -126,7 +126,8 @@ export function autofocus(node) {
 
 // flash sets a message state then clears it after ms — the one place every
 // err/ok line's auto-dismiss timing lives, paired with <Msg> for the fade.
-export function flash(set, value, ms = 5000) {
+export const FLASH_MS = 5000
+export function flash(set, value, ms = FLASH_MS) {
   set(value)
   if (value) setTimeout(() => set(''), ms)
 }
