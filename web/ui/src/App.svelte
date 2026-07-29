@@ -239,7 +239,7 @@
     {:else if tab === 'certs'}
       <Certs {canOperate} {isAdmin} bind:focusCN />
     {:else if tab === 'settings'}
-      <Settings {isAdmin} dnsAvailable={!!user.dnsmasqVersion} />
+      <Settings {isAdmin} dnsAvailable={!!user.dnsmasqVersion} upstreamsAvailable={!!user.upstreamsEnabled} />
     {:else if tab === 'users'}
       <Users {isAdmin} me={user.username} minLen={user.minSecretLen} minClasses={user.minSecretClasses} />
     {:else if tab === 'logs'}
@@ -252,7 +252,7 @@
     <button type="button" class="ver-toggle" onclick={() => (verLong = !verLong)}
       title={verLong ? 'Show less' : 'Show openvpn version'}>
       {#if verLong}
-        ovcp {user.version || 'dev'} · {user.platform || '?'}{user.buildTarget ? ` (${user.buildTarget})` : ''} · openvpn {user.openvpnVersion || 'not found'}{user.openvpnPath ? ` (${user.openvpnPath})` : ''}{user.dnsmasqVersion ? ` · dnsmasq ${user.dnsmasqVersion}${user.dnsmasqPath ? ` (${user.dnsmasqPath})` : ''}` : ''}
+        ovcp {user.version || 'dev'} · {user.platform || '?'}{user.buildTarget ? ` (${user.buildTarget})` : ''} · openvpn {user.openvpnVersion || 'not found'}{user.openvpnPath ? ` (${user.openvpnPath})` : ''}{user.dnsmasqVersion ? ` · dnsmasq ${user.dnsmasqVersion}${user.dnsmasqPath ? ` (${user.dnsmasqPath})` : ''}` : ''}{user.nftVersion ? ` · nftables ${user.nftVersion}${user.nftPath ? ` (${user.nftPath})` : ''}` : ''}
       {:else}
         ovcp {user.version || 'dev'}
       {/if}

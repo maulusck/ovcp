@@ -35,6 +35,7 @@ import (
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 	"github.com/ovcp/ovcp/internal/telegram"
+	"github.com/ovcp/ovcp/internal/upstream"
 	"github.com/ovcp/ovcp/web"
 )
 
@@ -206,6 +207,8 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	sup := newSupervisor(dataDir, ovPath)
 	dnsVersion, dnsPath, _ := controller.DnsmasqVersion() // same advisory-only treatment
 	dnsGid := dnsGID(dnsRunAsGroup())
+	nftVersion, nftPath, _ := controller.NftablesVersion()
+	upstreamsEnabled := nftPath != "" && os.Getenv("OVCP_UPSTREAMS_ENABLED") != "false"
 	dnsSup := newDNSSupervisor(pp, dnsPath, s)
 	mgmt := controller.NewClient(sock, statusPath(sock))
 	tg := telegram.New(s, p, sup, dnsSup, mgmt)
@@ -225,28 +228,31 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	remoteCN := func() string { return adminCertCN(dataDir) }
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
-		Mgmt:            mgmt,
-		VPN:             sup,
-		Telegram:        tg,
-		DataDir:         dataDir,
-		ConfigPath:      pp.ServerConf,
-		TLSCrypt:        pp.TLSCrypt,
-		ServerCert:      pp.ServerCert,
-		ServerKey:       pp.ServerKey,
-		DefaultRemote:   remoteCN,
-		UI:              web.Dist(),
-		DebugLevel:      logLevel,
-		Version:         version,
-		BuildTarget:     buildTarget,
-		OpenVPNVersion:  ovVersion,
-		OpenVPNPath:     ovPath,
-		DnsmasqVersion:  dnsVersion,
-		DnsmasqPath:     dnsPath,
-		CertsHostsPath:  pp.CertsHosts,
-		CustomHostsPath: pp.CustomHosts,
-		DNSGroupGID:     dnsGid,
-		DNS:             dnsSup,
-		PollInterval:    time.Duration(statusInterval()) * time.Second,
+		Mgmt:             mgmt,
+		VPN:              sup,
+		Telegram:         tg,
+		DataDir:          dataDir,
+		ConfigPath:       pp.ServerConf,
+		TLSCrypt:         pp.TLSCrypt,
+		ServerCert:       pp.ServerCert,
+		ServerKey:        pp.ServerKey,
+		DefaultRemote:    remoteCN,
+		UI:               web.Dist(),
+		DebugLevel:       logLevel,
+		Version:          version,
+		BuildTarget:      buildTarget,
+		OpenVPNVersion:   ovVersion,
+		OpenVPNPath:      ovPath,
+		DnsmasqVersion:   dnsVersion,
+		DnsmasqPath:      dnsPath,
+		UpstreamsEnabled: upstreamsEnabled,
+		NftVersion:       nftVersion,
+		NftPath:          nftPath,
+		CertsHostsPath:   pp.CertsHosts,
+		CustomHostsPath:  pp.CustomHosts,
+		DNSGroupGID:      dnsGid,
+		DNS:              dnsSup,
+		PollInterval:     time.Duration(statusInterval()) * time.Second,
 	}
 
 	die(preflight(dataDir))
@@ -256,6 +262,11 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	raw, _ := json.Marshal(cfg)
 	die(s.SetSetting("vpn_config", string(raw)))
 	die(cfg.WriteAtomic(srv.ConfigPath))
+	if upstreamsEnabled {
+		if err := upstream.Apply(api.LoadUpstreamConfig(s), cfg.Subnet); err != nil {
+			slog.Warn("upstream apply", "err", err)
+		}
+	}
 
 	// unlike DefaultRemote, this CN is a one-time snapshot: EnsureAdminTLS
 	// only re-runs on the next serve restart.
@@ -331,6 +342,11 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	}
 	if err := dnsSup.Stop(); err != nil {
 		slog.Warn("dnsmasq stop", "err", err)
+	}
+	if upstreamsEnabled {
+		if err := upstream.Teardown(); err != nil {
+			slog.Warn("upstream teardown", "err", err)
+		}
 	}
 	hs.Close()
 	slog.Info("ovcp stopped", "uptime", time.Since(controller.ProcessStartedAt).Round(time.Second))

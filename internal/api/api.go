@@ -20,31 +20,34 @@ import (
 )
 
 type Server struct {
-	Store           *store.Store
-	Auth            *auth.Service
-	PKI             *pki.PKI
-	Mgmt            *controller.Client
-	VPN             controller.Lifecycle
-	Telegram        *telegram.Poller
-	DataDir         string               // data directory root (backup source)
-	ConfigPath      string               // rendered server.conf
-	TLSCrypt        string               // tls-crypt key path
-	ServerCert      string               // openvpn server cert path (certificate renew target)
-	ServerKey       string               // openvpn server key path (certificate renew target)
-	DefaultRemote   func() string        // OVCP_SERVER_CN / server cert CN; live, not cached — a `certificate renew -cn` rename takes effect on the next call, no restart
-	Version         string               // build version, for the status export
-	BuildTarget     string               // Makefile TARGET/Containerfile arch this binary was built for, e.g. "host", "arm64-musl"
-	OpenVPNVersion  string               // "" if openvpn isn't on PATH
-	OpenVPNPath     string               // "" if openvpn isn't on PATH
-	DNS             controller.Lifecycle // nil until dnsmasq is found on PATH (Records tab gate)
-	DnsmasqVersion  string               // "" if dnsmasq isn't on PATH
-	DnsmasqPath     string               // "" if dnsmasq isn't on PATH
-	CertsHostsPath  string               // Records tab: machine-owned certs.hosts, regenerated wholesale
-	CustomHostsPath string               // Records tab: user-authored custom.hosts, edited as one blob
-	DNSGroupGID     int                  // dnsmasq's resolved drop-to group; both hosts files are chgrp'd to it
-	UI              fs.FS                // built frontend; nil = API only
-	DebugLevel      *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
-	PollInterval    time.Duration        // RunSampler's ticker; set from OVCP_STATUS_INTERVAL, same cadence OpenVPN writes its status file at
+	Store            *store.Store
+	Auth             *auth.Service
+	PKI              *pki.PKI
+	Mgmt             *controller.Client
+	VPN              controller.Lifecycle
+	Telegram         *telegram.Poller
+	DataDir          string               // data directory root (backup source)
+	ConfigPath       string               // rendered server.conf
+	TLSCrypt         string               // tls-crypt key path
+	ServerCert       string               // openvpn server cert path (certificate renew target)
+	ServerKey        string               // openvpn server key path (certificate renew target)
+	DefaultRemote    func() string        // OVCP_SERVER_CN / server cert CN; live, not cached — a `certificate renew -cn` rename takes effect on the next call, no restart
+	Version          string               // build version, for the status export
+	BuildTarget      string               // Makefile TARGET/Containerfile arch this binary was built for, e.g. "host", "arm64-musl"
+	OpenVPNVersion   string               // "" if openvpn isn't on PATH
+	OpenVPNPath      string               // "" if openvpn isn't on PATH
+	DNS              controller.Lifecycle // nil until dnsmasq is found on PATH (Records tab gate)
+	DnsmasqVersion   string               // "" if dnsmasq isn't on PATH
+	DnsmasqPath      string               // "" if dnsmasq isn't on PATH
+	UpstreamsEnabled bool                 // nft found and not OVCP_UPSTREAMS_ENABLED=false (Upstreams tab gate)
+	NftVersion       string               // "" if nft isn't on PATH
+	NftPath          string               // "" if nft isn't on PATH
+	CertsHostsPath   string               // Records tab: machine-owned certs.hosts, regenerated wholesale
+	CustomHostsPath  string               // Records tab: user-authored custom.hosts, edited as one blob
+	DNSGroupGID      int                  // dnsmasq's resolved drop-to group; both hosts files are chgrp'd to it
+	UI               fs.FS                // built frontend; nil = API only
+	DebugLevel       *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
+	PollInterval     time.Duration        // RunSampler's ticker; set from OVCP_STATUS_INTERVAL, same cadence OpenVPN writes its status file at
 }
 
 const (
@@ -93,6 +96,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/dns/custom/preview", s.wrap(auth.RoleAdmin, s.handleCustomHostsPreview))
 	mux.Handle("GET /api/dns/config", s.wrap(auth.RoleReadonly, s.handleDNSConfigGet))
 	mux.Handle("PUT /api/dns/config", s.wrap(auth.RoleAdmin, s.handleDNSConfigSet))
+	mux.Handle("GET /api/upstreams", s.wrap(auth.RoleReadonly, s.handleUpstreamsGet))
+	mux.Handle("POST /api/upstreams", s.wrap(auth.RoleAdmin, s.handleUpstreamAdd))
+	mux.Handle("DELETE /api/upstreams/{id}", s.wrap(auth.RoleAdmin, s.handleUpstreamDelete))
+	mux.Handle("PUT /api/upstreams/default", s.wrap(auth.RoleAdmin, s.handleUpstreamSetDefault))
 	mux.Handle("GET /api/telegram/config", s.wrap(auth.RoleReadonly, s.handleTelegramConfigGet))
 	mux.Handle("PUT /api/telegram/config", s.wrap(auth.RoleAdmin, s.handleTelegramConfigSet))
 	mux.Handle("POST /api/telegram/{op}", s.wrap(auth.RoleAdmin, s.handleTelegramOp))

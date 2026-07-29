@@ -36,7 +36,7 @@ RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
 FROM docker.io/library/alpine:latest
 # refresh base packages at build time, not just whatever alpine:latest last
 # baked in — this ships a root-owned VPN/PKI tool, worth the extra seconds.
-RUN apk upgrade --no-cache && apk add --no-cache openvpn dnsmasq
+RUN apk upgrade --no-cache && apk add --no-cache openvpn dnsmasq nftables
 COPY --from=build /ovcp /usr/bin/ovcp
 ENV OVCP_DATA=/var/lib/ovcp \
     OVCP_LISTEN=0.0.0.0:8443 \

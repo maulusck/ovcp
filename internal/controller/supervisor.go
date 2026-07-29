@@ -48,6 +48,9 @@ func OpenVPNVersion() (version, path string, ok bool) { return binVersion("openv
 // DnsmasqVersion gates the Records tab/CLI; advisory only.
 func DnsmasqVersion() (version, path string, ok bool) { return binVersion("dnsmasq", 2) }
 
+// NftablesVersion gates the Upstreams tab/CLI; advisory only.
+func NftablesVersion() (version, path string, ok bool) { return binVersion("nft", 1) }
+
 // Supervisor runs one worker (openvpn or dnsmasq) as a foreground child (Pdeathsig ties its life to ours, surviving the worker's own setuid drop); no SIGHUP — Restart always re-reads fresh instead.
 type Supervisor struct {
 	Name     string          // "openvpn" | "dnsmasq" — log lines and the not-found error only

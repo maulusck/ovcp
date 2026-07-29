@@ -74,6 +74,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User)
 		"version": s.Version, "buildTarget": s.BuildTarget, "platform": runtime.GOOS + "/" + runtime.GOARCH,
 		"openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
 		"dnsmasqVersion": s.DnsmasqVersion, "dnsmasqPath": s.DnsmasqPath,
+		"nftVersion": s.NftVersion, "nftPath": s.NftPath, "upstreamsEnabled": s.UpstreamsEnabled,
 		"minSecretLen": auth.MinSecretLen, "minSecretClasses": auth.MinSecretClasses,
 		// how often openvpn itself rewrites its status file (OVCP_STATUS_INTERVAL)
 		// — the UI polls /api/status at the same cadence so it's never asking
@@ -125,6 +126,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.U
 	// reads — cheap enough for this cadence, unlike cert counts (a table
 	// scan over data that only changes on issue/revoke/renew, not on a timer).
 	out["telegram"] = s.Telegram.Status()
+	out["upstreams_enabled"] = s.UpstreamsEnabled
+	if s.UpstreamsEnabled {
+		out["upstream_default"] = LoadUpstreamConfig(s.Store).Default
+	}
 
 	jsonOK(w, out)
 }

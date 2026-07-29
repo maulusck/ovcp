@@ -28,6 +28,10 @@ second-class citizen.
 - **Internal DNS** (optional) — dnsmasq resolves the server and each
   connected client by hostname over the tunnel, plus custom hosts-file
   entries. Switch it to answer only local names, no upstream forwarding.
+- **Upstreams** (optional) — pick which egress connected clients exit
+  through (a second NIC, a WireGuard peer, anything else already up on the
+  host) instead of the box's own default route, switchable ad hoc with no
+  restart. ovcp only steers and NATs; the admin brings the connection up.
 - **Live stats & audit log** — per-client traffic history, a top-like
   `stats -follow`, and an audit trail of every admin action.
 - **Telegram bot** (optional) — notifications for revokes, user changes,
@@ -49,6 +53,8 @@ Linux with `/dev/net/tun`, and [`openvpn`](https://openvpn.net/) on `PATH`.
 OVCP runs as root — it owns the PKI and starts openvpn itself as a
 supervised child process. [`dnsmasq`](https://thekelleys.org.uk/dnsmasq/doc.html)
 on `PATH` is optional, for internal DNS — ovcp starts it itself when found.
+`nftables` on `PATH` is optional too, for policy-routed VPN egress (see
+**Upstreams** below) — ovcp programs the rules itself, never installs it.
 
 This is sufficient to run ovcp. Building it from source has its own
 toolchain requirements — see [`docs/BUILD.md`](docs/BUILD.md).

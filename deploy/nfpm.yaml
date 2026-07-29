@@ -6,10 +6,10 @@ maintainer: OVCP
 description: OpenVPN Control Plane — web UI and native PKI for OpenVPN
 license: MIT
 depends: [openvpn]
-# optional: gates the Records tab/internal DNS feature only, advisory at
-# runtime too (ovcp works fully without it). apk/archlinux have no such
-# concept and just drop this field; deb/rpm get real Suggests: metadata.
-suggests: [dnsmasq]
+# optional: dnsmasq gates the Records tab, nftables gates the Upstreams tab —
+# both advisory at runtime, ovcp works fully without either. apk/archlinux
+# have no such concept and just drop this field; deb/rpm get real Suggests:.
+suggests: [dnsmasq, nftables]
 scripts:
   postinstall: deploy/postinstall.sh
 contents:

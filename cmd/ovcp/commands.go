@@ -26,6 +26,7 @@ import (
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 	"github.com/ovcp/ovcp/internal/telegram"
+	"github.com/ovcp/ovcp/internal/upstream"
 )
 
 // command is one subcommand: run registers flags on fs, returning the closure
@@ -176,6 +177,13 @@ var (
 		"config": "get|set rotation policy", "rotate": "copytruncate all logs now",
 		"status": "sizes + rotation state",
 	}
+	upstreamOps    = []string{"list", "add", "del", "set-default", "status"}
+	upstreamOpDesc = map[string]string{
+		"list": "configured upstreams and the active default",
+		"add":  "define one (-id, -iface, [-gateway], [-desc])",
+		"del":  "remove one (-id)", "set-default": "switch the active exit (-id, empty = off)",
+		"status": "nftables detection + enabled state",
+	}
 )
 
 // desc stays a few words (see command's doc comment for the 3-tier shape);
@@ -190,6 +198,7 @@ var commands = []command{
 	{name: "vpn", desc: "manage the openvpn worker", sub: vpnOps, subDesc: vpnOpDesc, run: cmdVPN},
 	{name: "dns", desc: "manage the dnsmasq worker", sub: dnsOps, subDesc: dnsOpDesc, run: cmdDNS},
 	{name: "record", desc: "manage internal DNS records", sub: recordOps, subDesc: recordOpDesc, run: cmdRecord},
+	{name: "upstream", desc: "policy-route VPN egress through a chosen interface", sub: upstreamOps, subDesc: upstreamOpDesc, run: cmdUpstream},
 	{name: "logs", desc: "log rotation for openvpn/ovcp/dnsmasq logs", sub: logsOps, subDesc: logsOpDesc, run: cmdLogs},
 	{name: "debug", desc: "toggle verbose logging on a running serve", sub: debugOps, subDesc: debugOpDesc, run: cmdDebug},
 	{name: "telegram", desc: "notify + control bot", sub: telegramOps, subDesc: telegramOpDesc, run: cmdTelegram},
@@ -263,6 +272,8 @@ type versionOut struct {
 	OpenVPNPath    string `json:"openvpnPath,omitempty"`
 	DnsmasqVersion string `json:"dnsmasqVersion,omitempty"`
 	DnsmasqPath    string `json:"dnsmasqPath,omitempty"`
+	NftVersion     string `json:"nftVersion,omitempty"`
+	NftPath        string `json:"nftPath,omitempty"`
 }
 
 func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
@@ -273,6 +284,9 @@ func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
 		}
 		if v, p, ok := controller.DnsmasqVersion(); ok {
 			out.DnsmasqVersion, out.DnsmasqPath = v, p
+		}
+		if v, p, ok := controller.NftablesVersion(); ok {
+			out.NftVersion, out.NftPath = v, p
 		}
 		output(out, func(o versionOut) {
 			fmt.Println("ovcp", o.Version, paint(ansiCyan, "("+o.Platform+", "+o.BuildTarget+")"))
@@ -285,6 +299,11 @@ func cmdVersion(_ *flag.FlagSet) func(ctx *cliContext) {
 				fmt.Println("dnsmasq: not found on PATH")
 			} else {
 				fmt.Printf("dnsmasq %s (%s)\n", o.DnsmasqVersion, o.DnsmasqPath)
+			}
+			if o.NftVersion == "" {
+				fmt.Println("nftables: not found on PATH")
+			} else {
+				fmt.Printf("nftables %s (%s)\n", o.NftVersion, o.NftPath)
 			}
 		})
 	}
@@ -994,6 +1013,127 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 			refreshCertsHostsCLI(ctx.dataDir, s)
 			s.Audit("cli", "cert_dns_"+op, "cn="+*cn+" serial="+c.Serial)
 			output(msg("%sd: %s", op, *cn), printMsg)
+		}
+	}
+}
+
+// upstreamsReady dies with a clear error if nftables isn't usable — same
+// "fails cleanly without it" treatment dns commands get without dnsmasq.
+func upstreamsReady() {
+	if _, path, _ := controller.NftablesVersion(); path == "" || os.Getenv("OVCP_UPSTREAMS_ENABLED") == "false" {
+		die(fmt.Errorf("upstreams disabled: nftables not found on PATH, or OVCP_UPSTREAMS_ENABLED=false"))
+	}
+}
+
+// applyUpstreamsCLI programs routing/NAT from cfg — upstream.Apply's own
+// lock covers this the same as any other caller in the process.
+func applyUpstreamsCLI(s *store.Store, cfg upstream.Config) {
+	raw, _ := s.GetSetting("vpn_config")
+	die(upstream.Apply(cfg, ovpnconf.Load(raw).Subnet))
+}
+
+type upstreamStatusOut struct {
+	Enabled    bool   `json:"enabled"`
+	NftVersion string `json:"nftVersion,omitempty"`
+	NftPath    string `json:"nftPath,omitempty"`
+	Default    string `json:"default,omitempty"`
+}
+
+func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		op, rest := opArg(fs, "upstream", upstreamOps, upstreamOpDesc)
+		s := ctx.openStore()
+		defer s.Close()
+		switch op {
+		case "status":
+			ver, path, ok := controller.NftablesVersion()
+			out := upstreamStatusOut{
+				Enabled:    ok && os.Getenv("OVCP_UPSTREAMS_ENABLED") != "false",
+				NftVersion: ver, NftPath: path, Default: api.LoadUpstreamConfig(s).Default,
+			}
+			output(out, func(o upstreamStatusOut) {
+				if !o.Enabled {
+					fmt.Println("upstreams: disabled (nftables not found, or OVCP_UPSTREAMS_ENABLED=false)")
+					return
+				}
+				fmt.Println("upstreams: enabled, nftables", o.NftVersion)
+				if o.Default == "" {
+					fmt.Println("default: off (host's own default route)")
+				} else {
+					fmt.Println("default:", o.Default)
+				}
+			})
+
+		case "list":
+			cfg := api.LoadUpstreamConfig(s)
+			output(cfg, func(c upstream.Config) {
+				fmt.Printf("%-16s %-10s %-15s %-6s %s\n", "ID", "IFACE", "GATEWAY", "TABLE", "DESCRIPTION")
+				for _, up := range c.Upstreams {
+					mark := ""
+					if up.ID == c.Default {
+						mark = green(" (default)")
+					}
+					fmt.Printf("%-16s %-10s %-15s %-6d %s%s\n", up.ID, up.Iface, up.Gateway, up.Table, up.Description, mark)
+				}
+			})
+
+		case "add":
+			upstreamsReady()
+			afs := newFlags("upstream add")
+			id := afs.String("id", "", "short name (required)")
+			iface := afs.String("iface", "", "egress interface, e.g. eth1, wg0 (required)")
+			gateway := afs.String("gateway", "", "next-hop IP (empty = onlink)")
+			desc := afs.String("desc", "", "description")
+			afs.Parse(rest)
+			if *id == "" || *iface == "" {
+				die(fmt.Errorf("-id and -iface required"))
+			}
+			cfg, added, err := api.LoadUpstreamConfig(s).WithAdded(upstream.Upstream{
+				ID: *id, Iface: *iface, Gateway: *gateway, Description: *desc,
+			})
+			die(err)
+			die(api.SaveUpstreamConfig(s, cfg))
+			applyUpstreamsCLI(s, cfg)
+			s.Audit("cli", "upstream_add", *id)
+			output(msg("added: %s (table %d)", *id, added.Table), printMsg)
+
+		case "del":
+			upstreamsReady()
+			dfs := newFlags("upstream del")
+			id := dfs.String("id", "", "upstream id (required)")
+			dfs.Parse(rest)
+			if *id == "" {
+				die(fmt.Errorf("-id required"))
+			}
+			cfg, found := api.LoadUpstreamConfig(s).Without(*id)
+			if !found {
+				die(fmt.Errorf("upstream %q not found", *id))
+			}
+			die(api.SaveUpstreamConfig(s, cfg))
+			applyUpstreamsCLI(s, cfg)
+			s.Audit("cli", "upstream_del", *id)
+			output(msg("deleted: %s", *id), printMsg)
+
+		case "set-default":
+			upstreamsReady()
+			sfs := newFlags("upstream set-default")
+			id := sfs.String("id", "", "upstream id, empty turns it off")
+			sfs.Parse(rest)
+			cfg := api.LoadUpstreamConfig(s)
+			cfg.Default = *id
+			die(cfg.Validate())
+			die(api.SaveUpstreamConfig(s, cfg))
+			applyUpstreamsCLI(s, cfg)
+			action := "upstream_default_set"
+			if *id == "" {
+				action = "upstream_default_off"
+			}
+			s.Audit("cli", action, *id)
+			text := "default: " + *id
+			if *id == "" {
+				text = "default: off (host's own default route)"
+			}
+			output(msg("%s", text), printMsg)
 		}
 	}
 }

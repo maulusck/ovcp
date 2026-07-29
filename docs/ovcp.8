@@ -35,7 +35,9 @@ documented in \fBBUILD.md\fR; internal design in \fBARCHITECTURE.md\fR.
 .BR openvpn (8)
 on \fBPATH\fR \(en ovcp starts, stops, and controls it but never bundles
 it. Linux with \fI/dev/net/tun\fR; root or \fBCAP_NET_ADMIN\fR for openvpn
-to bring the tunnel up (see \fBPRIVILEGES\fR).
+to bring the tunnel up (see \fBPRIVILEGES\fR). \fBnft\fR(8) on \fBPATH\fR is
+optional, for the \fBupstream\fR feature (policy\-routed VPN egress) \(en
+ovcp programs routing/NAT itself, but never installs nftables.
 .PP
 Building ovcp itself \(en compiler and toolchain requirements,
 cross\-compiling, packaging, and the container image \(en is documented in
@@ -513,6 +515,44 @@ included), mirroring \fBuser enable|disable\fR. Client\-only \(en the
 server's own DNS entry is unconditional, so \fB\-cn\fR \fIserverCN\fR
 errors the same as any CN with no active cert.
 .TP
+.B upstream list
+.TQ
+.B upstream add \fB\-id\fR \fINAME\fR \fB\-iface\fR \fIIFACE\fR [\fB\-gateway\fR \fIIP\fR] [\fB\-desc\fR \fITEXT\fR]
+.TQ
+.B upstream del \fB\-id\fR \fINAME\fR
+.TQ
+.B upstream set\-default \fB\-id\fR \fINAME\fR
+.TQ
+.B upstream status
+Policy\-route VPN client traffic out an admin\-chosen egress \(en a second
+NIC, a WireGuard peer, anything else already up on the host \(en instead of
+the box's own default route.
+.B ovcp
+never brings the upstream connection itself up; the admin does, by whatever
+means, and only names it here (\fB\-iface\fR, optionally \fB\-gateway\fR) so
+.B ovcp
+knows where to steer matching traffic.
+.B add
+assigns the next free routing table in ovcp's own reserved band
+automatically. \fBset\-default\fR is the ad\-hoc exit switch \(en instant,
+no
+.B vpn restart
+needed, since it only reprograms host routing/NAT, never openvpn itself;
+omit \fB\-id\fR (or pass an empty one) to turn it off, back to the host's own
+default route. Every rule this feature installs lives inside a fixed,
+ovcp\-owned band (routing tables, ip\-rule priorities, one nftables table)
+so it can never collide with or remove a rule something else on the host
+created; a dead gateway fails closed (a kill\-switch route inside its own
+table) rather than falling through to the host's own default route.
+\fBupstream status\fR reports nftables detection and the active default.
+Every op fails cleanly if nftables isn't on \fBPATH\fR, or if
+\fBOVCP_UPSTREAMS_ENABLED=false\fR (see \fBENVIRONMENT\fR) \(en same
+treatment
+.B dns
+gets without dnsmasq. Also available from the web UI's Upstreams tab (admin
+role for changes; hidden entirely if nftables isn't found), shown only when
+enabled.
+.TP
 .B logs config get
 .TQ
 .B logs config set [\fB\-enabled\fR on|off] [\fB\-retention\-days\fR \fIN\fR] [\fB\-keep\-uncompressed\fR \fIN\fR]
@@ -811,6 +851,15 @@ serial, expires, includeDNS, ip}\fR (same \fBstatus\fR values as
 right now \(en connected, or the server's own always\-on address);
 \fBcustom\fR is \fIcustom.hosts\fR' raw content as one string.
 .TP
+.B upstream list, upstream add, upstream del, upstream set\-default
+The persisted \fB{Upstreams, Default, PerCN}\fR config (untagged, like
+\fBvpn config\fR above) \(en same shape \fBGET\fR/\fBPOST /api/upstreams\fR
+and \fBPUT /api/upstreams/default\fR return.
+.TP
+.B upstream status
+\fB{enabled, nftVersion, nftPath, default}\fR \(en version/path pair omitted
+if nftables isn't on \fBPATH\fR.
+.TP
 .B telegram config get, telegram config set, telegram start|stop|restart|status
 \fB{running, tokenSet, admin, chatLinked, changed}\fR \(en same shape from
 every one of these, whether or not \fB\-token\fR/\fB\-admin\fR were passed
@@ -838,8 +887,8 @@ array of the same entries as text.
 .TP
 .B version
 \fB{version, platform, buildTarget, openvpnVersion, openvpnPath,
-dnsmasqVersion, dnsmasqPath}\fR \(en each pair omitted if that binary isn't
-on \fBPATH\fR (see \fBversion\fR in \fBCOMMANDS\fR).
+dnsmasqVersion, dnsmasqPath, nftVersion, nftPath}\fR \(en each pair omitted
+if that binary isn't on \fBPATH\fR (see \fBversion\fR in \fBCOMMANDS\fR).
 .SH TIMESTAMPS
 .TP
 .B CLI
@@ -974,6 +1023,14 @@ Seeds \fBdns config set \-block\-internet\fR's persisted default: set to
 \fItrue\fR to start with it on. Same one\-shot\-seed\-then\-persisted
 pattern as \fBOVCP_OPENVPN_*\fR above \(en see \fBdns config set\fR in
 \fBCOMMANDS\fR.
+.TP
+.B OVCP_UPSTREAMS_ENABLED
+Whether the
+.B upstream
+feature (see \fBCOMMANDS\fR) is on: default \fBtrue\fR, but only takes
+effect when nftables is also found on \fBPATH\fR \(en set to \fBfalse\fR to
+turn it off even when nftables is present. Same
+\(lqanything but \fBfalse\fR means on\(rq rule as \fBOVCP_LOG_ROTATE_ENABLED\fR.
 .TP
 .B OVCP_STATS_SAMPLE_INTERVAL, OVCP_STATS_RETENTION_HOURS
 Seed \fBstats config set\fR's \fB\-sample\-interval\-sec\fR/

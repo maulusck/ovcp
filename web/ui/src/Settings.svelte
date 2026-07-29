@@ -2,7 +2,7 @@
   import { api, apiBlob, downloadBlob, procOp, procDone, flash } from './api.js'
   import { expectRecovery, expectDnsRecovery, telegram, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
-  let { isAdmin, dnsAvailable } = $props()
+  let { isAdmin, dnsAvailable, upstreamsAvailable } = $props()
   let cfg = $state(null)
   let dns = $state('')
   let err = $state('')
@@ -108,6 +108,46 @@
   const dnsStart   = () => dnsOp('start', null, 10000, 'Started.', 'starting')
   const dnsStop    = () => dnsOp('stop', 'Stop internal DNS? Connected clients stop resolving local names.', 0, 'Stopped.')
   const dnsRestart = () => dnsOp('restart', 'Restart internal DNS?', 10000, 'Restarted.', 'restarting')
+
+  // Upstreams: policy-routed VPN egress — a list of named entries (add/del/
+  // set-default), not a single-blob form like DNS/logs above.
+  let upCfg = $state(null)
+  let upErr = $state('')
+  let upOk = $state('')
+  let newID = $state(''), newIface = $state(''), newGateway = $state(''), newDesc = $state('')
+
+  async function loadUpstreams() {
+    try { upCfg = await api('GET', '/upstreams') } catch (x) { flash(v => upErr = v, x.error) }
+  }
+  $effect(() => { if (upstreamsAvailable) loadUpstreams() })
+
+  async function addUpstream(e) {
+    e.preventDefault()
+    upErr = ''; upOk = ''
+    try {
+      upCfg = await api('POST', '/upstreams', { ID: newID, Iface: newIface, Gateway: newGateway, Description: newDesc })
+      newID = ''; newIface = ''; newGateway = ''; newDesc = ''
+      flash(v => upOk = v, 'Added.')
+    } catch (x) { flash(v => upErr = v, x.error) }
+  }
+
+  async function delUpstream(id) {
+    if (!confirm(`Remove upstream "${id}"? Traffic steered through it falls back to the host's own default route.`)) return
+    upErr = ''; upOk = ''
+    try {
+      upCfg = await api('DELETE', '/upstreams/' + encodeURIComponent(id))
+      flash(v => upOk = v, 'Removed.')
+    } catch (x) { flash(v => upErr = v, x.error) }
+  }
+
+  async function setDefaultUpstream(e) {
+    const id = e.target.value
+    upErr = ''; upOk = ''
+    try {
+      upCfg = await api('PUT', '/upstreams/default', { ID: id })
+      flash(v => upOk = v, id ? `Default: ${id}.` : "Default: off (host's own default route).")
+    } catch (x) { flash(v => upErr = v, x.error); loadUpstreams() }
+  }
 
   // Logs: rotation policy for openvpn.log/ovcp.log/dnsmasq.log.
   let logsCfg = $state(null)
@@ -337,6 +377,62 @@
         <p class="muted small">Read-only: your role can view but not change this.</p>
       {/if}
     </form>
+  </div>
+{/if}
+
+{#if upstreamsAvailable}
+  <div class="card">
+    <h2>Upstreams</h2>
+    <p class="muted small">Policy-route connected clients' traffic out a chosen interface instead of the host's own default route. ovcp only steers and NATs — bring the interface itself up first.</p>
+    {#if !upCfg}
+      <p class="muted">Loading…</p>
+    {:else}
+      {#if upCfg.Upstreams?.length}
+        <table>
+          <thead><tr><th>ID</th><th>Interface</th><th>Gateway</th><th>Description</th><th></th></tr></thead>
+          <tbody>
+            {#each upCfg.Upstreams as u}
+              <tr>
+                <td>{u.ID}{u.ID === upCfg.Default ? ' (default)' : ''}</td>
+                <td>{u.Iface}</td>
+                <td>{u.Gateway || '(onlink)'}</td>
+                <td>{u.Description}</td>
+                <td>{#if isAdmin}<button type="button" class="ghost" onclick={() => delUpstream(u.ID)}>Remove</button>{/if}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <label>Active default
+          <select value={upCfg.Default || ''} disabled={!isAdmin} onchange={setDefaultUpstream}>
+            <option value="">off (host's own default route)</option>
+            {#each upCfg.Upstreams as u}<option value={u.ID}>{u.ID}</option>{/each}
+          </select>
+        </label>
+      {:else}
+        <p class="muted small">No upstreams defined yet — clients exit through the host's own default route.</p>
+      {/if}
+      <Msg type="err" text={upErr} />
+      <Msg type="ok" text={upOk} />
+      {#if isAdmin}
+        <form onsubmit={addUpstream}>
+          <div class="grid">
+            <label>ID
+              <input bind:value={newID} placeholder="wan2" required />
+            </label>
+            <label>Interface
+              <input bind:value={newIface} placeholder="eth1, wg0" required />
+            </label>
+            <label>Gateway
+              <input bind:value={newGateway} placeholder="empty = onlink" />
+            </label>
+            <label>Description
+              <input bind:value={newDesc} placeholder="optional" />
+            </label>
+          </div>
+          <div class="row"><button type="submit">Add upstream</button></div>
+        </form>
+      {/if}
+    {/if}
   </div>
 {/if}
 
