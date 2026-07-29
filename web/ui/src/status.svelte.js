@@ -4,9 +4,13 @@ import { api } from './api.js'
 export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', ovcpUptime: '', reloadLabel: '' }) // ok | down | reloading
 export const dns = $state({ up: false, phase: 'down', uptime: '', reloadLabel: '' }) // ok | down | reloading; dnsmasq is optional — App.svelte overrides to "na" when never installed
 export const telegram = $state({ running: false, tokenSet: false, admin: '', chatLinked: false })
+// whole ovcp process reachable at all — distinct from vpn/dns above, which can be
+// legitimately down while ovcp itself answers fine. App.svelte locks the UI on this.
+export const backend = $state({ up: true })
 
 let deadline = 0
 let dnsDeadline = 0
+let misses = 0 // consecutive network-level failures; 2 before backend.up flips, so one dropped poll doesn't flash the lock
 
 // fmtUptime: seconds → compact string, longest unit that keeps it readable.
 // Shared with Stats.svelte's session-duration column.
@@ -21,6 +25,7 @@ export function fmtUptime(sec) {
 export async function pollOnce() {
   try {
     const d = await api('GET', '/status')
+    backend.up = true; misses = 0
     vpn.up = d.vpn_up
     vpn.clients = d.clients?.length ?? 0
     vpn.clientList = d.clients || []
@@ -46,7 +51,14 @@ export async function pollOnce() {
     }
     if (d.telegram) Object.assign(telegram, d.telegram)
     return d
-  } catch {
+  } catch (err) {
+    // api() throws {status, error} once the server has answered (even with an
+    // error) — only a raw fetch failure (no .status) means ovcp itself is unreachable.
+    if (err?.status === undefined) {
+      if (++misses >= 2) backend.up = false
+    } else {
+      backend.up = true; misses = 0
+    }
     if (!(vpn.phase === 'reloading' && Date.now() < deadline)) {
       vpn.phase = 'down'; vpn.up = false; vpn.clientList = []; vpn.uptime = ''; vpn.ovcpUptime = ''
     }

@@ -1,7 +1,7 @@
 <script>
   import { api, flash } from './api.js'
   import Msg from './Msg.svelte'
-  import { vpn, dns, pollOnce } from './status.svelte.js'
+  import { vpn, dns, backend, pollOnce } from './status.svelte.js'
   import { theme, setTheme, THEMES } from './theme.svelte.js'
   import Logo from './Logo.svelte'
   import Dashboard from './Dashboard.svelte'
@@ -56,6 +56,17 @@
     pollOnce()
     const t = setInterval(pollOnce, (user.statusPollSeconds || 3) * 1000)
     return () => clearInterval(t)
+  })
+
+  // once backend.up has gone false, lock the UI until a real page reload —
+  // forces boot()'s /me re-check instead of quietly resuming a stale session.
+  let backendWasDown = $state(false)
+  $effect(() => {
+    if (!backend.up) { backendWasDown = true; return }
+    if (backendWasDown) {
+      const t = setTimeout(() => location.reload(), 600)
+      return () => clearTimeout(t)
+    }
   })
 
   $effect(() => { localStorage.setItem(TAB_KEY, tab) })
@@ -157,7 +168,15 @@
     </form>
   </main>
 {:else}
-  <header>
+  {#if !backend.up || backendWasDown}
+    <div class="reconnect-overlay" role="alert">
+      <div class="card">
+        <span class="status-dot {backend.up ? 'ok' : 'reloading'}"></span>
+        {backend.up ? 'Server back online…' : 'Server unreachable — reconnecting…'}
+      </div>
+    </div>
+  {/if}
+  <header inert={!backend.up || backendWasDown}>
     <div class="brand">
       <a class="brand-link" href={REPO_URL} target="_blank" rel="noopener">
         <Logo />
@@ -211,7 +230,7 @@
       <button class="ghost" onclick={doLogout}>Sign out</button>
     </div>
   </header>
-  <main class:wide={tab === 'logs'}>
+  <main class:wide={tab === 'logs'} inert={!backend.up || backendWasDown}>
     {#if tab === 'dashboard'}
       <Dashboard {canOperate} {goToCert} dnsAvailable={!!user.dnsmasqVersion}
         caCN={user.caCN} caNotAfter={user.caNotAfter} caStatus={user.caStatus} />
@@ -229,7 +248,7 @@
       <Docs />
     {/if}
   </main>
-  <footer>
+  <footer inert={!backend.up || backendWasDown}>
     <button type="button" class="ver-toggle" onclick={() => (verLong = !verLong)}
       title={verLong ? 'Show less' : 'Show openvpn version'}>
       {#if verLong}
@@ -465,6 +484,16 @@
     animation: pulse 1s ease-in-out infinite;
   }
   @keyframes pulse { 50% { opacity: .35; } }
+
+  .reconnect-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    display: grid; place-items: center;
+    background: rgba(0, 0, 0, .55);
+  }
+  .reconnect-overlay .card {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 13px;
+  }
 
   nav { display: flex; gap: 4px; }
   nav button, .nav-menu button { background: transparent; color: var(--dim); padding: 6px 12px; }
