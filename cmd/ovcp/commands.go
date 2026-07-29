@@ -1182,7 +1182,7 @@ func cmdRenew(fs *flag.FlagSet) func(ctx *cliContext) {
 		die(writeServerCert(dataPaths(ctx.dataDir), s, ic))
 		s.Audit("cli", "renew", fmt.Sprintf("kind=server cn=%s serial=%s", targetCN, ic.SerialHex))
 		output(renewOut{CN: targetCN, Serial: ic.SerialHex, NotAfter: ic.NotAfter}, func(o renewOut) {
-			fmt.Println("server cert renewed:", o.Serial)
+			fmt.Printf("server cert renewed: %s (cn %s, expires %s)\n", o.Serial, o.CN, o.NotAfter.Format("2006-01-02"))
 			fmt.Println("run `ovcp vpn restart` to apply")
 		})
 	}
@@ -1678,7 +1678,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 				rows = append(rows, api.NewUserSummary(u))
 			}
 			output(rows, func(rows []api.UserSummary) {
-				fmt.Printf("%-20s %-9s %-8s %s\n", "USERNAME", "ROLE", "STATUS", "2FA")
+				fmt.Printf("%-20s %-9s %-8s %-4s %s\n", "USERNAME", "ROLE", "STATUS", "2FA", "CREATED")
 				for _, u := range rows {
 					st := fmt.Sprintf("%-8s", "enabled")
 					if u.Disabled {
@@ -1690,7 +1690,7 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 					if u.TOTP {
 						tf = "2fa"
 					}
-					fmt.Printf("%-20s %-9s %s %s\n", u.Username, u.Role, st, tf)
+					fmt.Printf("%-20s %-9s %s %-4s %s\n", u.Username, u.Role, st, tf, u.CreatedAt.Format("2006-01-02"))
 				}
 			})
 

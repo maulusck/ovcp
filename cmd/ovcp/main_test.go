@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/store"
@@ -540,6 +541,12 @@ func TestUserListSort(t *testing.T) {
 	if len(rows) != 4 || !strings.HasPrefix(rows[1], "alice") {
 		t.Fatalf("-sort username should put alice first (after the header row): %+v", r)
 	}
+	// text mode must carry the same CreatedAt -json exposes (api.UserSummary),
+	// not silently drop it — see cmdUser's "list" text renderer.
+	today := time.Now().Format("2006-01-02")
+	if !strings.Contains(rows[0], "CREATED") || !strings.Contains(rows[1], today) {
+		t.Fatalf("user list text output must show a CREATED column: %+v", r)
+	}
 	r = run(t, env, "user", "list", "-sort", "username", "-desc")
 	rows = strings.Split(strings.TrimSpace(r.stdout), "\n")
 	if len(rows) != 4 || !strings.HasPrefix(rows[1], "charlie") {
@@ -759,6 +766,13 @@ func TestRenewServer(t *testing.T) {
 	}
 	if r := run(t, env, "audit"); !strings.Contains(r.stdout, "kind=server") {
 		t.Fatalf("audit missing renew kind=server: %+v", r)
+	}
+
+	// -cn renames the server cert; text mode must say so, not just -json
+	// (renewOut.CN) — see cmdRenew's text renderer.
+	r := run(t, env, "certificate", "renew", "-cn", "renamed.example.com")
+	if r.code != 0 || !strings.Contains(r.stdout, "renamed.example.com") {
+		t.Fatalf("certificate renew -cn must show the new cn in text output: %+v", r)
 	}
 }
 

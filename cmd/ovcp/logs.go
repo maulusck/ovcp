@@ -93,9 +93,9 @@ func cmdLogsConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// cmdLogsConfigSet: same "-1/empty means unchanged" idiom cmdConfigSet uses,
-// except 0 is a real value here (RetentionDays: 0 = keep forever), so the
-// "unchanged" sentinel is -1, not 0.
+// cmdLogsConfigSet: same "empty means unchanged" idiom every config set
+// uses, except 0 is a real value here (RetentionDays: 0 = keep forever), so
+// the "unchanged" sentinel is -1, not 0.
 func cmdLogsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	enabled := fs.String("enabled", "", "on|off: run the daily internal rotation (unchanged if omitted)")
 	retentionDays := fs.Int("retention-days", -1, "delete rotated logs older than N days, 0 = keep forever (unchanged if omitted)")
