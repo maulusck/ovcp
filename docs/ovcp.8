@@ -1008,7 +1008,10 @@ connection stats (Stats tab; 24\-hour retention). Private keys are never
 stored in the database.
 .TP
 .I $OVCP_DATA/admin\-tls/
-Self\-signed certificate for the admin UI.
+Self\-signed certificate for the admin UI \(en deliberately its own root,
+never \fBpki/ca.key.enc\fR. That CA's only job is deciding which client
+certs get VPN access; sharing it with the browser\-facing cert would let
+a CA compromise MITM the web login too, not just mint VPN clients.
 .TP
 .I $OVCP_DATA/logs/openvpn.log
 openvpn's stdout/stderr, appended across restarts. Rotated internally by
