@@ -73,7 +73,7 @@ func (s *Server) logHandler(filename string) handler {
 func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
 	w.Header().Set("Content-Type", "application/zip")
 	name := "ovcp-audit-" + time.Now().Format("20060102-150405") + ".zip"
-	if cn := sanitizeFilename(s.DefaultRemote); cn != "" {
+	if cn := sanitizeFilename(s.DefaultRemote()); cn != "" {
 		name = "ovcp-audit-" + cn + "-" + time.Now().Format("20060102-150405") + ".zip"
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
@@ -132,7 +132,7 @@ func (s *Server) statusExport() statusExport {
 	}
 	exp := statusExport{
 		GeneratedAt: time.Now(),
-		ServerCN:    s.DefaultRemote,
+		ServerCN:    s.DefaultRemote(),
 		Version:     s.Version,
 		VPNUp:       s.VPN.Pid() != 0 && err == nil,
 		Clients:     clients,

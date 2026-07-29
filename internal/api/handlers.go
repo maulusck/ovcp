@@ -70,7 +70,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u *store.U
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
 	out := map[string]any{
-		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote,
+		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote(),
 		"version": s.Version, "buildTarget": s.BuildTarget, "platform": runtime.GOOS + "/" + runtime.GOARCH,
 		"openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
 		"dnsmasqVersion": s.DnsmasqVersion, "dnsmasqPath": s.DnsmasqPath,
@@ -261,7 +261,8 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request, u *store.Us
 	if in.Days <= 0 {
 		in.Days = 825
 	}
-	if s.DefaultRemote == "" {
+	remote := s.DefaultRemote()
+	if remote == "" {
 		jsonErr(w, 400, "no server CN configured")
 		return
 	}
@@ -271,7 +272,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request, u *store.Us
 		s.pkiErr(w, err)
 		return
 	}
-	ic, err := s.PKI.Issue(pki.KindServer, s.DefaultRemote, in.Days, []byte(in.Passphrase))
+	ic, err := s.PKI.Issue(pki.KindServer, remote, in.Days, []byte(in.Passphrase))
 	if err != nil {
 		s.pkiErr(w, err)
 		return
@@ -280,7 +281,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request, u *store.Us
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	s.Store.Audit(u.Username, "renew", "kind=server cn="+s.DefaultRemote+" serial="+ic.SerialHex)
+	s.Store.Audit(u.Username, "renew", "kind=server cn="+remote+" serial="+ic.SerialHex)
 	jsonOK(w, map[string]string{"serial": ic.SerialHex, "notAfter": ic.NotAfter.Format(time.RFC3339)})
 }
 
@@ -335,7 +336,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		return
 	}
 	if in.Remote == "" {
-		in.Remote = s.DefaultRemote
+		in.Remote = s.DefaultRemote()
 	}
 	if in.Remote == "" {
 		jsonErr(w, 400, "remote required (no server CN configured)")
@@ -367,7 +368,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		return
 	}
 	bundle, err := pki.RenderOVPN(pki.BundleParams{
-		Remote: in.Remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: s.DefaultRemote,
+		Remote: in.Remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: s.DefaultRemote(),
 		CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
 		TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: in.SplitTunnel, Extra: in.Extra,
 	})
@@ -765,7 +766,7 @@ func (s *Server) handleUserTOTPEnroll(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	url := auth.TOTPProvisioningURL(sec, name, s.DefaultRemote)
+	url := auth.TOTPProvisioningURL(sec, name, s.DefaultRemote())
 	qr, err := qrDataURI(url)
 	if err != nil {
 		jsonErr(w, 500, err.Error())

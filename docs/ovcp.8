@@ -256,7 +256,12 @@ fresh keypair and serial, same paths \(en effective on the next
 (openvpn does not hot\-reload its certificate). Omit \fB\-cn\fR to keep
 the current CN (routine renewal); pass a different one to rename it \(en
 server identity is kind\-only, not CN\-keyed like a client's (there is
-only ever one), so renew and rename are the same operation. \fB\-cn\fR
+only ever one), so renew and rename are the same operation. A rename
+takes effect immediately everywhere else (DNS, the web UI's own title,
+TOTP enrollment, client exports, log filenames \(en all read the CN
+live, never cached), except the admin UI's own TLS cert, which keeps
+the old CN until \fBovcp serve\fR itself is restarted (see
+\fBadmin\-tls/\fR below). \fB\-cn\fR
 defaults to the existing server cert's CN, falling back to
 \fBOVCP_SERVER_CN\fR if that file can't be read yet (e.g. right after a
 \fBbackup restore\fR, which never restores a server cert \(en see below).
@@ -1011,7 +1016,10 @@ stored in the database.
 Self\-signed certificate for the admin UI \(en deliberately its own root,
 never \fBpki/ca.key.enc\fR. That CA's only job is deciding which client
 certs get VPN access; sharing it with the browser\-facing cert would let
-a CA compromise MITM the web login too, not just mint VPN clients.
+a CA compromise MITM the web login too, not just mint VPN clients. Its
+CN is a snapshot taken at \fBovcp serve\fR startup \(en a
+\fBcertificate renew \-cn\fR rename needs \fBserve\fR restarted to
+regenerate it, unlike everything else that reads the server CN.
 .TP
 .I $OVCP_DATA/logs/openvpn.log
 openvpn's stdout/stderr, appended across restarts. Rotated internally by

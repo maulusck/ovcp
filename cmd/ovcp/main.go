@@ -221,6 +221,8 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	dnsSup.OnCrashLoopGiveUp = func(streak int) {
 		tg.Notify(fmt.Sprintf("⚠️ dnsmasq crash-looping (%dx), giving up auto-restart", streak))
 	}
+	// shared by DefaultRemote and EnsureAdminTLS below — one definition, no cached copy.
+	remoteCN := func() string { return adminCertCN(dataDir) }
 	srv := &api.Server{
 		Store: s, Auth: auth.NewService(s), PKI: p,
 		Mgmt:            mgmt,
@@ -231,6 +233,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 		TLSCrypt:        pp.TLSCrypt,
 		ServerCert:      pp.ServerCert,
 		ServerKey:       pp.ServerKey,
+		DefaultRemote:   remoteCN,
 		UI:              web.Dist(),
 		DebugLevel:      logLevel,
 		Version:         version,
@@ -245,7 +248,6 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 		DNS:             dnsSup,
 		PollInterval:    time.Duration(statusInterval()) * time.Second,
 	}
-	srv.DefaultRemote = adminCertCN(dataDir)
 
 	die(preflight(dataDir))
 	// render server.conf from persisted settings (paths are controller-owned)
@@ -255,7 +257,9 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	die(s.SetSetting("vpn_config", string(raw)))
 	die(cfg.WriteAtomic(srv.ConfigPath))
 
-	crt, key, err := api.EnsureAdminTLS(filepath.Join(dataDir, "admin-tls"), adminCertCN(dataDir))
+	// unlike DefaultRemote, this CN is a one-time snapshot: EnsureAdminTLS
+	// only re-runs on the next serve restart.
+	crt, key, err := api.EnsureAdminTLS(filepath.Join(dataDir, "admin-tls"), remoteCN())
 	die(err)
 	// ErrorLog: routes net/http's own logging (panics, TLS errors) through slog too, not bare stderr.
 	hs := &http.Server{Handler: srv.Handler(), ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError)}
@@ -454,7 +458,8 @@ func refreshCertsHostsCLI(dataDir string, s *store.Store) {
 	live, _ := controller.Clients(ctrlSock())
 	pp := dataPaths(dataDir)
 	gid := dnsGID(dnsRunAsGroup())
-	srv := &api.Server{Store: s, CertsHostsPath: pp.CertsHosts, DefaultRemote: adminCertCN(dataDir), DNSGroupGID: gid}
+	srv := &api.Server{Store: s, CertsHostsPath: pp.CertsHosts, DNSGroupGID: gid,
+		DefaultRemote: func() string { return adminCertCN(dataDir) }}
 	if err := srv.RefreshCertsHosts(live); err != nil {
 		slog.Warn("certs.hosts refresh failed", "err", err)
 	}

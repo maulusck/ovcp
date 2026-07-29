@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -76,14 +77,18 @@ func (s *Server) RefreshCertsHosts(live []controller.VPNClient) error {
 	if ip, err := s.LoadConfig().ServerTunIP(); err == nil {
 		serverIP = ip
 	}
-	data := CertsHostsContent(certs, live, s.DefaultRemote, serverIP)
+	data := CertsHostsContent(certs, live, s.DefaultRemote(), serverIP)
 	return WriteAtomicHosts(s.CertsHostsPath, data, s.DNSGroupGID)
 }
 
 // WriteAtomicHosts installs data at path via temp+rename (same shape as
-// ovpnconf.Config.WriteAtomic) so dnsmasq's inotify watch never sees a
-// partial write. Chown failure is tolerated, not fatal, same as ensureDNSDir.
+// ovpnconf.Config.WriteAtomic), skipping the rename when data is unchanged
+// so dnsmasq's inotify watch doesn't fire for nothing. Chown failure is
+// tolerated, not fatal, same as ensureDNSDir.
 func WriteAtomicHosts(path string, data []byte, gid int) error {
+	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
+		return nil
+	}
 	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp")
 	if err := os.WriteFile(tmp, data, 0o640); err != nil {
 		return err

@@ -70,7 +70,7 @@ func setup(t *testing.T) *env {
 		TLSCrypt:        filepath.Join(dir, "pki", "tls-crypt.key"),
 		ServerCert:      filepath.Join(dir, "server.crt"),
 		ServerKey:       filepath.Join(dir, "server.key"),
-		DefaultRemote:   "vpn.example.com",
+		DefaultRemote:   func() string { return "vpn.example.com" },
 		DebugLevel:      new(slog.LevelVar),
 		CertsHostsPath:  filepath.Join(dir, "dns", "certs.hosts"),
 		CustomHostsPath: filepath.Join(dir, "dns", "custom.hosts"),

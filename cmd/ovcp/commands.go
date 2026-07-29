@@ -1184,6 +1184,9 @@ func cmdRenew(fs *flag.FlagSet) func(ctx *cliContext) {
 		output(renewOut{CN: targetCN, Serial: ic.SerialHex, NotAfter: ic.NotAfter}, func(o renewOut) {
 			fmt.Printf("server cert renewed: %s (cn %s, expires %s)\n", o.Serial, o.CN, o.NotAfter.Format("2006-01-02"))
 			fmt.Println("run `ovcp vpn restart` to apply")
+			if *cn != "" {
+				fmt.Println("the admin UI's own TLS cert keeps the old CN until `ovcp serve` is restarted")
+			}
 		})
 	}
 }

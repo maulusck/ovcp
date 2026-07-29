@@ -756,8 +756,12 @@ func TestRenewServer(t *testing.T) {
 	}
 	before := len(certLines(run(t, env, "certificate", "list").stdout, "server"))
 
-	if r := run(t, env, "certificate", "renew"); r.code != 0 {
+	r := run(t, env, "certificate", "renew")
+	if r.code != 0 {
 		t.Fatalf("renew: %+v", r)
+	}
+	if strings.Contains(r.stdout, "admin UI's own TLS cert") {
+		t.Fatalf("same-CN renew must not claim admin-tls needs a restart: %+v", r)
 	}
 
 	after := len(certLines(run(t, env, "certificate", "list").stdout, "server"))
@@ -770,9 +774,12 @@ func TestRenewServer(t *testing.T) {
 
 	// -cn renames the server cert; text mode must say so, not just -json
 	// (renewOut.CN) — see cmdRenew's text renderer.
-	r := run(t, env, "certificate", "renew", "-cn", "renamed.example.com")
+	r = run(t, env, "certificate", "renew", "-cn", "renamed.example.com")
 	if r.code != 0 || !strings.Contains(r.stdout, "renamed.example.com") {
 		t.Fatalf("certificate renew -cn must show the new cn in text output: %+v", r)
+	}
+	if !strings.Contains(r.stdout, "admin UI's own TLS cert") {
+		t.Fatalf("a -cn rename must warn that admin-tls needs its own restart: %+v", r)
 	}
 }
 

@@ -31,7 +31,7 @@ type Server struct {
 	TLSCrypt        string               // tls-crypt key path
 	ServerCert      string               // openvpn server cert path (certificate renew target)
 	ServerKey       string               // openvpn server key path (certificate renew target)
-	DefaultRemote   string               // OVCP_SERVER_CN / server cert CN; default client remote
+	DefaultRemote   func() string        // OVCP_SERVER_CN / server cert CN; live, not cached — a `certificate renew -cn` rename takes effect on the next call, no restart
 	Version         string               // build version, for the status export
 	BuildTarget     string               // Makefile TARGET/Containerfile arch this binary was built for, e.g. "host", "arm64-musl"
 	OpenVPNVersion  string               // "" if openvpn isn't on PATH

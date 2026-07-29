@@ -15,7 +15,8 @@ import (
 // this package gives an unreachable mgmt socket (see TestStatusVPNDown).
 func TestSamplerTickSkipsOnMgmtDown(t *testing.T) {
 	dir := t.TempDir()
-	srv := &Server{Mgmt: controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")), VPN: &fakeVPN{}}
+	srv := &Server{Mgmt: controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")), VPN: &fakeVPN{},
+		DefaultRemote: func() string { return "" }}
 	prev := map[string]controller.VPNClient{"alice": {CN: "alice"}}
 
 	got := srv.samplerTick(true, 24*time.Hour, prev)
@@ -52,7 +53,8 @@ func TestSamplerTickShortSessionNotLost(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	srv := &Server{Store: s, VPN: &fakeVPN{}, Mgmt: controller.NewClient("", writeStatus(t, "alice"))}
+	srv := &Server{Store: s, VPN: &fakeVPN{}, Mgmt: controller.NewClient("", writeStatus(t, "alice")),
+		DefaultRemote: func() string { return "" }}
 
 	prev := srv.samplerTick(false, 24*time.Hour, map[string]controller.VPNClient{})
 	if len(prev) != 1 {

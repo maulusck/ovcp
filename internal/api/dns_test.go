@@ -124,6 +124,76 @@ func TestWriteAtomicHosts(t *testing.T) {
 	}
 }
 
+// TestWriteAtomicHostsSkipsUnchangedWrite: a rename() is what fires dnsmasq's
+// inotify watch, so an identical rewrite must never reach it — proven via
+// mtime, since a real rename always replaces the file (and its mtime) even
+// when the bytes are the same.
+func TestWriteAtomicHostsSkipsUnchangedWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "certs.hosts")
+	data := []byte("10.8.0.1 ovcp\n")
+
+	if err := WriteAtomicHosts(path, data, -1); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteAtomicHosts(path, data, -1); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(path); !fi.ModTime().Equal(old) {
+		t.Fatalf("identical content must skip the rename, mtime changed to %v", fi.ModTime())
+	}
+
+	if err := WriteAtomicHosts(path, []byte("10.8.0.1 ovcp\n10.8.0.2 alice\n"), -1); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(path); fi.ModTime().Equal(old) {
+		t.Fatal("changed content must still write")
+	}
+}
+
+// TestRefreshCertsHostsLiveDefaultRemote: DefaultRemote must be read fresh on
+// every call, not cached at Server construction — a `certificate renew -cn`
+// rename takes effect on the very next tick, no `ovcp serve` restart needed.
+func TestRefreshCertsHostsLiveDefaultRemote(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	remote := "old.example.com"
+	srv := &Server{
+		Store:          s,
+		CertsHostsPath: filepath.Join(t.TempDir(), "certs.hosts"),
+		DefaultRemote:  func() string { return remote },
+		DNSGroupGID:    -1,
+	}
+
+	die := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	die(srv.RefreshCertsHosts(nil))
+	got, _ := os.ReadFile(srv.CertsHostsPath)
+	if !strings.Contains(string(got), "old.example.com") {
+		t.Fatalf("want old CN, got %q", got)
+	}
+
+	remote = "new.example.com" // same Server, no restart — mutating what the closure reads
+	die(srv.RefreshCertsHosts(nil))
+	got, _ = os.ReadFile(srv.CertsHostsPath)
+	if !strings.Contains(string(got), "new.example.com") || strings.Contains(string(got), "old.example.com") {
+		t.Fatalf("DefaultRemote must be live, not cached: %q", got)
+	}
+}
+
 // TestDNSLeakWarning covers the advisory-only cross-domain check — never an
 // error, just a heads-up when block-internet and pushed DNS contradict.
 func TestDNSLeakWarning(t *testing.T) {
