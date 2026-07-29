@@ -182,12 +182,9 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
 }
 
-// issueClientCert issues a client cert, optionally password-protecting the
-// key, and records it in the store — plain issue (AddCert, errors on an
-// existing active cert) or renew (ReplaceCert + CRL regen) depending on
-// renew. Shared by handleIssue and handleExport, so a renewal issued
-// through export is exactly as atomic as a plain issue: the outgoing cert
-// is only ever revoked once the new one already exists, never before.
+// issueClientCert issues (AddCert) or renews (ReplaceCert + CRL regen) a
+// client cert — shared by handleIssue/handleExport, so an export-triggered
+// renewal is just as atomic: the outgoing cert is revoked only once the new one exists.
 func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int, renew bool) (*pki.IssuedCert, error) {
 	if days <= 0 {
 		days = 365
@@ -480,11 +477,8 @@ func (s *Server) handleTelegramConfigGet(w http.ResponseWriter, r *http.Request,
 }
 
 // handleTelegramConfigSet sets token and/or admin independently — empty means
-// unchanged for that field; SetToken validates against getMe when given.
-// Admin is applied before token: SetAdmin's goodbye message to the outgoing
-// admin needs the chat id SetToken would otherwise have already wiped, had a
-// caller changed both in one request (SetToken clears it on any real token
-// change, same unlink-on-identity-change rule SetAdmin follows for its own field).
+// unchanged. Admin applies before token: SetToken wipes the chat id on any
+// real token change, so setting both needs SetAdmin's goodbye message sent first.
 func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Token, Admin string }
 	if !decode(r, &in) {

@@ -2,8 +2,9 @@
   import { tick } from 'svelte'
   import {
     api, apiBlob, downloadBlob, copyToClipboard, sortRows, matchesQuery,
-    toggleSort, sortMark, toggleSearch, autofocus, flash,
+    toggleSort, sortMark, toggleSearch, autofocus, flash, fmtDate,
   } from './api.js'
+  import { vpn } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { canOperate, isAdmin, focusCN = $bindable('') } = $props()
   let certs = $state([])
@@ -36,11 +37,8 @@
   })
 
   // The one signal for "this submit renews instead of issuing": does the
-  // typed/pre-filled CN already match a live client cert? No separate flag
-  // to set or reset — whether you got here by clicking a cert's name or just
-  // typed an existing CN yourself, the form behaves identically either way.
-  // Same rule the backend's AddCert enforces (one active row per CN+kind),
-  // so a revoked-only CN is free to reissue, an active one can only renew.
+  // typed/pre-filled CN already match a live client cert — no separate flag,
+  // same rule AddCert enforces (one active row per CN+kind), so a revoked-only CN reissues, an active one renews.
   const hasActiveClient = (cn) => certs.some((c) => c.CN === cn && c.Kind === 'client' && !c.Revoked)
   const willRenew = $derived(hasActiveClient(form.cn))
 
@@ -88,6 +86,11 @@
     if (!(await copyToClipboard(serial, 'Serial'))) return
     flash(v => copied = v, serial, 1200)
   }
+  async function copyIP(ip) {
+    if (!(await copyToClipboard(ip, 'IP'))) return
+    flash(v => copied = v, ip, 1200)
+  }
+  const liveIP = (cn) => vpn.clientList.find((c) => c.CN === cn)?.VirtualAddress
 
   async function revoke(serial, cn) {
     const passphrase = prompt(`CA passphrase to revoke ${cn}:`)
@@ -120,10 +123,9 @@
     return { text: 'valid', cls: '' }
   }
 
-  // Client renewal is just export, aimed at a CN that already has an active
-  // cert (willRenew, above) — the passphrase field right there in the form
-  // is the only prompt involved, so clicking a CN only ever pre-fills and
-  // scrolls; nothing is revoked until the form is actually submitted.
+  // Client renewal is just export, aimed at a CN with an active cert
+  // (willRenew, above) — clicking a CN only ever pre-fills and scrolls;
+  // nothing is revoked until the form is actually submitted.
   function prefillRenew(cn) {
     form.cn = cn
     document.querySelector('.issue')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -240,7 +242,7 @@
             </td>
             <td>{c.Kind}</td>
             <td class={status(c).cls}>{status(c).text}</td>
-            <td>{new Date(c.NotAfter).toISOString().slice(0, 10)}</td>
+            <td>{fmtDate(new Date(c.NotAfter))}</td>
             <td>
               <button class="mono serial" title={c.Serial + ' — click to copy'}
                 onclick={() => copySerial(c.Serial)}>
@@ -251,8 +253,16 @@
               download={c.CN + '.crt'}>Download</a></td>
             <td class="dns-col">
               {#if !c.Revoked && c.Kind !== 'server'}
-                <input type="checkbox" checked={c.IncludeDNS} disabled={!canOperate}
-                  onchange={() => toggleDNS(c.Serial, !c.IncludeDNS)} />
+                <span class="dns-cell">
+                  <input type="checkbox" checked={c.IncludeDNS} disabled={!canOperate}
+                    onchange={() => toggleDNS(c.Serial, !c.IncludeDNS)} />
+                  {#if c.IncludeDNS && liveIP(c.CN)}
+                    <button type="button" class="dns-live" onclick={() => copyIP(liveIP(c.CN))}
+                      title={(copied === liveIP(c.CN) ? 'copied: ' : 'resolving at ') + liveIP(c.CN)}>
+                      <span class="status-dot ok"></span>
+                    </button>
+                  {/if}
+                </span>
               {/if}
             </td>
             {#if canOperate}
@@ -277,7 +287,9 @@
   .serial:hover { color: var(--text); text-decoration: underline dotted; }
   .dl { color: var(--amber); font-size: 12px; font-family: system-ui, sans-serif; }
   .dns-col { text-align: center; }
-  .dns-col input { margin: 0; } /* browser UA default offsets checkboxes right of th text */
+  .dns-cell { display: inline-flex; align-items: center; gap: 4px; }
+  .dns-cell input { margin: 0; } /* browser UA default offsets checkboxes right of th text */
+  .dns-live { background: none; border: 0; padding: 0; display: inline-flex; cursor: copy; }
   :global(tr.flash) { animation: flash 1.5s ease-out; }
   @keyframes flash { 0% { background: var(--amber); } 100% { background: transparent; } }
 </style>

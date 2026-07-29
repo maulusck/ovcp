@@ -458,6 +458,7 @@
   header {
     display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
     padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 10; /* under .reconnect-overlay's 1000 */
   }
   .brand { display: flex; align-items: center; gap: 12px; }
   .brand-link { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }

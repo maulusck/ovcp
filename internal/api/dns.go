@@ -81,10 +81,9 @@ func (s *Server) RefreshCertsHosts(live []controller.VPNClient) error {
 	return WriteAtomicHosts(s.CertsHostsPath, data, s.DNSGroupGID)
 }
 
-// WriteAtomicHosts installs data at path via temp+rename (same shape as
-// ovpnconf.Config.WriteAtomic), skipping the rename when data is unchanged
-// so dnsmasq's inotify watch doesn't fire for nothing. Chown failure is
-// tolerated, not fatal, same as ensureDNSDir.
+// WriteAtomicHosts installs data at path via temp+rename, skipping the
+// rename when data is unchanged so dnsmasq's inotify watch doesn't fire for
+// nothing. Chown failure is tolerated, not fatal, same as ensureDNSDir.
 func WriteAtomicHosts(path string, data []byte, gid int) error {
 	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
 		return nil

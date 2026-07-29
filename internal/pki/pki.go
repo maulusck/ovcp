@@ -39,13 +39,9 @@ const MaxCNLen = 64
 
 func New(dir string) *PKI { return &PKI{Dir: dir} }
 
-// WriteFileAtomic writes data to path the durable way — the one write path
-// for every load-bearing PKI file (CA cert, CA key, server cert/key), so
-// neither a crash nor a power loss mid-write can ever leave one truncated:
-// a reader always sees either the old file or the complete new one.
-// fsync before rename (data really on disk, not just the page cache);
-// rename (atomic on the same filesystem); fsync the directory too, so the
-// rename itself survives a power loss, not just a process crash.
+// WriteFileAtomic writes data to path the durable way — fsync, rename,
+// fsync-the-dir — the one write path for every load-bearing PKI file (CA
+// cert/key, server cert/key), so a crash or power loss never leaves one truncated.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp := path + ".tmp"
 	os.Remove(tmp) // clear a stale tmp (crashed prior write, or a symlink) before O_EXCL below
@@ -132,11 +128,9 @@ func (p *PKI) InitCA(cn string, years int, passphrase []byte) error {
 	return p.RegenCRL(nil, passphrase)
 }
 
-// RenewCA reissues the CA certificate in place with a new serial and
-// extended validity, keeping the same key — every already-issued cert stays
-// valid, since only the CA's signing key (unchanged) matters for
-// verification, not which CA cert happens to be on disk. Distinct from
-// Rotate, which only re-encrypts the key under a new passphrase.
+// RenewCA reissues the CA cert in place with a new serial and extended
+// validity, same key — already-issued certs stay valid since only the
+// (unchanged) signing key matters for verification. Distinct from Rotate (re-encrypts the key only).
 func (p *PKI) RenewCA(years int, passphrase []byte) (*x509.Certificate, error) {
 	cur, key, err := p.loadCA(passphrase)
 	if err != nil {

@@ -28,14 +28,9 @@ import (
 	"github.com/ovcp/ovcp/internal/telegram"
 )
 
-// command is one subcommand: run registers flags on fs, returning the closure executed once parsed.
-// commands is the single source of truth dispatch, helpText, and completeArgs all read.
-//
-// Help is three tiers, each answering only the question it's asked: `ovcp -h`
-// lists every command with desc, a few words (tier 1); `ovcp <command> -h` (or
-// a missing/bad op) lists sub with subDesc, still a few words each (tier 2);
-// `ovcp <command> <op> -h` prints that op's real flags via fs.PrintDefaults()
-// (tier 3, already exists — every flag already carries its own description).
+// command is one subcommand: run registers flags on fs, returning the closure
+// executed once parsed. commands is the single dispatch source. 3-tier help:
+// `-h` (desc), `<command> -h` (subDesc), `<command> <op> -h` (fs.PrintDefaults()).
 type command struct {
 	name    string
 	alias   string // short form accepted alongside name in dispatch/completion; "" if none
@@ -56,9 +51,8 @@ func (c command) flagNames() []string {
 }
 
 // opsUsage renders tier 2: "usage: ovcp <name> <op>" plus one line per op
-// with its short description (desc[o] == "" prints a bare name, never
-// breaks) — shared by a missing/bad op's error and `ovcp <command> -h`, so
-// the two can't drift apart into different listings of the same ops.
+// (desc[o]=="" prints a bare name, never breaks) — shared by a missing/bad
+// op's error and `ovcp <command> -h`, so the two can't drift into different listings.
 func opsUsage(name string, ops []string, desc map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "usage: ovcp %s <op>\n", name)
@@ -71,9 +65,8 @@ func opsUsage(name string, ops []string, desc map[string]string) string {
 }
 
 // opArgList validates args[0] against ops, returning it plus the rest —
-// opArg's shape without needing an already-Parse'd FlagSet, for op-dispatch
-// one level deeper (e.g. "logs config get", where "config"'s own opArg
-// already split "get" off as plain rest).
+// opArg's shape without needing an already-Parse'd FlagSet, for a second op
+// level (e.g. "logs config get" — "config"'s own opArg already split "get" off).
 func opArgList(name string, ops []string, desc map[string]string, args []string) (op string, rest []string) {
 	if len(args) < 1 || !slices.Contains(ops, args[0]) {
 		die(fmt.Errorf("%s", opsUsage(name, ops, desc)))
@@ -158,7 +151,8 @@ var (
 	recordOps    = []string{"list", "edit", "include", "exclude"}
 	recordOpDesc = map[string]string{
 		"list": "list internal DNS records", "edit": "$EDITOR for custom.hosts",
-		"include": "resolve this CN while connected (-cn NAME)", "exclude": "stop resolving this CN (-cn NAME)",
+		"include": "resolve this CN while connected — client certs only (-cn NAME)",
+		"exclude": "stop resolving this CN — client certs only (-cn NAME)",
 	}
 	userOps    = []string{"add", "list", "del", "disable", "enable", "passwd", "totp"}
 	userOpDesc = map[string]string{
@@ -184,10 +178,8 @@ var (
 	}
 )
 
-// desc (tier 1, ovcp -h) stays to a few words — each command's own ops get
-// their few-word explanation one level deeper (ovcp <command> -h, tier 2),
-// and every op's real flags are a level deeper still (tier 3, already
-// existing fs.PrintDefaults()). Full prose lives in ovcp(8), not here.
+// desc stays a few words (see command's doc comment for the 3-tier shape);
+// full prose lives in ovcp(8), not here.
 var commands = []command{
 	{name: "init", desc: "one-shot setup: CA, server cert, admin user", run: cmdInit},
 	{name: "certificate", alias: "cert", desc: "issue, list, revoke, renew certs", sub: certOps, subDesc: certOpDesc, run: cmdCertificate},
@@ -923,14 +915,27 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 			lfs.Parse(rest)
 			s := ctx.openStore()
 			certs, err := s.ListCerts()
+			raw, _ := s.GetSetting("vpn_config")
 			s.Close()
 			die(err)
 			out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
 			die(err)
 			customData, _ := os.ReadFile(pp.CustomHosts)
+			// liveIP: CN -> resolvable IP right now.
+			liveIP := map[string]string{}
+			if live, err := controller.Clients(ctrlSock()); err == nil {
+				for _, cl := range live {
+					if cl.VirtualAddress != "" {
+						liveIP[cl.CN] = cl.VirtualAddress
+					}
+				}
+			}
+			if ip, err := ovpnconf.Load(raw).ServerTunIP(); err == nil {
+				liveIP[adminCertCN(ctx.dataDir)] = ip.String()
+			}
 			rows := []recordOut{}
 			for _, c := range out {
-				rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS})
+				rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS, liveIP[c.CN]})
 			}
 			output(recordListOut{rows, string(customData)}, func(o recordListOut) {
 				fmt.Println("Certificate records:")
@@ -939,6 +944,9 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 					dns := "excluded"
 					if r.IncludeDNS {
 						dns = green("included")
+						if r.IP != "" {
+							dns = green(r.IP)
+						}
 					}
 					fmt.Printf("%s %-10s %-24s expires %s  %-8s  %s\n",
 						coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial)
@@ -990,10 +998,11 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// recordOut is certOut plus the one field `list -json` needs beyond it.
+// recordOut is certOut plus the fields `list -json` needs beyond it.
 type recordOut struct {
 	certOut
-	IncludeDNS bool `json:"includeDNS"`
+	IncludeDNS bool   `json:"includeDNS"`
+	IP         string `json:"ip,omitempty"`
 }
 
 type recordListOut struct {
@@ -1324,11 +1333,8 @@ func printDiff(diff []string) {
 }
 
 // cmdVPNConfigSet applies flag overrides and persists — PUT /api/vpn/config's
-// CLI twin. -extra - opens $EDITOR on the raw directives inline (configFlags);
-// there's no separate `edit` op to keep in sync with this validate/diff/persist
-// sequence, just this one path every vpn config change saves through. An empty
-// diff never writes or audits — true whether that's zero flags passed, values
-// matching what's already saved, or an $EDITOR session that changed nothing.
+// CLI twin; -extra - opens $EDITOR inline, no separate `edit` op to drift.
+// An empty diff never writes or audits, whether from no flags, unchanged values, or a no-op $EDITOR session.
 func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	apply := configFlags(fs)
 	return func(ctx *cliContext) {
@@ -1382,9 +1388,8 @@ type previewOut struct {
 }
 
 // cmdCA wraps the CA-level ops (passphrase rotation, cert renewal) — the
-// most sensitive surface in the tool, deliberately CLI-only and kept on its
-// own top-level menu rather than folded into `certificate` (the CA isn't a
-// certs-table row at all, see store's schema).
+// most sensitive surface, deliberately CLI-only, kept on its own top-level
+// menu instead of folded into `certificate` (the CA isn't a certs-table row, see store's schema).
 func cmdCA(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		op, rest := opArg(fs, "ca", caOps, caOpDesc)
@@ -1547,13 +1552,9 @@ func cmdTelegramConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// cmdTelegramConfigSet: token and admin are independently optional, so
-// changing one never requires re-supplying the other — -token is a flag
-// (not a value) since a secret has no business appearing on the command line.
-// Admin is applied before token: SetAdmin's goodbye message to the outgoing
-// admin needs the chat id SetToken would otherwise already have wiped, had
-// both been changed in this one invocation (SetToken clears it on any real
-// token change, same unlink-on-identity-change rule SetAdmin follows).
+// cmdTelegramConfigSet: token and admin are independently optional — -token
+// is a flag, not a value, since a secret has no business on the command line.
+// Admin applies before token: SetToken wipes the chat id on any real change, so setting both needs SetAdmin's goodbye message sent first.
 func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	setToken := fs.Bool("token", false, "prompt for (or read $OVCP_TELEGRAM_TOKEN) a new bot token")
 	admin := fs.String("admin", os.Getenv("OVCP_TELEGRAM_ADMIN"),

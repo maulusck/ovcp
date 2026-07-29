@@ -1,9 +1,12 @@
 package controller
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -261,5 +264,52 @@ func TestDnsmasqVersionNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, _, ok := DnsmasqVersion(); ok {
 		t.Fatal("expected ok=false with no dnsmasq on PATH")
+	}
+}
+
+// TestLogLines: every line gets ovcp's own RFC3339 prefix, including an
+// unterminated final line — neither worker can be trusted to timestamp its
+// own output (dnsmasq's stderr mode doesn't; openvpn's own format doesn't
+// match what the web UI parses).
+func TestLogLines(t *testing.T) {
+	var buf bytes.Buffer
+	logLines(strings.NewReader("first line\nsecond line\nno trailing newline"), &buf)
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3: %q", len(lines), buf.String())
+	}
+	stamp := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2}) `)
+	want := []string{"first line", "second line", "no trailing newline"}
+	for i, l := range lines {
+		if !stamp.MatchString(l) {
+			t.Fatalf("line %d missing timestamp prefix: %q", i, l)
+		}
+		if msg := stamp.ReplaceAllString(l, ""); msg != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, msg, want[i])
+		}
+	}
+}
+
+// TestSupervisorLogsAreTimestamped: end to end — a real child process's
+// stdout lands in LogPath with the same prefix, not raw passthrough.
+func TestSupervisorLogsAreTimestamped(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "fake-openvpn.sh")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\necho hello from child\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := &Supervisor{Name: "openvpn", Bin: p, LogPath: filepath.Join(t.TempDir(), "openvpn.log")}
+	if err := s.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	for i := 0; i < 50 && s.Running(); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, err := os.ReadFile(s.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2}) hello from child\n`).Match(got) {
+		t.Fatalf("LogPath = %q, want a timestamped line", got)
 	}
 }

@@ -66,11 +66,16 @@ export function downloadBlob(blob, filename) {
   URL.revokeObjectURL(a.href)
 }
 
-// One shared timestamp format for the whole UI: 24h, no AM/PM, date order
-// from the browser's own locale (en-US if it has none).
+// One fixed timestamp format for the whole UI: local time, "YYYY-MM-DD
+// HH:MM:SS" — deterministic, unlike toLocaleString's locale-dependent order.
 export function fmtTimestamp(d) {
-  return d.toLocaleString(navigator.language || 'en-US', { hour12: false }).replace(',', '')
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
+
+// Date-only prefix of fmtTimestamp — local time, not toISOString's UTC
+// (which can land on the wrong day near a timezone boundary).
+export function fmtDate(d) { return fmtTimestamp(d).slice(0, 10) }
 
 export function fmtBytes(n) {
   if (n < 1024) return n + ' B'

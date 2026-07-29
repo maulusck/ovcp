@@ -1,5 +1,5 @@
 <script>
-  import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
+  import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, fmtDate, flash } from './api.js'
   import { vpn, dns, telegram, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { canOperate, goToCert, dnsAvailable, caCN, caNotAfter, caStatus } = $props()
@@ -43,7 +43,7 @@
   <h2>Server status</h2>
   <p class="status-line" class:warn={certSummary.warn > 0}>{certSummary.total} cert{certSummary.total === 1 ? '' : 's'}{certSummary.warn ? ` · ${certSummary.warn} need attention` : ''}</p>
   {#if caCN}
-    <p class="status-line" class:warn={caStatus !== 'valid'}>CA "{caCN}" — {caStatus}, expires {new Date(caNotAfter).toISOString().slice(0, 10)}</p>
+    <p class="status-line" class:warn={caStatus !== 'valid'}>CA "{caCN}" — {caStatus}, expires {fmtDate(new Date(caNotAfter))}</p>
   {/if}
   <p class="status-line"><span class="status-dot {vpn.up ? 'ok' : 'down'}"></span> vpn {vpn.up ? `up · ${vpn.uptime}` : 'down'}</p>
   {#if dnsAvailable}

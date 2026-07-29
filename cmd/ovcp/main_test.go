@@ -1513,6 +1513,11 @@ func TestRecordCommand(t *testing.T) {
 	if !strings.Contains(r.stdout, "recordtest") || !strings.Contains(r.stdout, "included") {
 		t.Fatalf("record list should show recordtest as included: %+v", r)
 	}
+	// server's own line is always-on — its DNS column shows the real tun IP,
+	// not just "included", same as a connected client would.
+	if !strings.Contains(r.stdout, "10.8.0.1") {
+		t.Fatalf("record list should show the server's own tun IP: %+v", r)
+	}
 
 	rj := run(t, withEnv(env, "OVCP_JSON=1"), "record", "list")
 	var out recordListOut

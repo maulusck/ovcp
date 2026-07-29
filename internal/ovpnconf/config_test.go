@@ -43,7 +43,7 @@ func TestRender(t *testing.T) {
 		"proto udp", "port 1194", "server 10.8.0.0 255.255.255.0",
 		"dev tun", "topology subnet", "dh none", "disable-dco", "data-ciphers AES-256-GCM", "data-ciphers-fallback AES-256-GCM",
 		"crl-verify /d/crl.pem", "tls-crypt /d/tc.key",
-		"management /run/ovcp/mgmt.sock unix", "status-version 3",
+		"management /run/ovcp/mgmt.sock unix", "status-version 3", "suppress-timestamps",
 		`push "redirect-gateway def1 bypass-dhcp"`,
 		`push "dhcp-option DNS 1.1.1.1"`,
 		`push "route 192.168.10.0 255.255.255.0"`,

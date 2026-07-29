@@ -4,13 +4,9 @@
   import Msg from './Msg.svelte'
   let { isAdmin, canOperate } = $props()
 
-  // dnsmasq's syslog line has no year — same fmtTimestamp shape, just without one.
-  const fmtTimeNoYear = (d) => d.toLocaleString(navigator.language || 'en-US',
-    { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(',', '')
-
-  // Splits a line into time/level/msg: ovcp's "time=... level=X ..." text, its -log-json
-  // form, openvpn's "YYYY-MM-DD HH:MM:SS ...", or dnsmasq's yearless syslog
-  // style "Mon D HH:MM:SS proc[pid]: ...".
+  // Splits a line into time/level/msg: ovcp's own "time=... level=X ..." text,
+  // its -log-json form, or a leading RFC3339 token — one space-free token, so
+  // a future format change here needs no matching edit on this side.
   function parseLine(line) {
     let raw = '', msg = line, level
     if (line[0] === '{') {
@@ -26,20 +22,13 @@
     let m = line.match(/^time=(\S+)\s+level=(\w+)\s+(.*)$/)
     if (m) {
       raw = m[1]; level = m[2].toLowerCase(); msg = m[3]
-    } else if ((m = line.match(/^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+\S+:\s*(.*)$/))) {
-      msg = m[2]
-      level = /\b(error|fatal|fail(ed|ure)?)\b/i.test(msg) ? 'error'
-        : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
-      // year is a parsing scratch value only — never shown (fmtTimeNoYear omits it)
-      const d = new Date(m[1] + ' 2000')
-      return { time: isNaN(d) ? '' : fmtTimeNoYear(d), ts: isNaN(d) ? 0 : d.getTime(), level, msg }
     } else {
-      m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(.*)$/)
-      if (m) { raw = m[1]; msg = m[2] }
+      m = line.match(/^(\S+)\s+(.*)$/)
+      if (m && !isNaN(new Date(m[1]))) { raw = m[1]; msg = m[2] }
       level = /\b(error|fatal|fail(ed|ure)?)\b/i.test(msg) ? 'error'
         : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
     }
-    const d = raw && new Date(raw.replace(' ', 'T'))
+    const d = raw && new Date(raw)
     return { time: d && !isNaN(d) ? fmtTimestamp(d) : '', ts: d && !isNaN(d) ? d.getTime() : 0, level, msg }
   }
 

@@ -347,9 +347,8 @@ func ctrlSock() string { return sockPath("OVCP_CTRL_SOCK", "/run/ovcp/control.so
 func mgmtSock() string { return sockPath("OVCP_MGMT_SOCK", "/run/ovcp/mgmt.sock") }
 
 // ctrlFlag/mgmtFlag register the -ctrl/-mgmt flags every command shares —
-// CLI flag > env var (ctrlSock/mgmtSock's default) > hardcoded path, decided
-// once here instead of re-declared at every call site. note appends
-// command-specific help text (e.g. stats' "-follow only").
+// CLI flag > env var > hardcoded path, decided once instead of at every
+// call site. note appends command-specific help text (e.g. stats' "-follow only").
 func ctrlFlag(fs *flag.FlagSet, note string) *string {
 	return fs.String("ctrl", ctrlSock(), "serve control socket"+note)
 }
@@ -393,9 +392,8 @@ func buildDnsmasqArgs(user, group string, serverIP net.IP, dnsDir string, blockI
 	}
 	if blockInternet {
 		// --no-resolv alone leaves zero upstreams configured, so dnsmasq treats
-		// every non-local query as a config error (logs "REFUSED (EDE: not
-		// ready)"); --server=/#/ marks all domains local-only instead, so
-		// unknown names get a clean NXDOMAIN.
+		// every non-local query as a config error ("REFUSED (EDE: not ready)");
+		// --server=/#/ marks all domains local-only instead, for a clean NXDOMAIN.
 		args = append(args, "--no-resolv", "--server=/#/")
 	}
 	return args
@@ -449,11 +447,9 @@ func dnsGID(group string) int {
 	return gid
 }
 
-// refreshCertsHostsCLI regenerates certs.hosts after a CLI-side cert
-// change (issue, revoke, include, exclude) — the CLI has no running
-// api.Server to do this for it, unlike the same actions via the web UI, so
-// it builds a bare one just to reuse Server.RefreshCertsHosts. Callers all
-// reach this via ctx.openStore() first, so the skeleton already exists.
+// refreshCertsHostsCLI regenerates certs.hosts after a CLI-side cert change
+// (issue, revoke, include, exclude) — no running api.Server to do it via, so
+// this builds a bare one to reuse RefreshCertsHosts. Callers reach it via ctx.openStore() first, skeleton already exists.
 func refreshCertsHostsCLI(dataDir string, s *store.Store) {
 	live, _ := controller.Clients(ctrlSock())
 	pp := dataPaths(dataDir)

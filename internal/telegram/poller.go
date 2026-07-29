@@ -60,8 +60,7 @@ func isNumericID(s string) bool {
 
 // SetToken validates token against getMe, then saves it — independently of
 // SetAdmin, so changing one never requires re-supplying the other. Forgets
-// any previously-learned chat only if the token actually changed — a bare
-// re-save (e.g. the web UI's own form) must not silently re-link the chat.
+// the learned chat only if the token actually changed, not on a bare re-save.
 func SetToken(s *store.Store, token string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -96,8 +95,7 @@ func SetAdmin(s *store.Store, admin string) error {
 
 // warnOldAdmin best-effort notifies the chat being replaced, before it's
 // unlinked — the one line of defense against a hijacked admin reassignment.
-// Names newAdmin (whatever form it was set in, numeric id or @username) so
-// the outgoing admin knows who to investigate if this wasn't them.
+// Names newAdmin so the outgoing admin knows who to investigate.
 func warnOldAdmin(s *store.Store, old, newAdmin string) {
 	token, _ := s.GetSetting(keyToken)
 	chatID, err := chatIDFor(s, old)
@@ -466,12 +464,9 @@ func certDetail(c store.Cert) string {
 	}
 }
 
-// certsText: every cert (client, server, and the CA), grouped by status —
-// report-only, same as the rest of this bot; renewing/revoking stays
-// CLI/web-UI-only.
-// ponytail: no length cap on the message (Telegram's own 4096-char limit is
-// the only ceiling) — fine at this tool's per-admin cert-count scale, add
-// pagination if a deployment ever grows past it.
+// certsText: every cert (client, server, CA), grouped by status — report
+// only, renew/revoke stays CLI/web-UI-only. ponytail: no length cap
+// (Telegram's own 4096-char limit is the ceiling); paginate if cert count ever outgrows it.
 func (p *Poller) certsText() string {
 	certs, err := p.s.AllCerts(p.p)
 	if err != nil {

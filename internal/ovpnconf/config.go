@@ -76,9 +76,8 @@ func (c Config) ServerTunIP() (net.IP, error) {
 }
 
 // Default seeds every server setting from its OVCP_OPENVPN_* env var
-// (container/non-attended init), falling back to the hardcoded default.
-// Only consulted while no config is persisted yet (see Load) — after the
-// first save, `ovcp config set` is the override path, not the environment.
+// (container/unattended init), falling back to the hardcoded default. Only
+// consulted before anything's persisted — after the first save, `config set` is the override path.
 func Default() Config {
 	return Config{
 		Proto:      cmp.Or(os.Getenv("OVCP_OPENVPN_PROTO"), "udp"),
@@ -197,6 +196,7 @@ func (c *Config) Render() []byte {
 	w("status %s %d", c.StatusLog, c.EffectiveStatusInterval())
 	w("status-version 3")
 	w("verb 3")
+	w("suppress-timestamps") // Supervisor's own logLines stamps every line instead
 	if c.RedirectGW {
 		w(`push "redirect-gateway def1 bypass-dhcp"`)
 	}

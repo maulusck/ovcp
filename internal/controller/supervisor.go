@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -12,11 +14,20 @@ import (
 	"time"
 )
 
+// logLines timestamps every line from r and appends it to w — one format,
+// ovcp-owned, not each worker's own (missing/inconsistent) self-stamp. 1MB/line
+// ceiling so one pathological line can't silently truncate the rest of the stream.
+func logLines(r io.Reader, w io.Writer) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		fmt.Fprintf(w, "%s %s\n", time.Now().Format(time.RFC3339), sc.Text())
+	}
+}
+
 // binVersion resolves bin from PATH and parses its version line, joining
-// fields[0] (the name) with fields[verIdx] (the version number — 1 for
-// openvpn's "OpenVPN 2.6.3", 2 for dnsmasq's "Dnsmasq version 2.90").
-// ok=false (not an error) if not found or unparseable — advisory only,
-// never a hard precondition.
+// fields[0] (name) with fields[verIdx] (version — 1 for openvpn, 2 for
+// dnsmasq). ok=false (not an error) if not found or unparseable — advisory only.
 func binVersion(bin string, verIdx int) (version, path string, ok bool) {
 	p, err := exec.LookPath(bin)
 	if err != nil {
@@ -190,14 +201,28 @@ func (s *Supervisor) supervise(launched chan<- error) {
 		launched <- err
 		return
 	}
+	// combined stdout+stderr through one pipe, same interleaving guarantee a
+	// single shared fd gave before — logLines timestamps each line on the way
+	// through to lf instead of a raw passthrough.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		lf.Close()
+		launched <- err
+		return
+	}
 	cmd := exec.Command(bin, s.Args...)
-	cmd.Stdout, cmd.Stderr = lf, lf
+	cmd.Stdout, cmd.Stderr = pw, pw
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
 	if err := cmd.Start(); err != nil {
+		pw.Close()
+		pr.Close()
 		lf.Close()
 		launched <- fmt.Errorf("controller: %s start: %w", s.Name, err)
 		return
 	}
+	pw.Close() // ovcp's own handle; the child's inherited copy keeps the pipe alive
+	logDone := make(chan struct{})
+	go func() { defer close(logDone); defer pr.Close(); logLines(pr, lf) }()
 
 	done := make(chan struct{})
 	s.stMu.Lock()
@@ -207,6 +232,7 @@ func (s *Supervisor) supervise(launched chan<- error) {
 	launched <- nil
 
 	err = cmd.Wait() // reap — no zombie can accumulate; runs for both a clean stop() and an unexpected crash
+	<-logDone        // drain whatever's still buffered in the pipe before closing lf
 	lf.Close()
 	s.stMu.Lock()
 	stopped := s.stopped

@@ -90,16 +90,18 @@ func CertCounts(certs []Cert) (live, expiring int) {
 }
 
 // AllCerts returns every stored cert plus a synthetic CA row — the CA is
-// never a certs-table row (see schema's kind CHECK), but expiry reporting
-// (the sweep ticker, telegram's /certs) needs it folded into the same list
-// instead of duplicating this three-line join at each call site.
+// never a certs-table row (schema's kind CHECK), but expiry reporting (the
+// sweep ticker, telegram's /certs) needs it folded into one list, not duplicated per caller.
 func (s *Store) AllCerts(p *pki.PKI) ([]Cert, error) {
 	certs, err := s.ListCerts()
 	if err != nil {
 		return nil, err
 	}
 	if ca, err := p.CACert(); err == nil {
-		certs = append(certs, Cert{Serial: "ca", CN: ca.Subject.CommonName, Kind: "ca", NotAfter: ca.NotAfter})
+		// x509 always parses NotAfter as UTC; every other row's NotAfter comes
+		// back from a Unix-epoch DB round-trip in Local — match that so the CA
+		// row's calendar date is never off by one from everything else's.
+		certs = append(certs, Cert{Serial: "ca", CN: ca.Subject.CommonName, Kind: "ca", NotAfter: ca.NotAfter.Local()})
 	}
 	return certs, nil
 }
@@ -395,10 +397,9 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
-// LoadJSON reads key as JSON, falling back to def — missing key or corrupt
-// value, same treatment: every persisted config in ovcp treats "unset" as
-// "use the default", not an error. The one settings-as-JSON round-trip,
-// shared by every admin-tunable config (log rotation, stats sampling, ...).
+// LoadJSON reads key as JSON, falling back to def — missing or corrupt,
+// same treatment: every persisted config treats "unset" as "use the
+// default". The one settings-as-JSON round-trip, shared by every admin-tunable config.
 func LoadJSON[T any](s *Store, key string, def T) T {
 	raw, _ := s.GetSetting(key)
 	if raw == "" {
