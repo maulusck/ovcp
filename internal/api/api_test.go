@@ -478,6 +478,24 @@ func TestCertDNSToggle(t *testing.T) {
 	if r := e.req("PATCH", "/api/certs/nonexistent/dns", `{"IncludeDNS":true}`, true); r.StatusCode != 404 {
 		t.Fatalf("unknown serial must 404, got %s", r.Status)
 	}
+
+	// server's DNS line is unconditional — the toggle must 404 even hit
+	// directly, not just be hidden client-side (Certs.svelte's checkbox).
+	certs = e.req("GET", "/api/certs", "", false)
+	var all []struct{ Serial, Kind string }
+	json.NewDecoder(certs.Body).Decode(&all)
+	var serverSerial string
+	for _, c := range all {
+		if c.Kind == "server" {
+			serverSerial = c.Serial
+		}
+	}
+	if serverSerial == "" {
+		t.Fatal("no server cert in fixture")
+	}
+	if r := e.req("PATCH", "/api/certs/"+serverSerial+"/dns", `{"IncludeDNS":false}`, true); r.StatusCode != 404 {
+		t.Fatalf("server cert DNS toggle must 404, got %s", r.Status)
+	}
 }
 
 // TestCustomHosts covers get/put/preview for the free-form custom.hosts file.

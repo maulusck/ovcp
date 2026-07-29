@@ -552,7 +552,7 @@ func (s *Server) handleCertDNS(w http.ResponseWriter, r *http.Request, u *store.
 		return
 	}
 	c, err := s.Store.GetCert(serial)
-	if err != nil {
+	if err != nil || c.Kind == "server" { // server's DNS line is unconditional, not toggleable
 		jsonErr(w, 404, "certificate not found")
 		return
 	}

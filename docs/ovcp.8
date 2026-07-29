@@ -507,8 +507,10 @@ opens the custom entries in \fB$EDITOR\fR (fallback vi), same idiom as
 .B include
 and
 .B exclude
-control whether a certificate resolves while connected (default:
-included), mirroring \fBuser enable|disable\fR.
+control whether a client certificate resolves while connected (default:
+included), mirroring \fBuser enable|disable\fR. Client\-only \(en the
+server's own DNS entry is unconditional, so \fB\-cn\fR \fIserverCN\fR
+errors the same as any CN with no active cert.
 .TP
 .B logs config get
 .TQ

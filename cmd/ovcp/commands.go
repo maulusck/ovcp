@@ -1001,12 +1001,11 @@ type recordListOut struct {
 	Custom string      `json:"custom"`
 }
 
-// activeCertByCN finds cn's currently-active (non-revoked) cert — the store
-// package keeps the equivalent lookup private (activeCertSerial), so this
-// is the CLI's own read-only scan over the already-public ListCerts.
+// activeCertByCN finds cn's active client cert. Client-only: the server's
+// DNS line is unconditional, so its row acts not-found here too.
 func activeCertByCN(certs []store.Cert, cn string) (store.Cert, bool) {
 	for _, c := range certs {
-		if c.CN == cn && c.RevokedAt == nil {
+		if c.CN == cn && c.RevokedAt == nil && c.Kind == "client" {
 			return c, true
 		}
 	}

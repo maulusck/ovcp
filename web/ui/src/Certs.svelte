@@ -250,7 +250,7 @@
             <td><a class="dl" href={'/api/certs/download?serial=' + c.Serial}
               download={c.CN + '.crt'}>Download</a></td>
             <td class="dns-col">
-              {#if !c.Revoked}
+              {#if !c.Revoked && c.Kind !== 'server'}
                 <input type="checkbox" checked={c.IncludeDNS} disabled={!canOperate}
                   onchange={() => toggleDNS(c.Serial, !c.IncludeDNS)} />
               {/if}

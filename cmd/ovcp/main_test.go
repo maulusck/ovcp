@@ -1473,6 +1473,11 @@ func TestRecordCommand(t *testing.T) {
 	if r := run(t, env, "record", "include", "-cn", "nonexistent"); r.code == 0 {
 		t.Fatal("include on an unknown CN must fail")
 	}
+	// server's DNS line is unconditional — same "no active cert" error as
+	// a CN that was never issued, not a silent no-op success.
+	if r := run(t, env, "record", "exclude", "-cn", "vpn.example.com"); r.code == 0 {
+		t.Fatal("exclude on the server CN must fail")
+	}
 
 	if r := run(t, env, "certificate", "issue", "-cn", "recordtest"); r.code != 0 {
 		t.Fatalf("issue: %+v", r)
