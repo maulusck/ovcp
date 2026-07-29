@@ -19,6 +19,10 @@ contents:
     dst: /usr/bin/ovcp
   - src: deploy/systemd/ovcp.service
     dst: /usr/lib/systemd/system/ovcp.service
+  - src: deploy/selinux.sh
+    dst: /usr/lib/ovcp/selinux.sh
+    file_info:
+      mode: 0755
   - src: docs/ovcp.8
     dst: /usr/share/man/man8/ovcp.8
   - src: dist/completion/ovcp.bash

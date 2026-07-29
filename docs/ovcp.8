@@ -1241,10 +1241,17 @@ point a container/Kubernetes liveness or readiness probe at it.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)
-domain cannot read a non\-standard data directory. Run
-\fIdeploy/selinux.sh\fR once (labels the data dir \fIopenvpn_etc_t\fR and
-the logs \fIopenvpn_var_log_t\fR; honors \fB$OVCP_DATA\fR). ovcp itself
-runs unconfined and needs no policy.
+and
+.BR dnsmasq (8)
+domains cannot read a non\-standard data directory. deb/rpm packages run
+\fIdeploy/selinux.sh\fR automatically on install (labels the data dir
+\fIopenvpn_etc_t\fR, \fB$OVCP_DATA/dns\fR \fIdnsmasq_etc_t\fR, and the
+logs \fIopenvpn_var_log_t\fR; honors \fB$OVCP_DATA\fR; a no\-op if the
+box isn't confined, never fails the install). Building from source or
+installing the raw binary: run \fIdeploy/selinux.sh\fR once yourself.
+ovcp itself runs unconfined and needs no policy; neither worker's log
+file needs a label either \(en both are opened by ovcp itself, never
+by the confined child.
 .SH SEE ALSO
 .BR openvpn (8),
 .BR systemctl (1)

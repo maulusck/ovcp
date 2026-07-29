@@ -4,6 +4,9 @@
 set -e
 DATA="${OVCP_DATA:-/var/lib/ovcp}"
 OVCP_DATA="$DATA" ovcp init -skeleton
+# SELinux (RHEL/Fedora): auto-labels if the box is confined, safe no-op
+# elsewhere; never fails the install (see the script's own guards).
+OVCP_DATA="$DATA" /usr/lib/ovcp/selinux.sh || true
 # logrotate/log-shippers expect /var/log; symlink instead of duplicating files.
 ln -sfn "$DATA/logs" /var/log/ovcp
 # apk package is shared with Alpine (OpenRC) but OpenWrt runs procd — swap

@@ -374,9 +374,9 @@ func dnsRunAsUser() string  { return cmp.Or(os.Getenv("OVCP_DNSMASQ_USER"), "nob
 func dnsRunAsGroup() string { return cmp.Or(os.Getenv("OVCP_DNSMASQ_GROUP"), "nogroup") }
 
 // buildDnsmasqArgs assembles dnsmasq's argv. --hostsdir auto-reloads on
-// change; --bind-dynamic tolerates serverIP not existing yet; --log-facility
-// is required since dnsmasq logs to syslog, not stdout/stderr, by default.
-func buildDnsmasqArgs(user, group string, serverIP net.IP, dnsDir, logPath string, blockInternet bool) []string {
+// change; --bind-dynamic tolerates serverIP not existing yet; --log-facility=-
+// logs to stderr (Supervisor's inherited fd) instead of dnsmasq opening LogPath itself.
+func buildDnsmasqArgs(user, group string, serverIP net.IP, dnsDir string, blockInternet bool) []string {
 	args := []string{
 		"-k",
 		"--user=" + user,
@@ -385,7 +385,7 @@ func buildDnsmasqArgs(user, group string, serverIP net.IP, dnsDir, logPath strin
 		"--listen-address=" + serverIP.String(),
 		"--hostsdir=" + dnsDir,
 		"--log-queries",
-		"--log-facility=" + logPath,
+		"--log-facility=-",
 	}
 	if blockInternet {
 		// --no-resolv alone leaves zero upstreams configured, so dnsmasq treats
@@ -424,7 +424,7 @@ func newDNSSupervisor(pp paths, bin string, s *store.Store) *controller.Supervis
 				slog.Warn("dnsmasq: server tun IP", "err", err)
 				ip = net.IPv4zero
 			}
-			return buildDnsmasqArgs(dnsRunAsUser(), dnsRunAsGroup(), ip, pp.DNSDir, pp.DnsmasqLog, api.LoadDNSConfig(s).BlockInternet)
+			return buildDnsmasqArgs(dnsRunAsUser(), dnsRunAsGroup(), ip, pp.DNSDir, api.LoadDNSConfig(s).BlockInternet)
 		},
 		LogPath: pp.DnsmasqLog,
 	}

@@ -1119,11 +1119,11 @@ func TestUnreachableServe(t *testing.T) {
 
 func TestBuildDnsmasqArgs(t *testing.T) {
 	ip := net.ParseIP("10.8.0.1")
-	args := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", "/d/logs/dnsmasq.log", false)
+	args := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", false)
 	want := []string{
 		"-k", "--user=nobody", "--group=nogroup", "--bind-dynamic",
 		"--listen-address=10.8.0.1",
-		"--hostsdir=/d/dns", "--log-queries", "--log-facility=/d/logs/dnsmasq.log",
+		"--hostsdir=/d/dns", "--log-queries", "--log-facility=-",
 	}
 	if len(args) != len(want) {
 		t.Fatalf("args = %v, want %v", args, want)
@@ -1134,7 +1134,7 @@ func TestBuildDnsmasqArgs(t *testing.T) {
 		}
 	}
 
-	blocked := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", "/d/logs/dnsmasq.log", true)
+	blocked := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", true)
 	if !containsArg(blocked, "--no-resolv") || !containsArg(blocked, "--server=/#/") {
 		t.Fatalf("blockInternet=true must append --no-resolv and --server=/#/, got %v", blocked)
 	}
