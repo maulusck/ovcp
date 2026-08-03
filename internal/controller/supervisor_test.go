@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -194,6 +195,44 @@ func TestCrashLoopBreakerStopsRetrying(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let any in-flight restart attempt settle
 	if s.Running() {
 		t.Fatal("should have given up auto-restarting after crash-looping")
+	}
+}
+
+// TestOnExitFiresOnStopAndCrash: whatever a caller tracked about the child's
+// current life must be invalidated the instant that instance is gone —
+// covers both an explicit Stop and an unexpected crash, the two ways
+// running flips false.
+func TestOnExitFiresOnStopAndCrash(t *testing.T) {
+	var stopFires int32
+	s := newSup(t)
+	s.OnExit = func() { atomic.AddInt32(&stopFires, 1) }
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if got := atomic.LoadInt32(&stopFires); got != 1 {
+		t.Fatalf("OnExit fired %d times on Stop, want 1", got)
+	}
+
+	var crashFires int32
+	c := &Supervisor{
+		Name:    "openvpn",
+		Bin:     crashingOpenVPN(t),
+		Args:    []string{"--config", "/dev/null"},
+		LogPath: filepath.Join(t.TempDir(), "openvpn.log"),
+		OnExit:  func() { atomic.AddInt32(&crashFires, 1) },
+	}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && atomic.LoadInt32(&crashFires) == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&crashFires); got == 0 {
+		t.Fatal("OnExit must also fire on an unexpected crash, not just Stop")
 	}
 }
 

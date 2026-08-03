@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,12 +178,14 @@ var (
 		"config": "get|set rotation policy", "rotate": "copytruncate all logs now",
 		"status": "sizes + rotation state",
 	}
-	upstreamOps    = []string{"list", "add", "del", "set-default", "status"}
+	upstreamOps    = []string{"list", "add", "del", "set-default", "assign", "reconcile", "status"}
 	upstreamOpDesc = map[string]string{
 		"list": "configured upstreams and the active default",
 		"add":  "define one (-id, -iface, [-gateway], [-desc])",
-		"del":  "remove one (-id)", "set-default": "switch the active exit (-id, empty = off)",
-		"status": "nftables detection + enabled state",
+		"del":  "remove one (-id)", "set-default": "switch the active exit (-id | -clear)",
+		"assign":    "per-client override (-cn, -id | -clear)",
+		"reconcile": "re-apply and report which upstreams are up/down",
+		"status":    "nftables detection + enabled state",
 	}
 )
 
@@ -591,15 +594,20 @@ type certOut struct {
 	NotAfter time.Time `json:"expires"`
 }
 
-// coloredStatus is `list`/`record list`'s shared "STATUS  " text cell.
+// statusWidth is the STATUS column's width everywhere it appears — the one
+// number coloredStatus and every table header derive from, so a header can
+// never drift out of sync with what coloredStatus actually pads to.
+const statusWidth = 8
+
+// coloredStatus is every command's shared "STATUS  " text cell.
 func coloredStatus(status string) string {
-	st := fmt.Sprintf("%-8s", status) // pad first: color codes must not count toward width
+	st := fmt.Sprintf("%-*s", statusWidth, status) // pad first: color codes must not count toward width
 	switch status {
-	case "REVOKED", "expired":
+	case "REVOKED", "expired", "down", "disabled":
 		return red(st)
 	case "expiring":
 		return yellow(st)
-	case "valid":
+	case "valid", "up", "enabled":
 		return green(st)
 	}
 	return st
@@ -641,7 +649,7 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 			rows = append(rows, certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter})
 		}
 		output(rows, func(rows []certOut) {
-			fmt.Printf("%-10s %-10s %-24s %-18s %s\n", "STATUS", "KIND", "CN", "EXPIRES", "SERIAL")
+			fmt.Printf("%-*s %-10s %-24s %-18s %s\n", statusWidth, "STATUS", "KIND", "CN", "EXPIRES", "SERIAL")
 			for _, c := range rows {
 				fmt.Printf("%s %-10s %-24s expires %s  %s\n",
 					coloredStatus(c.Status), c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
@@ -958,16 +966,20 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 			}
 			output(recordListOut{rows, string(customData)}, func(o recordListOut) {
 				fmt.Println("Certificate records:")
-				fmt.Printf("%-10s %-10s %-24s %-18s %-8s %s\n", "STATUS", "KIND", "CN", "EXPIRES", "DNS", "SERIAL")
+				fmt.Printf("%-*s %-10s %-24s %-18s %-*s %s\n", statusWidth, "STATUS", "KIND", "CN", "EXPIRES", statusWidth, "DNS", "SERIAL")
 				for _, r := range o.Certs {
-					dns := "excluded"
+					text := "excluded"
 					if r.IncludeDNS {
-						dns = green("included")
+						text = "included"
 						if r.IP != "" {
-							dns = green(r.IP)
+							text = r.IP
 						}
 					}
-					fmt.Printf("%s %-10s %-24s expires %s  %-8s  %s\n",
+					dns := fmt.Sprintf("%-*s", statusWidth, text) // pad first: color codes must not count toward width
+					if r.IncludeDNS {
+						dns = green(dns)
+					}
+					fmt.Printf("%s %-10s %-24s expires %s  %s  %s\n",
 						coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial)
 				}
 				fmt.Println("Custom records:")
@@ -1025,11 +1037,34 @@ func upstreamsReady() {
 	}
 }
 
-// applyUpstreamsCLI programs routing/NAT from cfg — upstream.Apply's own
-// lock covers this the same as any other caller in the process.
-func applyUpstreamsCLI(s *store.Store, cfg upstream.Config) {
+// applyUpstreamsCLI relays through a running serve at sock (preserves its
+// live tracker); direct-applies as a fallback when serve isn't running.
+// Never fails — caller prints the returned warning.
+func applyUpstreamsCLI(s *store.Store, cfg upstream.Config, sock string) string {
+	if err := controller.UpstreamReapply(sock); err != nil {
+		raw, _ := s.GetSetting("vpn_config")
+		upstream.Apply(cfg, ovpnconf.Load(raw).Subnet) // best-effort; warning below covers the result either way
+	}
+	return upstream.Warning(cfg.Upstreams)
+}
+
+// warnUpstream prints w to stderr if non-empty — same shape as warnDNSLeak.
+func warnUpstream(w string) {
+	if w != "" {
+		fmt.Fprintln(os.Stderr, "warning:", w)
+	}
+}
+
+// regenManagementClientAuthCLI rewrites server.conf's management-client-auth
+// flag — same computation api.Server.regenManagementClientAuth does from the
+// REST side, needed here since a running serve won't see a config-only change.
+func regenManagementClientAuthCLI(ctx *cliContext, s *store.Store, active bool) {
 	raw, _ := s.GetSetting("vpn_config")
-	die(upstream.Apply(cfg, ovpnconf.Load(raw).Subnet))
+	cfg := ovpnconf.Load(raw)
+	cfg.ManagementClientAuth = active
+	enc, _ := json.Marshal(cfg)
+	die(s.SetSetting("vpn_config", string(enc)))
+	die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
 }
 
 type upstreamStatusOut struct {
@@ -1037,6 +1072,42 @@ type upstreamStatusOut struct {
 	NftVersion string `json:"nftVersion,omitempty"`
 	NftPath    string `json:"nftPath,omitempty"`
 	Default    string `json:"default,omitempty"`
+}
+
+// upstreamOut is one upstream row for both `list -json` and `reconcile
+// -json` — explicit, lowercase-tagged fields, this CLI's standard -json
+// shape (certOut/recordOut), not upstream.Config's own bare REST shape.
+type upstreamOut struct {
+	ID          string `json:"id"`
+	Up          bool   `json:"up"`
+	Iface       string `json:"iface"`
+	Gateway     string `json:"gateway,omitempty"`
+	Table       int    `json:"table"`
+	Description string `json:"description,omitempty"`
+}
+
+type upstreamListOut struct {
+	Upstreams []upstreamOut     `json:"upstreams"`
+	Default   string            `json:"default,omitempty"`
+	PerCN     map[string]string `json:"perCN,omitempty"`
+}
+
+// buildUpstreamListOut computes live up/down status once — the one place
+// list/reconcile derive both their -json payload and text table from.
+func buildUpstreamListOut(cfg upstream.Config) upstreamListOut {
+	rows := make([]upstreamOut, len(cfg.Upstreams))
+	for i, u := range cfg.Upstreams {
+		rows[i] = upstreamOut{u.ID, upstream.IfaceExists(u.Iface), u.Iface, u.Gateway, u.Table, u.Description}
+	}
+	return upstreamListOut{rows, cfg.Default, cfg.PerCN}
+}
+
+// upStatus is the "up"/"down" text coloredStatus keys off, shared by list/reconcile.
+func upStatus(up bool) string {
+	if up {
+		return "up"
+	}
+	return "down"
 }
 
 func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -1056,7 +1127,7 @@ func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
 					fmt.Println("upstreams: disabled (nftables not found, or OVCP_UPSTREAMS_ENABLED=false)")
 					return
 				}
-				fmt.Println("upstreams: enabled, nftables", o.NftVersion)
+				fmt.Println("upstreams: enabled,", o.NftVersion)
 				if o.Default == "" {
 					fmt.Println("default: off (host's own default route)")
 				} else {
@@ -1066,14 +1137,31 @@ func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
 
 		case "list":
 			cfg := api.LoadUpstreamConfig(s)
-			output(cfg, func(c upstream.Config) {
-				fmt.Printf("%-16s %-10s %-15s %-6s %s\n", "ID", "IFACE", "GATEWAY", "TABLE", "DESCRIPTION")
-				for _, up := range c.Upstreams {
+			output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
+				fmt.Println("Upstreams:")
+				fmt.Printf("%-14s %-*s %-10s %-15s %-6s %s\n", "ID", statusWidth, "STATUS", "IFACE", "GATEWAY", "TABLE", "DESCRIPTION")
+				for _, u := range r.Upstreams {
+					gw := u.Gateway
+					if gw == "" {
+						gw = "onlink"
+					}
 					mark := ""
-					if up.ID == c.Default {
+					if u.ID == r.Default {
 						mark = green(" (default)")
 					}
-					fmt.Printf("%-16s %-10s %-15s %-6d %s%s\n", up.ID, up.Iface, up.Gateway, up.Table, up.Description, mark)
+					fmt.Printf("%-14s %s %-10s %-15s %-6d %s%s\n", u.ID, coloredStatus(upStatus(u.Up)), u.Iface, gw, u.Table, u.Description, mark)
+				}
+				if len(r.PerCN) > 0 {
+					cns := make([]string, 0, len(r.PerCN))
+					for cn := range r.PerCN {
+						cns = append(cns, cn)
+					}
+					slices.Sort(cns)
+					fmt.Println("Per-CN overrides:")
+					fmt.Printf("%-24s %s\n", "CN", "UPSTREAM")
+					for _, cn := range cns {
+						fmt.Printf("%-24s %s\n", cn, r.PerCN[cn])
+					}
 				}
 			})
 
@@ -1093,7 +1181,7 @@ func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
 			})
 			die(err)
 			die(api.SaveUpstreamConfig(s, cfg))
-			applyUpstreamsCLI(s, cfg)
+			warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
 			s.Audit("cli", "upstream_add", *id)
 			output(msg("added: %s (table %d)", *id, added.Table), printMsg)
 
@@ -1110,7 +1198,7 @@ func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
 				die(fmt.Errorf("upstream %q not found", *id))
 			}
 			die(api.SaveUpstreamConfig(s, cfg))
-			applyUpstreamsCLI(s, cfg)
+			warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
 			s.Audit("cli", "upstream_del", *id)
 			output(msg("deleted: %s", *id), printMsg)
 
@@ -1118,12 +1206,15 @@ func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
 			upstreamsReady()
 			sfs := newFlags("upstream set-default")
 			id := sfs.String("id", "", "upstream id, empty turns it off")
+			clear := sfs.Bool("clear", false, "turn off the default (same as -id \"\")")
 			sfs.Parse(rest)
-			cfg := api.LoadUpstreamConfig(s)
-			cfg.Default = *id
-			die(cfg.Validate())
+			if *clear {
+				*id = ""
+			}
+			cfg, err := api.LoadUpstreamConfig(s).SetDefault(*id)
+			die(err)
 			die(api.SaveUpstreamConfig(s, cfg))
-			applyUpstreamsCLI(s, cfg)
+			warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
 			action := "upstream_default_set"
 			if *id == "" {
 				action = "upstream_default_off"
@@ -1134,6 +1225,75 @@ func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
 				text = "default: off (host's own default route)"
 			}
 			output(msg("%s", text), printMsg)
+
+		case "assign":
+			upstreamsReady()
+			afs := newFlags("upstream assign")
+			cn := afs.String("cn", "", "client CN (required)")
+			id := afs.String("id", "", "upstream id to assign")
+			clear := afs.Bool("clear", false, "clear this CN's override, fall back to default")
+			ctrl := ctrlFlag(afs, "")
+			afs.Parse(rest)
+			if *cn == "" {
+				die(fmt.Errorf("-cn required"))
+			}
+			if *clear == (*id != "") {
+				die(fmt.Errorf("exactly one of -id or -clear required"))
+			}
+			before := api.UpstreamAuthActive(s)
+			cfg, err := api.LoadUpstreamConfig(s).Assign(*cn, *id, *clear)
+			die(err)
+			die(api.SaveUpstreamConfig(s, cfg))
+			if after := api.UpstreamAuthActive(s); before != after {
+				regenManagementClientAuthCLI(ctx, s, after)
+				if after {
+					// management-client-auth is a config-file directive:
+					// the already-running openvpn won't pick it up until
+					// restarted, so per-CN routing stays inactive until then.
+					warnUpstream("run `ovcp vpn restart` to activate per-CN routing")
+				}
+			}
+			action := "upstream_assign"
+			if *clear {
+				action = "upstream_unassign"
+			}
+			s.Audit("cli", action, *cn)
+			// Best-effort: instantly rewrites an already-connected client's live
+			// rule; unreachable serve just means it applies on next reconnect.
+			if err := controller.UpstreamAssign(*ctrl, *cn); err != nil {
+				slog.Warn("upstream assign: live rewrite skipped", "cn", *cn, "err", err)
+			}
+			text := fmt.Sprintf("assigned: %s -> %s", *cn, *id)
+			if *clear {
+				text = "cleared: " + *cn
+			}
+			output(msg("%s", text), printMsg)
+
+		case "reconcile":
+			upstreamsReady()
+			rfs := newFlags("upstream reconcile")
+			ctrl := ctrlFlag(rfs, "")
+			rfs.Parse(rest)
+			cfg := api.LoadUpstreamConfig(s)
+			warnUpstream(applyUpstreamsCLI(s, cfg, *ctrl))
+			s.Audit("cli", "upstream_reconcile", "")
+			output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
+				inUse := make(map[string]bool, len(r.PerCN)+1)
+				if r.Default != "" {
+					inUse[r.Default] = true
+				}
+				for _, id := range r.PerCN {
+					inUse[id] = true
+				}
+				fmt.Printf("%-14s %-*s %s\n", "ID", statusWidth, "STATUS", "NOTE")
+				for _, u := range r.Upstreams {
+					note := ""
+					if !u.Up && inUse[u.ID] {
+						note = "actively routed, traffic is being kill-switched"
+					}
+					fmt.Printf("%-14s %s %s\n", u.ID, coloredStatus(upStatus(u.Up)), note)
+				}
+			})
 		}
 	}
 }
@@ -1566,7 +1726,7 @@ func cmdCAStatus(_ *flag.FlagSet) func(ctx *cliContext) {
 			Status: store.Cert{NotAfter: cert.NotAfter}.Status(),
 		}
 		output(o, func(o caStatusOut) {
-			fmt.Printf("%s  %-10s expires %s\n", o.CN, coloredStatus(o.Status), o.NotAfter.Format("2006-01-02"))
+			fmt.Printf("%s  %s expires %s\n", o.CN, coloredStatus(o.Status), o.NotAfter.Format("2006-01-02"))
 		})
 	}
 }
@@ -1821,14 +1981,13 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 				rows = append(rows, api.NewUserSummary(u))
 			}
 			output(rows, func(rows []api.UserSummary) {
-				fmt.Printf("%-20s %-9s %-8s %-4s %s\n", "USERNAME", "ROLE", "STATUS", "2FA", "CREATED")
+				fmt.Printf("%-20s %-9s %-*s %-4s %s\n", "USERNAME", "ROLE", statusWidth, "STATUS", "2FA", "CREATED")
 				for _, u := range rows {
-					st := fmt.Sprintf("%-8s", "enabled")
+					status := "enabled"
 					if u.Disabled {
-						st = red(fmt.Sprintf("%-8s", "disabled"))
-					} else {
-						st = green(st)
+						status = "disabled"
 					}
+					st := coloredStatus(status)
 					tf := "-"
 					if u.TOTP {
 						tf = "2fa"

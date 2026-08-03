@@ -71,6 +71,12 @@ type Supervisor struct {
 	// the one worker failure that needs a push, not just a log line.
 	OnCrashLoopGiveUp func(streak int)
 
+	// OnExit, if set, fires every time the child stops running — explicit
+	// Stop/Restart or a crash alike — right as running flips false. Whatever
+	// state a caller held about that specific process instance is now
+	// unconditionally gone.
+	OnExit func()
+
 	opMu sync.Mutex // serializes whole lifecycle operations
 
 	stMu      sync.Mutex // guards the fields below
@@ -245,6 +251,9 @@ func (s *Supervisor) supervise(launched chan<- error) {
 	desired := s.desired
 	s.stMu.Unlock()
 	close(done)
+	if s.OnExit != nil {
+		s.OnExit()
+	}
 
 	uptime := time.Since(startedAt).Round(time.Second)
 	if stopped {

@@ -79,6 +79,14 @@ func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map
 	if s.VPN.Pid() == 0 {
 		return prev // openvpn not running; skip this tick, not an error
 	}
+	// Connect is a no-op once already connected — this is the retry for
+	// serve's own best-effort eager connect racing openvpn's own startup,
+	// and the self-heal if the mgmt connection ever drops later.
+	if s.UpstreamsEnabled && UpstreamAuthActive(s.Store) {
+		if err := s.Mgmt.Connect(); err != nil {
+			slog.Warn("mgmt connect (per-CN routing)", "err", err)
+		}
+	}
 	cur, err := s.Mgmt.Status()
 	if err != nil {
 		return prev // status file not ready yet, or a torn read; skip this tick, not an error

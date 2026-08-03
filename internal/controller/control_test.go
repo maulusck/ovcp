@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"errors"
 	"log/slog"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -39,10 +41,13 @@ func noMgmt(t *testing.T) *Client {
 	return NewClient(filepath.Join(t.TempDir(), "unused-mgmt.sock"), "")
 }
 
+// noUpstreamRewrite stands in for tests that don't exercise upstream-assign.
+func noUpstreamRewrite(string) error { return nil }
+
 func TestControlRoundTrip(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
-	l, err := ServeControl(sock, lc, &fakeLife{}, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
+	l, err := ServeControl(sock, ControlDeps{VPN: lc, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamRewrite: noUpstreamRewrite})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +76,7 @@ func TestControlRoundTrip(t *testing.T) {
 func TestControlDNSRouting(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc, dc := &fakeLife{}, &fakeLife{}
-	l, err := ServeControl(sock, lc, dc, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
+	l, err := ServeControl(sock, ControlDeps{VPN: lc, DNS: dc, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamRewrite: noUpstreamRewrite})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +106,7 @@ func TestControlChangedFlag(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	// pid flips 0 -> 100 across the call: reported as changed
 	lc := &flipLife{before: 0, after: 100}
-	l, _ := ServeControl(sock, lc, &fakeLife{}, noMgmt(t), new(slog.LevelVar), &fakeTelegram{})
+	l, _ := ServeControl(sock, ControlDeps{VPN: lc, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamRewrite: noUpstreamRewrite})
 	defer l.Close()
 	r, err := Control(sock, "start")
 	if err != nil || r.Pid != 100 || !r.Changed {
@@ -113,7 +118,7 @@ func TestControlDebugToggle(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	lc := &fakeLife{}
 	level := new(slog.LevelVar)
-	l, err := ServeControl(sock, lc, &fakeLife{}, noMgmt(t), level, &fakeTelegram{})
+	l, err := ServeControl(sock, ControlDeps{VPN: lc, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: level, Telegram: &fakeTelegram{}, UpstreamRewrite: noUpstreamRewrite})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +143,7 @@ func TestControlDebugToggle(t *testing.T) {
 func TestControlClientsAndKill(t *testing.T) {
 	mgmtSock, _ := fakeMgmt(t)
 	sock := filepath.Join(t.TempDir(), "control.sock")
-	l, err := ServeControl(sock, &fakeLife{}, &fakeLife{}, NewClient(mgmtSock, writeStatus(t, oneClientStatus)), new(slog.LevelVar), &fakeTelegram{})
+	l, err := ServeControl(sock, ControlDeps{VPN: &fakeLife{}, DNS: &fakeLife{}, Mgmt: NewClient(mgmtSock, writeStatus(t, oneClientStatus)), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamRewrite: noUpstreamRewrite})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +164,7 @@ func TestControlClientsAndKill(t *testing.T) {
 func TestControlTelegramOps(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "control.sock")
 	tg := &fakeTelegram{}
-	l, err := ServeControl(sock, &fakeLife{}, &fakeLife{}, noMgmt(t), new(slog.LevelVar), tg)
+	l, err := ServeControl(sock, ControlDeps{VPN: &fakeLife{}, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: tg, UpstreamRewrite: noUpstreamRewrite})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +183,114 @@ func TestControlTelegramOps(t *testing.T) {
 	}
 	if _, err := TelegramRestart(sock); err != nil || tg.restarted != 1 {
 		t.Fatalf("TelegramRestart: err=%v tg=%+v", err, tg)
+	}
+}
+
+// TestControlUpstreamAssign covers the op RewriteConnectedClientRule rides
+// to reach a running serve from the separate `ovcp upstream assign` process.
+func TestControlUpstreamAssign(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	var gotCN string
+	rewrite := func(cn string) error {
+		gotCN = cn
+		if cn == "bob" {
+			return errors.New("bob: no longer connected")
+		}
+		return nil
+	}
+	l, err := ServeControl(sock, ControlDeps{VPN: &fakeLife{}, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamRewrite: rewrite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	if err := UpstreamAssign(sock, "alice"); err != nil {
+		t.Fatalf("UpstreamAssign: %v", err)
+	}
+	if gotCN != "alice" {
+		t.Fatalf("cn passed through = %q, want alice", gotCN)
+	}
+	if err := UpstreamAssign(sock, "bob"); err == nil {
+		t.Fatal("rewrite error must propagate to the caller")
+	}
+}
+
+// TestControlOpPanicRecovers: a panicking op (a bug in a caller-supplied
+// closure) must cost only that connection — the listener, and every op
+// after it, must keep working, not take the whole process down.
+func TestControlOpPanicRecovers(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	lc := &fakeLife{}
+	reapply := func() error { panic("boom") }
+	l, err := ServeControl(sock, ControlDeps{VPN: lc, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamReapply: reapply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	if err := UpstreamReapply(sock); err == nil {
+		t.Fatal("want an error reply, not a hang or a crashed process")
+	}
+
+	fakePid = 4242
+	r, err := Control(sock, "status")
+	if err != nil || r.Pid != 4242 {
+		t.Fatalf("listener must still serve other ops after a panic: %+v err=%v", r, err)
+	}
+}
+
+// TestControlUpstreamReapply covers the op `ovcp upstream reconcile` (and
+// add/del/set-default's best-effort relay) rides to reach a running serve.
+func TestControlUpstreamReapply(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	calls := 0
+	reapply := func() error {
+		calls++
+		return nil
+	}
+	l, err := ServeControl(sock, ControlDeps{VPN: &fakeLife{}, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamReapply: reapply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	if err := UpstreamReapply(sock); err != nil {
+		t.Fatalf("UpstreamReapply: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+// TestControlVPNStartRestartTriggerUpstreamReapply: nft's Subnet only
+// matches reality right after openvpn re-reads server.conf, i.e. start or
+// restart — stop/reconnect/dns ops must not trigger it.
+func TestControlVPNStartRestartTriggerUpstreamReapply(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "control.sock")
+	var calls int32
+	reapply := func() error { atomic.AddInt32(&calls, 1); return nil }
+	l, err := ServeControl(sock, ControlDeps{VPN: &fakeLife{}, DNS: &fakeLife{}, Mgmt: noMgmt(t), Level: new(slog.LevelVar), Telegram: &fakeTelegram{}, UpstreamReapply: reapply})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	for _, op := range []string{"start", "restart"} {
+		if _, err := Control(sock, op); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("calls after start+restart = %d, want 2", got)
+	}
+
+	for _, op := range []string{"stop", "reconnect", "dns-start", "dns-restart"} {
+		if _, err := Control(sock, op); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("calls after stop/reconnect/dns ops = %d, want still 2", got)
 	}
 }
 

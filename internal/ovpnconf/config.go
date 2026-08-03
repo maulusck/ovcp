@@ -40,6 +40,10 @@ type Config struct {
 	// like the paths above (from OVCP_STATUS_INTERVAL, see fillPaths), never
 	// user-editable — see EffectiveStatusInterval for the <=0 fallback.
 	StatusInterval int
+
+	// ManagementClientAuth: server-owned, set true only when the upstream
+	// feature has a per-CN assignment — never a user-editable field.
+	ManagementClientAuth bool
 }
 
 // defaultStatusInterval is EffectiveStatusInterval's fallback when
@@ -73,6 +77,16 @@ func (c Config) ServerTunIP() (net.IP, error) {
 	copy(server, ip)
 	server[len(server)-1]++
 	return server, nil
+}
+
+// Netmask returns Subnet's dotted netmask — same value Render's own "server"
+// line uses, and what a per-CN ifconfig-push needs alongside a chosen IP.
+func (c Config) Netmask() (string, error) {
+	_, ipnet, err := net.ParseCIDR(c.Subnet)
+	if err != nil {
+		return "", fmt.Errorf("ovpnconf: subnet: %w", err)
+	}
+	return net.IP(ipnet.Mask).String(), nil
 }
 
 // Default seeds every server setting from its OVCP_OPENVPN_* env var
@@ -193,6 +207,14 @@ func (c *Config) Render() []byte {
 		w("group %s", c.RunAsGroup)
 	}
 	w("management %s unix", c.MgmtSocket)
+	if c.ManagementClientAuth {
+		w("script-security 2")
+		w("management-client-auth")
+		// clients are cert-only and never send credentials — without this,
+		// deferred auth's shared user/pass code path rejects every client
+		// with "Auth Username/Password was not provided by peer".
+		w("auth-user-pass-optional")
+	}
 	w("status %s %d", c.StatusLog, c.EffectiveStatusInterval())
 	w("status-version 3")
 	w("verb 3")

@@ -259,14 +259,18 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	// render server.conf from persisted settings (paths are controller-owned)
 	cfg := srv.LoadConfig()
 	fillPaths(&cfg, dataDir, sock)
+	perCNActive := upstreamsEnabled && api.UpstreamAuthActive(s)
+	cfg.ManagementClientAuth = perCNActive
 	raw, _ := json.Marshal(cfg)
 	die(s.SetSetting("vpn_config", string(raw)))
 	die(cfg.WriteAtomic(srv.ConfigPath))
-	if upstreamsEnabled {
-		if err := upstream.Apply(api.LoadUpstreamConfig(s), cfg.Subnet); err != nil {
-			slog.Warn("upstream apply", "err", err)
-		}
-	}
+	srv.ReconcileUpstreams() // same path every other upstream-mutating op uses; no-ops if disabled
+	// Always wired: inert unless management-client-auth is actually in the
+	// running server.conf — a later first PerCN assign then only needs
+	// `vpn restart`, not a full serve restart, to pick it up.
+	mgmt.OnClientConnect = srv.OnClientConnect
+	mgmt.OnClientDisconnect = srv.OnClientDisconnect
+	sup.OnExit = srv.OnVPNExit
 
 	// unlike DefaultRemote, this CN is a one-time snapshot: EnsureAdminTLS
 	// only re-runs on the next serve restart.
@@ -297,7 +301,11 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 
 	// bring the worker up as a reaped foreground child, and expose the control
 	// socket so vpn/status/kill/stats -follow can drive/query us — see ServeControl.
-	ctl, err := controller.ServeControl(ctrl, sup, dnsSup, mgmt, logLevel, tg)
+	ctl, err := controller.ServeControl(ctrl, controller.ControlDeps{
+		VPN: sup, DNS: dnsSup, Mgmt: mgmt, Level: logLevel, Telegram: tg,
+		UpstreamRewrite: srv.RewriteConnectedClientRule,
+		UpstreamReapply: func() error { srv.ReconcileUpstreams(); return nil },
+	})
 	die(err)
 	defer ctl.Close()
 	// AUTOSTART only gates the boot-time call below; `ovcp vpn|dns start`
@@ -305,6 +313,14 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	if os.Getenv("OVCP_OPENVPN_AUTOSTART") != "false" {
 		if err := sup.Start(); err != nil {
 			slog.Warn("openvpn start", "err", err)
+		}
+	}
+	if perCNActive {
+		// Best-effort: openvpn may still be finishing its own startup
+		// (mgmt socket not bound yet) — RunSampler's tick retries this
+		// every few seconds until it succeeds, so a failure here isn't fatal.
+		if err := mgmt.Connect(); err != nil {
+			slog.Warn("mgmt connect (per-CN routing)", "err", err)
 		}
 	}
 	if os.Getenv("OVCP_DNSMASQ_AUTOSTART") != "false" {

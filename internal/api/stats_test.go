@@ -1,13 +1,17 @@
 package api
 
 import (
+	"bufio"
+	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/store"
+	"github.com/ovcp/ovcp/internal/upstream"
 )
 
 // TestSamplerTickSkipsOnMgmtDown: VPN down/restarting must leave prev
@@ -23,6 +27,65 @@ func TestSamplerTickSkipsOnMgmtDown(t *testing.T) {
 
 	if len(got) != 1 || got["alice"].CN != "alice" {
 		t.Fatalf("samplerTick with mgmt down = %v, want prev unchanged", got)
+	}
+}
+
+// listenFakeMgmt starts a bare mgmt-socket stand-in at sock (just the
+// greeting line, nothing else) and returns its accept counter — proves a
+// later Connect() actually dialed, not just that it returned nil.
+func listenFakeMgmt(t *testing.T, sock string) *int32 {
+	t.Helper()
+	var accepts int32
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			atomic.AddInt32(&accepts, 1)
+			go func(c net.Conn) {
+				defer c.Close()
+				c.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+				bufio.NewReader(c).ReadString('\n') // keep the conn open, ignore further input
+			}(c)
+		}
+	}()
+	return &accepts
+}
+
+// TestSamplerTickRetriesMgmtConnect proves the eager-connect-vs-openvpn-boot
+// race self-heals: first tick against nothing listening must not get stuck;
+// second tick, socket now up, must actually dial it.
+func TestSamplerTickRetriesMgmtConnect(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := SaveUpstreamConfig(s, upstream.Config{
+		Upstreams: []upstream.Upstream{{ID: "wan2", Iface: "eth1", Table: 100}},
+		PerCN:     map[string]string{"alice": "wan2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	srv := &Server{Store: s, VPN: &fakeVPN{}, UpstreamsEnabled: true,
+		Mgmt:          controller.NewClient(sock, filepath.Join(t.TempDir(), "no-status.log")),
+		DefaultRemote: func() string { return "" }}
+
+	srv.samplerTick(false, 24*time.Hour, map[string]controller.VPNClient{})
+
+	accepts := listenFakeMgmt(t, sock)
+	srv.samplerTick(false, 24*time.Hour, map[string]controller.VPNClient{})
+
+	if got := atomic.LoadInt32(accepts); got != 1 {
+		t.Fatalf("retry tick must dial the now-available mgmt socket exactly once, got %d accepts", got)
 	}
 }
 
@@ -43,10 +106,8 @@ func writeStatus(t *testing.T, cn string) string {
 	return path
 }
 
-// TestSamplerTickShortSessionNotLost is the root-cause regression: a client
-// connecting and disconnecting within one non-sample tick must still get an
-// EndSession row, not vanish because disconnect detection used to be gated
-// behind the once-a-minute sampleStats tick.
+// TestSamplerTickShortSessionNotLost: a client connecting and disconnecting
+// within one non-sample tick must still get an EndSession row, not vanish.
 func TestSamplerTickShortSessionNotLost(t *testing.T) {
 	s, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

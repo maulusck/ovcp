@@ -48,6 +48,8 @@ type Server struct {
 	UI               fs.FS                // built frontend; nil = API only
 	DebugLevel       *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
 	PollInterval     time.Duration        // RunSampler's ticker; set from OVCP_STATUS_INTERVAL, same cadence OpenVPN writes its status file at
+
+	upstream upstreamTracker // per-CN live rule state; zero value is ready to use
 }
 
 const (
@@ -100,6 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/upstreams", s.wrap(auth.RoleAdmin, s.handleUpstreamAdd))
 	mux.Handle("DELETE /api/upstreams/{id}", s.wrap(auth.RoleAdmin, s.handleUpstreamDelete))
 	mux.Handle("PUT /api/upstreams/default", s.wrap(auth.RoleAdmin, s.handleUpstreamSetDefault))
+	mux.Handle("PUT /api/upstreams/assign", s.wrap(auth.RoleAdmin, s.handleUpstreamAssign))
+	mux.Handle("POST /api/upstreams/reconcile", s.wrap(auth.RoleAdmin, s.handleUpstreamReconcile))
 	mux.Handle("GET /api/telegram/config", s.wrap(auth.RoleReadonly, s.handleTelegramConfigGet))
 	mux.Handle("PUT /api/telegram/config", s.wrap(auth.RoleAdmin, s.handleTelegramConfigSet))
 	mux.Handle("POST /api/telegram/{op}", s.wrap(auth.RoleAdmin, s.handleTelegramOp))

@@ -19,10 +19,12 @@ import (
 // Reserved band ovcp exclusively owns — never touches a rule/table outside
 // these ranges, so it can never step on another service's routing.
 const (
-	tableBase    = 100
-	maxUpstreams = 64
-	rulePrioBase = 20000
-	nftTable     = "ovcp-upstreams"
+	tableBase        = 100
+	maxUpstreams     = 64
+	rulePrioBase     = 20000
+	nftTable         = "ovcp-upstreams"
+	preroutingChain  = "ovcp-prerouting"
+	postroutingChain = "ovcp-postrouting"
 )
 
 // ipBin/nftBin: package vars, not hardcoded argv[0], so tests can swap in a fake script.
@@ -30,6 +32,40 @@ var (
 	ipBin  = "ip"
 	nftBin = "nft"
 )
+
+// ifaceExists reports whether name is a live interface right now — a
+// package var like ipBin/nftBin, so tests can override it instead of
+// depending on real host interfaces.
+var ifaceExists = func(name string) bool {
+	_, err := net.InterfaceByName(name)
+	return err == nil
+}
+
+// IfaceExists is ifaceExists exported for status/reporting callers outside
+// this package — the one check, not a second one reimplemented elsewhere.
+func IfaceExists(name string) bool { return ifaceExists(name) }
+
+// DownIDs returns the IDs of every upstream whose Iface isn't up right now
+// — nil if all are reachable.
+func DownIDs(ups []Upstream) []string {
+	var down []string
+	for _, u := range ups {
+		if !ifaceExists(u.Iface) {
+			down = append(down, u.ID)
+		}
+	}
+	return down
+}
+
+// Warning summarizes any down upstreams as one line, "" if none — the one
+// wording both the API and CLI derive an apply-time warning from.
+func Warning(ups []Upstream) string {
+	down := DownIDs(ups)
+	if len(down) == 0 {
+		return ""
+	}
+	return "unreachable (iface down): " + strings.Join(down, ", ")
+}
 
 // applyMu serializes every Apply call in this process — intrinsic to Apply
 // itself so every caller (API, CLI, serve's startup/shutdown) shares it.
@@ -47,8 +83,8 @@ type Config struct {
 	Upstreams []Upstream
 	Default   string // active Upstream.ID server-wide; "" = off, host's own default route
 
-	// PerCN: not wired to anything yet — needs static per-CN tunnel IPs first.
-	// Kept on this same Config, not a parallel mechanism, so it's additive later.
+	// PerCN: CN -> Upstream.ID override, set via Assign. No static tunnel IPs —
+	// the assigned IP is pushed live by internal/api's per-CN connect handler.
 	PerCN map[string]string
 }
 
@@ -103,7 +139,43 @@ func (c Config) Without(id string) (cfg Config, found bool) {
 	return cfg, found
 }
 
-func (c Config) find(id string) (Upstream, bool) {
+// validated applies mutate to a copy of c and validates the result — the
+// copy-mutate-rollback-on-error shape Assign/SetDefault share.
+func (c Config) validated(mutate func(*Config)) (Config, error) {
+	cfg := c
+	mutate(&cfg)
+	if err := cfg.Validate(); err != nil {
+		return c, err
+	}
+	return cfg, nil
+}
+
+// Assign sets or clears cfg.PerCN[cn]. clear deletes the key, not an
+// empty-string value — Resolve would return that directly instead of
+// falling through to Default.
+func (c Config) Assign(cn, id string, clear bool) (Config, error) {
+	return c.validated(func(cfg *Config) {
+		perCN := make(map[string]string, len(c.PerCN)+1)
+		for k, v := range c.PerCN {
+			perCN[k] = v
+		}
+		if clear {
+			delete(perCN, cn)
+		} else {
+			perCN[cn] = id
+		}
+		cfg.PerCN = perCN
+	})
+}
+
+// SetDefault sets cfg.Default — id="" turns it off.
+func (c Config) SetDefault(id string) (Config, error) {
+	return c.validated(func(cfg *Config) { cfg.Default = id })
+}
+
+// Find looks up one Upstream by ID — exported for callers outside this
+// package (the per-CN connect handler) that need the same lookup.
+func (c Config) Find(id string) (Upstream, bool) {
 	for _, u := range c.Upstreams {
 		if u.ID == id {
 			return u, true
@@ -205,23 +277,33 @@ func routeArgs(u Upstream) [][]string {
 	}
 }
 
-// nftRuleset: a prerouting chain marking vpnSubnet with the resolved
-// upstream's table (nothing if off), a postrouting chain masquerading every
-// configured upstream's marked traffic out its own Iface.
+// nftRuleset: prerouting marks vpnSubnet even for a down upstream (the
+// kill-switch needs the mark); postrouting masquerades each upstream out
+// its Iface, skipping a down one (nft rejects one bad oif for the whole ruleset).
 func nftRuleset(cfg Config, vpnSubnet string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {\n", nftTable)
 	// Chain names match their own hook (idiomatic nft), ovcp-prefixed like the
 	// table itself — "mark" alone is an nft keyword and fails as a bare name.
-	b.WriteString("\tchain ovcp-prerouting {\n\t\ttype filter hook prerouting priority mangle; policy accept;\n")
+	fmt.Fprintf(&b, "\tchain %s {\n\t\ttype filter hook prerouting priority mangle; policy accept;\n", preroutingChain)
 	if vpnSubnet != "" {
-		if u, ok := cfg.find(cfg.Resolve("")); ok {
+		if u, ok := cfg.Find(cfg.Resolve("")); ok {
 			fmt.Fprintf(&b, "\t\tip saddr %s meta mark set %d\n", vpnSubnet, u.Table)
 		}
 	}
-	b.WriteString("\t}\n\tchain ovcp-postrouting {\n\t\ttype nat hook postrouting priority srcnat; policy accept;\n")
+	fmt.Fprintf(&b, "\t}\n\tchain %s {\n\t\ttype nat hook postrouting priority srcnat; policy accept;\n", postroutingChain)
 	for _, u := range cfg.Upstreams {
+		if !ifaceExists(u.Iface) {
+			continue
+		}
 		fmt.Fprintf(&b, "\t\tmeta mark %d oif %q masquerade\n", u.Table, u.Iface)
+	}
+	// Transparent mode: a client with no resolved upstream (mark 0, never
+	// set above) still needs NAT to leave via the host's own default route
+	// — ovcp's own table, not a hand-maintained one, so it survives an
+	// `nft flush ruleset` + `ovcp serve` restart like everything else here.
+	if vpnSubnet != "" {
+		fmt.Fprintf(&b, "\t\tip saddr %s meta mark 0 masquerade\n", vpnSubnet)
 	}
 	b.WriteString("\t}\n}\n")
 	return []byte(b.String())
@@ -284,3 +366,37 @@ func runNFTStdin(args []string, ruleset []byte) error {
 // Teardown clears ovcp's whole band — same path Apply(Config{}, "") takes,
 // since an empty Config has nothing to rebuild after.
 func Teardown() error { return Apply(Config{}, "") }
+
+// AddClientRule appends one mark rule — the fast per-connection path
+// Apply's full rebuild is too heavy for. Blocks on applyMu (unlike Apply's
+// TryLock): a waiting client beats a refused one.
+func AddClientRule(ip string, table int) (handle int, err error) {
+	if net.ParseIP(ip).To4() == nil {
+		return 0, fmt.Errorf("upstream: bad client ip %q", ip)
+	}
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	out, err := exec.Command(nftBin, "-a", "-e", "add", "rule", "inet", nftTable, preroutingChain,
+		"ip", "saddr", ip, "meta", "mark", "set", strconv.Itoa(table)).CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("upstream: add client rule: %w: %s", err, bytes.TrimSpace(out))
+	}
+	return parseHandle(out)
+}
+
+// parseHandle extracts the trailing "# handle N" nft appends when run with -e.
+func parseHandle(out []byte) (int, error) {
+	for _, line := range strings.Split(string(out), "\n") {
+		if i := strings.Index(line, "# handle "); i >= 0 {
+			return strconv.Atoi(strings.TrimSpace(line[i+len("# handle "):]))
+		}
+	}
+	return 0, fmt.Errorf("upstream: no handle in nft output: %s", bytes.TrimSpace(out))
+}
+
+// RemoveClientRule deletes exactly the rule AddClientRule created.
+func RemoveClientRule(handle int) error {
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	return run(nftBin, "delete", "rule", "inet", nftTable, preroutingChain, "handle", strconv.Itoa(handle))
+}

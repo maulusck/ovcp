@@ -62,9 +62,22 @@ type ControlResult struct {
 	ServeStartedAt time.Time
 }
 
-// ServeControl exposes lc (vpn), dc (dnsmasq), "debug on|off", and mgmt's live client list/kill over a root-only (0600) unix
-// socket for `ovcp vpn`/`dns`/`debug`/`status`/`kill`/`stats -follow` — mgmt allows only one client, so serve holds it and fans out here.
-func ServeControl(sockPath string, lc, dc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) (net.Listener, error) {
+// ControlDeps bundles everything ServeControl proxies over the socket — one
+// struct, not a positional param list that grows with every new op.
+// UpstreamRewrite: per-CN live rule rewrite. UpstreamReapply: `upstream reconcile`.
+type ControlDeps struct {
+	VPN, DNS        Lifecycle
+	Mgmt            *Client
+	Level           *slog.LevelVar
+	Telegram        TelegramController
+	UpstreamRewrite func(cn string) error
+	UpstreamReapply func() error
+}
+
+// ServeControl exposes d's workers, mgmt's live client list/kill, and
+// per-CN live rule rewrite over a root-only (0600) unix socket — mgmt
+// allows only one client, so serve holds it and fans out here.
+func ServeControl(sockPath string, d ControlDeps) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o750); err != nil {
 		return nil, err
 	}
@@ -80,14 +93,32 @@ func ServeControl(sockPath string, lc, dc Lifecycle, mgmt *Client, level *slog.L
 			if err != nil {
 				return // listener closed
 			}
-			go serveControlConn(c, lc, dc, mgmt, level, tc)
+			go serveControlConn(c, d)
 		}
 	}()
 	return l, nil
 }
 
-func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.LevelVar, tc TelegramController) {
+// replyOK writes "OK" or "ERR <err>" — the reply shape every fire-and-report op shares.
+func replyOK(c net.Conn, err error) {
+	if err != nil {
+		fmt.Fprintf(c, "ERR %s\n", err)
+		return
+	}
+	fmt.Fprintln(c, "OK")
+}
+
+// serveControlConn dispatches one op. A panic in any op (a bug in a
+// caller-supplied closure, e.g. UpstreamReapply) costs this one connection,
+// never the whole serve process — same reasoning as mgmt.go's callConnect.
+func serveControlConn(c net.Conn, d ControlDeps) {
 	defer c.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("control op panicked", "panic", r)
+			fmt.Fprintln(c, "ERR internal error")
+		}
+	}()
 	c.SetDeadline(time.Now().Add(60 * time.Second)) // restart may take a few s
 	line, err := bufio.NewReader(c).ReadString('\n')
 	if err != nil {
@@ -98,15 +129,11 @@ func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.Le
 	// clients/kill proxy mgmt's connection; their response shape doesn't fit
 	// the pid/changed trailer every Lifecycle op below shares, so they return directly.
 	if cn, ok := strings.CutPrefix(op, "kill "); ok {
-		if err := mgmt.Kill(cn); err != nil {
-			fmt.Fprintf(c, "ERR %s\n", err)
-			return
-		}
-		fmt.Fprintln(c, "OK")
+		replyOK(c, d.Mgmt.Kill(cn))
 		return
 	}
 	if op == "clients" {
-		cl, err := mgmt.Status()
+		cl, err := d.Mgmt.Status()
 		if err != nil {
 			fmt.Fprintf(c, "ERR %s\n", err)
 			return
@@ -115,27 +142,35 @@ func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.Le
 		fmt.Fprintf(c, "OK %s\n", data)
 		return
 	}
+	if cn, ok := strings.CutPrefix(op, "upstream-assign "); ok {
+		replyOK(c, d.UpstreamRewrite(cn))
+		return
+	}
+	if op == "upstream-reapply" {
+		replyOK(c, d.UpstreamReapply())
+		return
+	}
 	if op == "telegram-status" {
-		data, _ := json.Marshal(tc.Status())
+		data, _ := json.Marshal(d.Telegram.Status())
 		fmt.Fprintf(c, "OK %s\n", data)
 		return
 	}
 	if op == "telegram-start" || op == "telegram-stop" || op == "telegram-restart" {
-		before := tc.Status().Running
+		before := d.Telegram.Status().Running
 		var opErr error
 		switch op {
 		case "telegram-start":
-			opErr = tc.Start()
+			opErr = d.Telegram.Start()
 		case "telegram-stop":
-			opErr = tc.Stop()
+			opErr = d.Telegram.Stop()
 		case "telegram-restart":
-			opErr = tc.Restart()
+			opErr = d.Telegram.Restart()
 		}
 		if opErr != nil {
 			fmt.Fprintf(c, "ERR %s\n", opErr)
 			return
 		}
-		st := tc.Status()
+		st := d.Telegram.Status()
 		st.Changed = st.Running != before
 		data, _ := json.Marshal(st)
 		fmt.Fprintf(c, "OK %s\n", data)
@@ -144,11 +179,11 @@ func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.Le
 
 	// dns- prefixed ops target dnsmasq's own Lifecycle instead of vpn's;
 	// same switch body runs against whichever target, not a parallel copy.
-	target, verb := lc, op
+	target, verb := d.VPN, op
 	if rest, ok := strings.CutPrefix(op, "dns-"); ok {
-		target, verb = dc, rest
+		target, verb = d.DNS, rest
 	}
-	if verb == "reconnect" && target == dc {
+	if verb == "reconnect" && target == d.DNS {
 		fmt.Fprintln(c, "ERR unknown operation")
 		return
 	}
@@ -166,11 +201,11 @@ func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.Le
 	case "reconnect":
 		opErr = target.Reconnect()
 	case "debug on":
-		level.Set(slog.LevelDebug)
+		d.Level.Set(slog.LevelDebug)
 		slog.Info("debug logging enabled")
 	case "debug off":
 		slog.Info("debug logging disabled")
-		level.Set(slog.LevelInfo)
+		d.Level.Set(slog.LevelInfo)
 	default:
 		fmt.Fprintln(c, "ERR unknown operation")
 		return
@@ -178,6 +213,13 @@ func serveControlConn(c net.Conn, lc, dc Lifecycle, mgmt *Client, level *slog.Le
 	if opErr != nil {
 		fmt.Fprintf(c, "ERR %s\n", opErr)
 		return
+	}
+	// nft's Subnet must match what openvpn is actually running, which only
+	// changes at start/restart (no hot-reload) — resync here, not on save.
+	if target == d.VPN && (verb == "start" || verb == "restart") && d.UpstreamReapply != nil {
+		if err := d.UpstreamReapply(); err != nil {
+			slog.Warn("upstream reapply after vpn "+verb, "err", err)
+		}
 	}
 	after := target.Pid()
 	changed := "nochange"
@@ -255,6 +297,22 @@ func Clients(sockPath string) ([]VPNClient, error) {
 // reasoning as Clients).
 func Kill(sockPath, cn string) error {
 	_, err := controlRequest(sockPath, "kill "+cn)
+	return err
+}
+
+// UpstreamAssign asks a running serve to instantly rewrite cn's live nft
+// rule after `ovcp upstream assign` persists — a no-op if cn isn't
+// currently connected (same reasoning as Kill).
+func UpstreamAssign(sockPath, cn string) error {
+	_, err := controlRequest(sockPath, "upstream-assign "+cn)
+	return err
+}
+
+// UpstreamReapply asks a running serve to re-apply the persisted upstream
+// config — the `upstream reconcile` trigger, after e.g. an egress interface
+// that was down at boot/last-apply time comes back up.
+func UpstreamReapply(sockPath string) error {
+	_, err := controlRequest(sockPath, "upstream-reapply")
 	return err
 }
 

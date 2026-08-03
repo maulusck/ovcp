@@ -6,6 +6,8 @@ package controller
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -19,9 +21,16 @@ type Client struct {
 	StatusPath string        // openvpn's periodically-rewritten status file (status-version 3); see Status()
 	Timeout    time.Duration // per-op; default 5s
 
-	mu   sync.Mutex // serializes access to conn: the mgmt protocol is one command/response stream, not safe for concurrent use
-	conn net.Conn
-	r    *bufio.Reader
+	// OnClientConnect/OnClientDisconnect, if set, handle each >CLIENT:
+	// CONNECT/DISCONNECT — nil means no-op. Called synchronously, one at a
+	// time (ponytail: fine at VPN rates, not a web server's).
+	OnClientConnect    func(cid, kid string, env map[string]string) AuthReply
+	OnClientDisconnect func(cid string, env map[string]string)
+
+	mu      sync.Mutex // serializes exec(): one command's request/response cycle at a time
+	writeMu sync.Mutex // serializes raw writes — exec()'s command vs. the reader's async replies
+	conn    net.Conn
+	resp    chan string // non->CLIENT: lines, fed by the reader goroutine to exec()
 }
 
 func NewClient(socketPath, statusPath string) *Client {
@@ -38,8 +47,46 @@ type VPNClient struct {
 	Cipher         string
 }
 
-// connect dials a fresh connection and consumes the greeting banner. Caller
-// must hold c.mu and must not already have a live c.conn.
+// AuthReply is OnClientConnect's return value: approve (optionally pushing
+// directives like ifconfig-push) or deny with a reason. Not a general
+// directive-injection API — Directives is the one thing it's for.
+type AuthReply struct {
+	Deny       string   // non-empty = deny this connection, this is the reason
+	Directives []string // approve: extra client-connect directives to push
+}
+
+// command renders the mgmt-protocol reply for cid/kid — client-deny,
+// client-auth-nt (plain approve), or client-auth (approve + directives).
+func (a AuthReply) command(cid, kid string) string {
+	if a.Deny != "" {
+		return fmt.Sprintf("client-deny %s %s %q", cid, kid, a.Deny)
+	}
+	if len(a.Directives) == 0 {
+		return fmt.Sprintf("client-auth-nt %s %s", cid, kid)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "client-auth %s %s\n", cid, kid)
+	for _, d := range a.Directives {
+		b.WriteString(d + "\n")
+	}
+	b.WriteString("END")
+	return b.String()
+}
+
+// Connect ensures the connection (and its background reader) is live —
+// call eagerly at startup when OnClientConnect is set, so an early client
+// can't race a connection that would otherwise only start lazily.
+func (c *Client) Connect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		return nil
+	}
+	return c.connect()
+}
+
+// connect dials a fresh connection, consumes the greeting banner, and
+// starts the background reader. Caller must hold c.mu with no live c.conn.
 func (c *Client) connect() error {
 	conn, err := net.DialTimeout("unix", c.SocketPath, c.Timeout)
 	if err != nil {
@@ -51,16 +98,176 @@ func (c *Client) connect() error {
 		conn.Close()
 		return err
 	}
-	c.conn, c.r = conn, r
+	conn.SetDeadline(time.Time{}) // reader blocks indefinitely between notifications, not a hang
+	resp := make(chan string, 8)
+	c.resp = resp
+	c.setConn(conn)
+	go c.readLoop(r, resp)
 	return nil
 }
 
-// drop closes and forgets the held connection. Caller must hold c.mu.
+// setConn/drop guard c.conn with writeMu, not just c.mu: write() (the
+// reader goroutine, only ever under writeMu) reads c.conn too, so writeMu
+// is the one lock both sides actually share.
+func (c *Client) setConn(conn net.Conn) {
+	c.writeMu.Lock()
+	c.conn = conn
+	c.writeMu.Unlock()
+}
+
+// drop closes and forgets the held connection. Guarded by writeMu alone
+// (not c.mu), so both exec()'s c.mu-held retries and readLoop's own
+// goroutine can call it safely.
 func (c *Client) drop() {
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn, c.r = nil, nil
+	c.writeMu.Lock()
+	conn := c.conn
+	c.conn = nil
+	c.writeMu.Unlock()
+	if conn != nil {
+		conn.Close()
 	}
+}
+
+// write serializes raw writes to conn — exec()'s own command and the
+// reader goroutine's async client-auth replies share one connection.
+func (c *Client) write(s string) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.conn == nil {
+		return fmt.Errorf("controller: mgmt not connected")
+	}
+	_, err := c.conn.Write([]byte(s))
+	return err
+}
+
+// readLoop is the connection's sole reader for its whole life: >CLIENT:
+// blocks go to the connect/disconnect handlers, everything else is
+// forwarded to resp for whichever exec() call is waiting on it.
+func (c *Client) readLoop(r *bufio.Reader, resp chan<- string) {
+	defer close(resp)
+	for {
+		raw, err := r.ReadString('\n')
+		if err != nil {
+			// The peer (openvpn) hung up — e.g. it restarted with a fresh
+			// mgmt listener. Without this, c.conn stays non-nil forever and
+			// Connect()'s passive retry (samplerTick) no-ops permanently,
+			// silently losing every future >CLIENT:CONNECT.
+			c.drop()
+			return
+		}
+		line := strings.TrimRight(raw, "\r\n")
+		switch {
+		case strings.HasPrefix(line, ">CLIENT:CONNECT,"), strings.HasPrefix(line, ">CLIENT:REAUTH,"):
+			c.handleConnect(r, line)
+		case strings.HasPrefix(line, ">CLIENT:DISCONNECT,"):
+			c.handleDisconnect(r, line)
+		default:
+			select {
+			case resp <- raw: // raw, not line: ReadString('\n') on the other end needs the delimiter
+			default: // nobody listening (timed out or stray) — drop, never block the reader
+			}
+		}
+	}
+}
+
+// readClientEnv reads >CLIENT:ENV,... lines up to the terminating
+// >CLIENT:ENV,END, called synchronously from the reader goroutine.
+func readClientEnv(r *bufio.Reader) (map[string]string, error) {
+	env := map[string]string{}
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		rest, ok := strings.CutPrefix(line, ">CLIENT:ENV,")
+		if !ok {
+			return nil, fmt.Errorf("controller: expected >CLIENT:ENV, got %q", line)
+		}
+		if rest == "END" {
+			return env, nil
+		}
+		name, val, _ := strings.Cut(rest, "=")
+		env[name] = val
+	}
+}
+
+// handleConnect replies client-auth-nt (no handler / nil), or whatever
+// OnClientConnect decides — approve with directives, or deny.
+func (c *Client) handleConnect(r *bufio.Reader, header string) {
+	parts := strings.SplitN(header, ",", 3)
+	if len(parts) != 3 {
+		return
+	}
+	cid, kid := parts[1], parts[2]
+	env, err := readClientEnv(r)
+	if err != nil {
+		return // connection is likely dying; readLoop's next read will notice
+	}
+	reply := AuthReply{}
+	if c.OnClientConnect != nil {
+		reply = c.callConnect(cid, kid, env)
+	}
+	if err := c.write(reply.command(cid, kid) + "\n"); err != nil {
+		slog.Warn("mgmt client-auth reply failed", "err", err)
+	}
+}
+
+// callConnect recovers a panic in OnClientConnect into a deny — a bug in
+// the handler must cost one client, never crash the whole process.
+func (c *Client) callConnect(cid, kid string, env map[string]string) (reply AuthReply) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("mgmt OnClientConnect panicked", "panic", r)
+			reply = AuthReply{Deny: "internal error"}
+		}
+	}()
+	return c.OnClientConnect(cid, kid, env)
+}
+
+func (c *Client) handleDisconnect(r *bufio.Reader, header string) {
+	_, cid, ok := strings.Cut(header, ",")
+	if !ok {
+		return
+	}
+	env, err := readClientEnv(r)
+	if err != nil {
+		return
+	}
+	if c.OnClientDisconnect != nil {
+		c.callDisconnect(cid, env)
+	}
+}
+
+// callDisconnect recovers a panic in OnClientDisconnect — same reasoning
+// as callConnect, just no reply to send back.
+func (c *Client) callDisconnect(cid string, env map[string]string) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("mgmt OnClientDisconnect panicked", "panic", r)
+		}
+	}()
+	c.OnClientDisconnect(cid, env)
+}
+
+// chanReader presents resp's lines as an io.Reader so exec()'s existing
+// *bufio.Reader parsers (simple) work unchanged against the demuxed stream.
+type chanReader struct {
+	lines <-chan string
+	buf   []byte
+}
+
+func (r *chanReader) Read(p []byte) (int, error) {
+	if len(r.buf) == 0 {
+		line, ok := <-r.lines
+		if !ok {
+			return 0, io.EOF
+		}
+		r.buf = []byte(line)
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
 }
 
 // appErr marks a parse failure as an OpenVPN application-level response
@@ -88,17 +295,26 @@ func (c *Client) exec(cmd string, parse func(*bufio.Reader) error) error {
 	return err
 }
 
+// tryExec times out via select, not conn.SetDeadline: the connection is
+// shared with the reader's indefinite wait for the next notification.
 func (c *Client) tryExec(cmd string, parse func(*bufio.Reader) error) error {
 	if c.conn == nil {
 		if err := c.connect(); err != nil {
 			return err
 		}
 	}
-	c.conn.SetDeadline(time.Now().Add(c.Timeout))
-	if _, err := c.conn.Write([]byte(cmd + "\n")); err != nil {
+	if err := c.write(cmd + "\n"); err != nil {
 		return err
 	}
-	return parse(c.r)
+	done := make(chan error, 1)
+	go func() { done <- parse(bufio.NewReader(&chanReader{lines: c.resp})) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(c.Timeout):
+		c.drop()
+		return fmt.Errorf("controller: mgmt command timed out")
+	}
 }
 
 // Status reads openvpn's own periodic status file instead of querying the

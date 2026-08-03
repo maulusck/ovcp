@@ -79,6 +79,54 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+func TestAssign(t *testing.T) {
+	c := valid()
+	got, err := c.Assign("alice", "wan2", false)
+	if err != nil || got.PerCN["alice"] != "wan2" {
+		t.Fatalf("got %+v, %v", got.PerCN, err)
+	}
+	if c.PerCN != nil {
+		t.Fatal("Assign must not mutate the receiver")
+	}
+
+	cleared, err := got.Assign("alice", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cleared.PerCN["alice"]; ok {
+		t.Fatal("clear must delete the key, not set it to empty")
+	}
+
+	if _, err := c.Assign("bob", "ghost-upstream", false); err == nil {
+		t.Fatal("assigning to a nonexistent upstream must fail Validate")
+	}
+
+	// clearing a CN with no existing entry is a no-op, not an error.
+	if _, err := c.Assign("nobody", "", true); err != nil {
+		t.Fatalf("clearing an absent entry should be a harmless no-op: %v", err)
+	}
+}
+
+func TestSetDefault(t *testing.T) {
+	c := valid()
+	got, err := c.SetDefault("wg-mullvad")
+	if err != nil || got.Default != "wg-mullvad" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if c.Default != "wan2" {
+		t.Fatal("SetDefault must not mutate the receiver")
+	}
+
+	off, err := got.SetDefault("")
+	if err != nil || off.Default != "" {
+		t.Fatalf("got %+v, %v; want off", off, err)
+	}
+
+	if _, err := c.SetDefault("ghost-upstream"); err == nil {
+		t.Fatal("setting a nonexistent upstream as default must fail Validate")
+	}
+}
+
 func TestWithAdded(t *testing.T) {
 	c := valid()
 	got, added, err := c.WithAdded(Upstream{ID: "tor-relay", Iface: "eth2"})
@@ -147,6 +195,7 @@ func TestRouteArgsOnlink(t *testing.T) {
 }
 
 func TestNFTRulesetOff(t *testing.T) {
+	defer swapIfaceExists(func(string) bool { return true })()
 	c := valid()
 	c.Default = "" // off: no mark rule, subnet keeps the host's own default route
 	out := string(nftRuleset(c, "10.8.0.0/24"))
@@ -156,26 +205,112 @@ func TestNFTRulesetOff(t *testing.T) {
 	if !strings.Contains(out, `oif "eth1" masquerade`) || !strings.Contains(out, `oif "wg0" masquerade`) {
 		t.Errorf("NAT rules must still exist per upstream even when Default is off:\n%s", out)
 	}
+	// Transparent mode: unmarked (mark 0) traffic must still be masqueraded
+	// out whatever the host's own routing picks — this is what used to be a
+	// hand-maintained "baseline-nat" table outside ovcp entirely, lost on
+	// every `nft flush ruleset`. Folded into ovcp's own reconciled table.
+	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark 0 masquerade") {
+		t.Errorf("transparent mode must masquerade unmarked traffic via the host's own default route:\n%s", out)
+	}
+}
+
+// swapIfaceExists overrides ifaceExists for a test, returning the restore func.
+func swapIfaceExists(f func(string) bool) (restore func()) {
+	prev := ifaceExists
+	ifaceExists = f
+	return func() { ifaceExists = prev }
+}
+
+// TestNFTRulesetSkipsMissingIface: a missing egress must not poison the
+// whole ruleset (nft rejects one bad oif for the entire -f/-c input) — but
+// must still mark its traffic, so Apply's kill-switch route catches it.
+func TestNFTRulesetSkipsMissingIface(t *testing.T) {
+	defer swapIfaceExists(func(name string) bool { return name == "wan2-iface" })()
+	c := Config{
+		Upstreams: []Upstream{
+			{ID: "wan2", Iface: "wan2-iface", Table: tableBase},
+			{ID: "ghost", Iface: "ghost-iface", Table: tableBase + 1},
+		},
+		Default: "ghost",
+	}
+	out := string(nftRuleset(c, "10.8.0.0/24"))
+	if !strings.Contains(out, "meta mark set 101") {
+		t.Errorf("missing-iface upstream must still be marked (kill-switch depends on it):\n%s", out)
+	}
+	if !strings.Contains(out, `oif "wan2-iface" masquerade`) {
+		t.Errorf("a live upstream's masquerade rule must still be emitted:\n%s", out)
+	}
+	if strings.Contains(out, "ghost-iface") {
+		t.Errorf("a missing-iface upstream must not appear in a masquerade rule (nft would reject the whole ruleset):\n%s", out)
+	}
+}
+
+func TestDownIDsAndWarning(t *testing.T) {
+	defer swapIfaceExists(func(name string) bool { return name == "wan2-iface" })()
+	ups := []Upstream{
+		{ID: "wan2", Iface: "wan2-iface", Table: tableBase},
+		{ID: "ghost", Iface: "ghost-iface", Table: tableBase + 1},
+	}
+	if down := DownIDs(ups); len(down) != 1 || down[0] != "ghost" {
+		t.Fatalf("DownIDs = %v, want [ghost]", down)
+	}
+	if w := Warning(ups); w != "unreachable (iface down): ghost" {
+		t.Fatalf("Warning = %q", w)
+	}
+	if down := DownIDs(ups[:1]); down != nil {
+		t.Fatalf("DownIDs = %v, want nil when all up", down)
+	}
+	if w := Warning(ups[:1]); w != "" {
+		t.Fatalf("Warning = %q, want \"\" when all up", w)
+	}
 }
 
 // Runs the real ruleset through real nft -c — caught the "mark" keyword
 // bug our string-matching tests couldn't. Needs root: `sudo go test ./internal/upstream/...`.
 func TestNFTRulesetValidatesAgainstRealNFT(t *testing.T) {
-	if _, err := exec.LookPath("nft"); err != nil {
-		t.Skip("nft not on PATH")
-	}
-	if os.Geteuid() != 0 {
-		t.Skip("nft -c needs root (netlink cache access)")
-	}
+	nft := RequireRealNFT(t)
 	c := Config{
 		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
 		Default:   "lo-test",
 	}
 	ruleset := nftRuleset(c, "10.8.0.0/24")
-	cmd := exec.Command("nft", "-c", "-f", "-")
+	cmd := exec.Command(nft, "-c", "-f", "-")
 	cmd.Stdin = bytes.NewReader(ruleset)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("nft -c rejected the generated ruleset: %v\n%s\nruleset:\n%s", err, out, ruleset)
+	}
+}
+
+// TestNFTRulesetValidatesWithMissingIface: a real upstream (lo) plus one
+// whose iface doesn't exist must still validate against real nft — the
+// exact real-hardware failure (an upstream not up yet poisoned the whole ruleset).
+func TestNFTRulesetValidatesWithMissingIface(t *testing.T) {
+	nft := RequireRealNFT(t)
+	c := Config{
+		Upstreams: []Upstream{
+			{ID: "lo-test", Iface: "lo", Table: tableBase},
+			{ID: "ghost", Iface: "ovcp-test-ghost0", Table: tableBase + 1},
+		},
+		Default: "ghost",
+	}
+	ruleset := nftRuleset(c, "10.8.0.0/24")
+	cmd := exec.Command(nft, "-c", "-f", "-")
+	cmd.Stdin = bytes.NewReader(ruleset)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("nft -c rejected the ruleset despite the missing-iface guard: %v\n%s\nruleset:\n%s", err, out, ruleset)
+	}
+}
+
+// TestNFTRulesetValidatesTransparentMode: the catch-all "mark 0" masquerade
+// rule (Default off, replacing the old hand-maintained baseline-nat table)
+// must itself be valid nft syntax, not just string-matched.
+func TestNFTRulesetValidatesTransparentMode(t *testing.T) {
+	nft := RequireRealNFT(t)
+	ruleset := nftRuleset(Config{}, "10.8.0.0/24")
+	cmd := exec.Command(nft, "-c", "-f", "-")
+	cmd.Stdin = bytes.NewReader(ruleset)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("nft -c rejected the transparent-mode ruleset: %v\n%s\nruleset:\n%s", err, out, ruleset)
 	}
 }
 
@@ -287,6 +422,69 @@ func TestApplyRejectsWhileBusy(t *testing.T) {
 	defer applyMu.Unlock()
 	if err := Apply(Config{}, ""); !errors.Is(err, controller.ErrBusy) {
 		t.Fatalf("got %v, want controller.ErrBusy", err)
+	}
+}
+
+func TestParseHandle(t *testing.T) {
+	out := "add rule inet ovcp-upstreams ovcp-prerouting ip saddr 10.8.0.55 meta mark set 0x64 # handle 7\n# new generation 4 by process 123 (nft)\n"
+	got, err := parseHandle([]byte(out))
+	if err != nil || got != 7 {
+		t.Fatalf("got %d, %v; want 7, nil", got, err)
+	}
+	if _, err := parseHandle([]byte("no handle here\n")); err == nil {
+		t.Fatal("expected error when no handle line present")
+	}
+}
+
+func TestAddClientRuleBadIP(t *testing.T) {
+	if _, err := AddClientRule("not-an-ip", tableBase); err == nil {
+		t.Fatal("expected error for invalid ip")
+	}
+}
+
+// TestClientRuleFakeNFT checks argv shape and handle parsing without a real
+// nft — same fake-script stand-in as TestApplyInvokesFakeTools.
+func TestClientRuleFakeNFT(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho \"add rule inet x y ip saddr 10.8.0.55 meta mark set 0x64 # handle 9\"\n"
+	p := filepath.Join(dir, "nft")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := nftBin
+	nftBin = p
+	defer func() { nftBin = orig }()
+
+	handle, err := AddClientRule("10.8.0.55", tableBase)
+	if err != nil || handle != 9 {
+		t.Fatalf("got %d, %v; want 9, nil", handle, err)
+	}
+}
+
+// Add/RemoveClientRule against real nft: rule appears, then really gone.
+func TestClientRuleRoundTripRealNFT(t *testing.T) {
+	nft := RequireRealNFT(t)
+	cfg := Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+
+	handle, err := AddClientRule("10.8.0.77", tableBase)
+	if err != nil {
+		t.Fatalf("AddClientRule: %v", err)
+	}
+	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if !strings.Contains(string(out), "10.8.0.77") {
+		t.Fatalf("rule not present after add:\n%s", out)
+	}
+
+	if err := RemoveClientRule(handle); err != nil {
+		t.Fatalf("RemoveClientRule: %v", err)
+	}
+	out, _ = exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if strings.Contains(string(out), "10.8.0.77") {
+		t.Fatalf("rule still present after remove:\n%s", out)
 	}
 }
 

@@ -300,7 +300,9 @@ value) without writing anything; an empty diff \(en no flags changed
 anything, including an \fB$EDITOR\fR session that saved unmodified \(en
 is reported but not written either. Takes effect on the next
 .B ovcp vpn restart
-\(en openvpn does not hot\-reload its configuration.
+\(en openvpn does not hot\-reload its configuration; if upstreams are
+enabled, that same restart also re\-syncs the nftables ruleset to
+\fB\-subnet\fR (see \fBupstream\fR below).
 .RS
 .TP
 \fBPush internal DNS\fR
@@ -434,7 +436,8 @@ sends SIGTERM,
 reports whether it is running,
 .B restart
 is a full stop + fresh start \(en required for any configuration, key, or
-CRL change \(en and
+CRL change; \fBstart\fR/\fBrestart\fR also re\-sync the nftables ruleset
+to match (upstreams only \(en see \fBupstream\fR below). And
 .B reconnect
 sends SIGUSR1 for a soft session reset (runtime recovery, no process
 replacement).
@@ -521,7 +524,11 @@ errors the same as any CN with no active cert.
 .TQ
 .B upstream del \fB\-id\fR \fINAME\fR
 .TQ
-.B upstream set\-default \fB\-id\fR \fINAME\fR
+.B upstream set\-default (\fB\-id\fR \fINAME\fR | \fB\-clear\fR)
+.TQ
+.B upstream assign \fB\-cn\fR \fINAME\fR (\fB\-id\fR \fIID\fR | \fB\-clear\fR)
+.TQ
+.B upstream reconcile
 .TQ
 .B upstream status
 Policy\-route VPN client traffic out an admin\-chosen egress \(en a second
@@ -538,13 +545,35 @@ automatically. \fBset\-default\fR is the ad\-hoc exit switch \(en instant,
 no
 .B vpn restart
 needed, since it only reprograms host routing/NAT, never openvpn itself;
-omit \fB\-id\fR (or pass an empty one) to turn it off, back to the host's own
-default route. Every rule this feature installs lives inside a fixed,
+\fB\-clear\fR (or an empty \fB\-id\fR) turns it off, back to the host's own
+default route. \fBassign\fR overrides one client's (\fB\-cn\fR) egress
+independent of the default \(en \fB\-clear\fR removes the override, falling
+back to \fBset\-default\fR's choice instead. Takes effect instantly for an
+already\-connected client too, not just on their next reconnect \(en
+.B once
+per\-CN routing is already active. The
+.I first
+\fB\-cn\fR assignment ever made flips on openvpn's
+\fBmanagement\-client\-auth\fR, a config\-file\-only directive an already\-
+running openvpn won't pick up on its own; \fBassign\fR prints a warning and
+.B vpn restart
+is required exactly that one time. Every rule this feature installs lives
+inside a fixed,
 ovcp\-owned band (routing tables, ip\-rule priorities, one nftables table)
 so it can never collide with or remove a rule something else on the host
 created; a dead gateway fails closed (a kill\-switch route inside its own
 table) rather than falling through to the host's own default route.
-\fBupstream status\fR reports nftables detection and the active default.
+An egress that isn't up yet (or goes down later, e.g. during maintenance)
+never fails
+.B add/del/set\-default
+themselves \(en the config change still saves; a warning names which
+upstream is currently unreachable. \fBreconcile\fR is the explicit
+"situation's stable now" trigger \(en re\-applies the persisted config
+(picking up anything that came back) and reports what's still down,
+without needing a full \fBserve\fR restart. Not on any timer; admin\-
+initiated only \(en \fBvpn start\fR/\fBrestart\fR trigger the same
+re\-apply automatically, see \fBvpn\fR above. \fBupstream status\fR
+reports nftables detection and the active default.
 Every op fails cleanly if nftables isn't on \fBPATH\fR, or if
 \fBOVCP_UPSTREAMS_ENABLED=false\fR (see \fBENVIRONMENT\fR) \(en same
 treatment
@@ -768,8 +797,12 @@ cert/key.
 .TP
 .B ca rotate, backup restore, user del,
 .B user passwd, user totp \-off, record edit|include|exclude, init \-skeleton,
-.B logs rotate
+.B logs rotate, upstream add, upstream del, upstream set\-default,
+.B upstream assign
 \fB{message}\fR \(en a confirmation string, nothing structured beyond it.
+Any apply\-time warning (e.g. a down egress iface) prints to stderr in both
+output modes, same as \fB\-json\fR's \fB{error}\fR convention for failures
+\(en never silently dropped, never smuggled into the JSON payload either.
 .TP
 .B certificate renew
 \fB{cn, serial, notAfter}\fR \(en server\-only, nothing sensitive leaves
@@ -851,10 +884,15 @@ serial, expires, includeDNS, ip}\fR (same \fBstatus\fR values as
 right now \(en connected, or the server's own always\-on address);
 \fBcustom\fR is \fIcustom.hosts\fR' raw content as one string.
 .TP
-.B upstream list, upstream add, upstream del, upstream set\-default
-The persisted \fB{Upstreams, Default, PerCN}\fR config (untagged, like
-\fBvpn config\fR above) \(en same shape \fBGET\fR/\fBPOST /api/upstreams\fR
-and \fBPUT /api/upstreams/default\fR return.
+.B upstream list, upstream reconcile
+\fB{upstreams: [{id, up, iface, gateway, table, description}], default,
+perCN}\fR \(en \fBup\fR is a live \fInet.InterfaceByName\fR check, same one
+the text table's STATUS column reads; \fBreconcile\fR re\-applies first.
+Same \fBdns config\fR exception as above: the REST API's \fBGET
+/api/upstreams\fR and \fBPOST /api/upstreams/reconcile\fR instead return
+the untagged \fBupstream.Config\fR plus a \fBwarning\fR string \(en the
+CLI needs the live per\-upstream \fBup\fR flag REST has no field for, so
+this is the one other upstream surface where the two shapes don't match.
 .TP
 .B upstream status
 \fB{enabled, nftVersion, nftPath, default}\fR \(en version/path pair omitted
