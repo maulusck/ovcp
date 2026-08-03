@@ -30,6 +30,20 @@ import (
 	"github.com/ovcp/ovcp/internal/upstream"
 )
 
+// opBody is one op's flag-registration + closure — the shape every op with
+// its own flags is written in, real dispatch and completion alike, so a
+// flag is only ever declared once. Same shape as command.run itself, one
+// level down.
+type opBody = func(fs *flag.FlagSet) func(ctx *cliContext)
+
+// nestedDispatch describes an op that is itself an op-of-op dispatch (only
+// "config" today: `vpn config get|set`, etc) — completion's own copy of
+// what opDispatch already drives for real execution.
+type nestedDispatch struct {
+	ops    []string
+	bodies map[string]opBody
+}
+
 // command is one subcommand: run registers flags on fs, returning the closure
 // executed once parsed. commands is the single dispatch source. 3-tier help:
 // `-h` (desc), `<command> -h` (subDesc), `<command> <op> -h` (fs.PrintDefaults()).
@@ -40,16 +54,37 @@ type command struct {
 	sub     []string
 	subDesc map[string]string
 	run     func(fs *flag.FlagSet) func(ctx *cliContext)
+
+	// opBodies/nested back completion for ops below this command — the same
+	// bodies maps (opDispatch) or factories real dispatch already runs
+	// through, never a second declaration of the same flags. Both nil for a
+	// command with no op-level flags to complete.
+	opBodies map[string]opBody
+	nested   map[string]nestedDispatch
 }
 
-// flagNames registers c's flags on a throwaway FlagSet (same code path as
-// real parsing, just never Parse'd or executed) and reads the names back.
-func (c command) flagNames() []string {
-	fs := newFlags(c.name)
-	c.run(fs)
+// registeredFlagNames calls register on a throwaway FlagSet (same code path
+// as real parsing, just never Parse'd or executed) and reads the flag names
+// back — the one trick both command- and op-level completion use.
+func registeredFlagNames(register opBody) []string {
+	fs := newFlags("")
+	register(fs)
 	var names []string
 	fs.VisitAll(func(f *flag.Flag) { names = append(names, "-"+f.Name) })
 	return names
+}
+
+// flagNames is registeredFlagNames for c's own top-level flags.
+func (c command) flagNames() []string { return registeredFlagNames(c.run) }
+
+// opBodiesFlagNames is registeredFlagNames for one op inside a bodies map —
+// nil (no completion) if op isn't in bodies at all.
+func opBodiesFlagNames(bodies map[string]opBody, op string) []string {
+	body, ok := bodies[op]
+	if !ok {
+		return nil
+	}
+	return registeredFlagNames(body)
 }
 
 // opsUsage renders tier 2: "usage: ovcp <name> <op>" plus one line per op
@@ -83,10 +118,13 @@ func opArg(fs *flag.FlagSet, name string, ops []string, desc map[string]string) 
 	return opArgList(name, ops, desc, fs.Args())
 }
 
-// configOp is every "<name> config get|set[|preview|edit]" dispatch: same
-// wiring reused by vpn/dns/logs/stats/telegram instead of five hand-rolled
-// copies. bodies must have one entry per ops.
-func configOp(name string, ops []string, desc map[string]string, bodies map[string]func(fs *flag.FlagSet) func(ctx *cliContext)) func(ctx *cliContext, rest []string) {
+// opDispatch is one op-dispatch level's real execution: pick op from rest,
+// register its own flags via bodies[op] (a throwaway FlagSet is exactly
+// what completion also runs bodies[op] against — one declaration, both
+// uses), parse, run. Originally just the "<name> config get|set[|preview]"
+// wiring (vpn/dns/logs/stats/telegram all share it); now every op-dispatched
+// command's whole op switch, not "config" only.
+func opDispatch(name string, ops []string, desc map[string]string, bodies map[string]opBody) func(ctx *cliContext, rest []string) {
 	return func(ctx *cliContext, rest []string) {
 		op, crest := opArgList(name, ops, desc, rest)
 		ofs := newFlags(name + " " + op)
@@ -193,19 +231,19 @@ var (
 // full prose lives in ovcp(8), not here.
 var commands = []command{
 	{name: "init", desc: "one-shot setup: CA, server cert, admin user", run: cmdInit},
-	{name: "certificate", alias: "cert", desc: "issue, list, revoke, renew certs", sub: certOps, subDesc: certOpDesc, run: cmdCertificate},
-	{name: "ca", desc: "CA passphrase rotation or cert renewal, CLI-only", sub: caOps, subDesc: caOpDesc, run: cmdCA},
-	{name: "backup", desc: "encrypted export/import: CA, config, database", sub: backupOps, subDesc: backupOpDesc, run: cmdBackup},
+	{name: "certificate", alias: "cert", desc: "issue, list, revoke, renew certs", sub: certOps, subDesc: certOpDesc, run: cmdCertificate, opBodies: certBodies},
+	{name: "ca", desc: "CA passphrase rotation or cert renewal, CLI-only", sub: caOps, subDesc: caOpDesc, run: cmdCA, opBodies: caBodies},
+	{name: "backup", desc: "encrypted export/import: CA, config, database", sub: backupOps, subDesc: backupOpDesc, run: cmdBackup, opBodies: backupBodies},
 	{name: "status", desc: "full-system overview: vpn, dns, certs, telegram", run: cmdStatus},
-	{name: "stats", desc: "traffic history, live follow, sampling config", run: cmdStats},
-	{name: "vpn", desc: "manage the openvpn worker", sub: vpnOps, subDesc: vpnOpDesc, run: cmdVPN},
-	{name: "dns", desc: "manage the dnsmasq worker", sub: dnsOps, subDesc: dnsOpDesc, run: cmdDNS},
-	{name: "record", desc: "manage internal DNS records", sub: recordOps, subDesc: recordOpDesc, run: cmdRecord},
-	{name: "upstream", desc: "policy-route VPN egress through a chosen interface", sub: upstreamOps, subDesc: upstreamOpDesc, run: cmdUpstream},
-	{name: "logs", desc: "log rotation for openvpn/ovcp/dnsmasq logs", sub: logsOps, subDesc: logsOpDesc, run: cmdLogs},
-	{name: "debug", desc: "toggle verbose logging on a running serve", sub: debugOps, subDesc: debugOpDesc, run: cmdDebug},
-	{name: "telegram", desc: "notify + control bot", sub: telegramOps, subDesc: telegramOpDesc, run: cmdTelegram},
-	{name: "user", desc: "manage admin UI accounts", sub: userOps, subDesc: userOpDesc, run: cmdUser},
+	{name: "stats", desc: "traffic history, live follow, sampling config", run: cmdStats, nested: statsNested},
+	{name: "vpn", desc: "manage the openvpn worker", sub: vpnOps, subDesc: vpnOpDesc, run: cmdVPN, opBodies: vpnBodies, nested: vpnNested},
+	{name: "dns", desc: "manage the dnsmasq worker", sub: dnsOps, subDesc: dnsOpDesc, run: cmdDNS, opBodies: dnsBodies, nested: dnsNested},
+	{name: "record", desc: "manage internal DNS records", sub: recordOps, subDesc: recordOpDesc, run: cmdRecord, opBodies: recordBodies},
+	{name: "upstream", desc: "route VPN egress through a chosen interface or SOCKS proxy", sub: upstreamOps, subDesc: upstreamOpDesc, run: cmdUpstream, opBodies: upstreamBodies},
+	{name: "logs", desc: "log rotation for openvpn/ovcp/dnsmasq logs", sub: logsOps, subDesc: logsOpDesc, run: cmdLogs, nested: logsNested},
+	{name: "debug", desc: "toggle verbose logging on a running serve", sub: debugOps, subDesc: debugOpDesc, run: cmdDebug, opBodies: debugBodies},
+	{name: "telegram", desc: "notify + control bot", sub: telegramOps, subDesc: telegramOpDesc, run: cmdTelegram, opBodies: telegramBodies, nested: telegramNested},
+	{name: "user", desc: "manage admin UI accounts", sub: userOps, subDesc: userOpDesc, run: cmdUser, opBodies: userBodies},
 	{name: "audit", desc: "last 50 audit entries", run: cmdAudit},
 	{name: "serve", desc: "run admin UI + API", run: cmdServe},
 	{name: "version", desc: "print version", run: cmdVersion},
@@ -221,26 +259,15 @@ func subUsage(fs *flag.FlagSet, path string) {
 	}
 }
 
-// cmdCertificate wraps the certificate lifecycle ops: issue (client,
+// certBodies wires certificate's ops through opDispatch — issue (client,
 // create+renew+export), list, revoke, renew (server only — see cmdRenew).
+var certBodies = map[string]opBody{
+	"issue": cmdIssue, "list": cmdList, "revoke": cmdRevoke, "renew": cmdRenew,
+}
+
 func cmdCertificate(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "certificate", certOps, certOpDesc)
-		cfs := newFlags("certificate " + op)
-		subUsage(cfs, "certificate "+op)
-		var body func(ctx *cliContext)
-		switch op {
-		case "issue":
-			body = cmdIssue(cfs)
-		case "list":
-			body = cmdList(cfs)
-		case "revoke":
-			body = cmdRevoke(cfs)
-		case "renew":
-			body = cmdRenew(cfs)
-		}
-		cfs.Parse(rest)
-		body(ctx)
+		opDispatch("certificate", certOps, certOpDesc, certBodies)(ctx, fs.Args())
 	}
 }
 
@@ -924,87 +951,85 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// cmdRecord manages the Records tab: list certs.hosts/custom.hosts, edit
-// custom.hosts in $EDITOR, or include/exclude a CN (mirrors `user enable|disable`).
-func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
+func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
+	status := lfs.String("status", "all", "all|active|revoked")
+	kind := lfs.String("kind", "all", "all|client|server")
+	sortBy := lfs.String("sort", "", "cn|kind|expiry|serial|status (default: issued order)")
+	desc := lfs.Bool("desc", false, "reverse sort order")
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "record", recordOps, recordOpDesc)
 		pp := dataPaths(ctx.dataDir)
-		gid := dnsGID(dnsRunAsGroup())
-		ctx.openStore().Close() // guarantees dns/ (and everything else) exists before any op below touches it
-		switch op {
-		case "list":
-			lfs := newFlags("record list")
-			status := lfs.String("status", "all", "all|active|revoked")
-			kind := lfs.String("kind", "all", "all|client|server")
-			sortBy := lfs.String("sort", "", "cn|kind|expiry|serial|status (default: issued order)")
-			desc := lfs.Bool("desc", false, "reverse sort order")
-			lfs.Parse(rest)
-			s := ctx.openStore()
-			certs, err := s.ListCerts()
-			raw, _ := s.GetSetting("vpn_config")
-			s.Close()
-			die(err)
-			out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
-			die(err)
-			customData, _ := os.ReadFile(pp.CustomHosts)
-			// liveIP: CN -> resolvable IP right now.
-			liveIP := map[string]string{}
-			if live, err := controller.Clients(ctrlSock()); err == nil {
-				for _, cl := range live {
-					if cl.VirtualAddress != "" {
-						liveIP[cl.CN] = cl.VirtualAddress
-					}
+		s := ctx.openStore()
+		certs, err := s.ListCerts()
+		raw, _ := s.GetSetting("vpn_config")
+		s.Close()
+		die(err)
+		out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
+		die(err)
+		customData, _ := os.ReadFile(pp.CustomHosts)
+		// liveIP: CN -> resolvable IP right now.
+		liveIP := map[string]string{}
+		if live, err := controller.Clients(ctrlSock()); err == nil {
+			for _, cl := range live {
+				if cl.VirtualAddress != "" {
+					liveIP[cl.CN] = cl.VirtualAddress
 				}
 			}
-			if ip, err := ovpnconf.Load(raw).ServerTunIP(); err == nil {
-				liveIP[adminCertCN(ctx.dataDir)] = ip.String()
-			}
-			rows := []recordOut{}
-			for _, c := range out {
-				rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS, liveIP[c.CN]})
-			}
-			output(recordListOut{rows, string(customData)}, func(o recordListOut) {
-				fmt.Println("Certificate records:")
-				fmt.Printf("%-*s %-10s %-24s %-18s %-*s %s\n", statusWidth, "STATUS", "KIND", "CN", "EXPIRES", statusWidth, "DNS", "SERIAL")
-				for _, r := range o.Certs {
-					text := "excluded"
-					if r.IncludeDNS {
-						text = "included"
-						if r.IP != "" {
-							text = r.IP
-						}
+		}
+		if ip, err := ovpnconf.Load(raw).ServerTunIP(); err == nil {
+			liveIP[adminCertCN(ctx.dataDir)] = ip.String()
+		}
+		rows := []recordOut{}
+		for _, c := range out {
+			rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS, liveIP[c.CN]})
+		}
+		output(recordListOut{rows, string(customData)}, func(o recordListOut) {
+			fmt.Println("Certificate records:")
+			fmt.Printf("%-*s %-10s %-24s %-18s %-*s %s\n", statusWidth, "STATUS", "KIND", "CN", "EXPIRES", statusWidth, "DNS", "SERIAL")
+			for _, r := range o.Certs {
+				text := "excluded"
+				if r.IncludeDNS {
+					text = "included"
+					if r.IP != "" {
+						text = r.IP
 					}
-					dns := fmt.Sprintf("%-*s", statusWidth, text) // pad first: color codes must not count toward width
-					if r.IncludeDNS {
-						dns = green(dns)
-					}
-					fmt.Printf("%s %-10s %-24s expires %s  %s  %s\n",
-						coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial)
 				}
-				fmt.Println("Custom records:")
-				fmt.Print(o.Custom)
-			})
-
-		case "edit":
-			efs := newFlags("record edit")
-			efs.Parse(rest)
-			cur, _ := os.ReadFile(pp.CustomHosts)
-			out, changed := editText(string(cur))
-			if !changed {
-				output(msg("no change"), printMsg)
-				return
+				dns := fmt.Sprintf("%-*s", statusWidth, text) // pad first: color codes must not count toward width
+				if r.IncludeDNS {
+					dns = green(dns)
+				}
+				fmt.Printf("%s %-10s %-24s expires %s  %s  %s\n",
+					coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial)
 			}
-			die(api.WriteAtomicHosts(pp.CustomHosts, []byte(out), gid))
-			s := ctx.openStore()
-			s.Audit("cli", "dns_custom_change", "")
-			s.Close()
-			output(msg("saved"), printMsg)
+			fmt.Println("Custom records:")
+			fmt.Print(o.Custom)
+		})
+	}
+}
 
-		case "include", "exclude":
-			ifs := newFlags("record " + op)
-			cn := ifs.String("cn", "", "certificate CN (required)")
-			ifs.Parse(rest)
+func cmdRecordEdit(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		pp := dataPaths(ctx.dataDir)
+		ctx.openStore().Close() // guarantees dns/ (and everything else) exists before the read/write below
+		cur, _ := os.ReadFile(pp.CustomHosts)
+		out, changed := editText(string(cur))
+		if !changed {
+			output(msg("no change"), printMsg)
+			return
+		}
+		die(api.WriteAtomicHosts(pp.CustomHosts, []byte(out), dnsGID(dnsRunAsGroup())))
+		s := ctx.openStore()
+		s.Audit("cli", "dns_custom_change", "")
+		s.Close()
+		output(msg("saved"), printMsg)
+	}
+}
+
+// cmdRecordIncludeExclude: one body shared by both ops (mirrors `user
+// enable|disable`), parameterized by op since the only difference is which.
+func cmdRecordIncludeExclude(op string) opBody {
+	return func(ifs *flag.FlagSet) func(ctx *cliContext) {
+		cn := ifs.String("cn", "", "certificate CN (required)")
+		return func(ctx *cliContext) {
 			if *cn == "" {
 				die(fmt.Errorf("-cn required"))
 			}
@@ -1026,6 +1051,20 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 			s.Audit("cli", "cert_dns_"+op, "cn="+*cn+" serial="+c.Serial)
 			output(msg("%sd: %s", op, *cn), printMsg)
 		}
+	}
+}
+
+// recordBodies wires record's ops through opDispatch.
+var recordBodies = map[string]opBody{
+	"list": cmdRecordList, "edit": cmdRecordEdit,
+	"include": cmdRecordIncludeExclude("include"), "exclude": cmdRecordIncludeExclude("exclude"),
+}
+
+// cmdRecord manages the Records tab: list certs.hosts/custom.hosts, edit
+// custom.hosts in $EDITOR, or include/exclude a CN (mirrors `user enable|disable`).
+func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		opDispatch("record", recordOps, recordOpDesc, recordBodies)(ctx, fs.Args())
 	}
 }
 
@@ -1080,8 +1119,9 @@ type upstreamStatusOut struct {
 type upstreamOut struct {
 	ID          string `json:"id"`
 	Up          bool   `json:"up"`
-	Iface       string `json:"iface"`
+	Iface       string `json:"iface,omitempty"`
 	Gateway     string `json:"gateway,omitempty"`
+	SOCKS       string `json:"socks,omitempty"`
 	Table       int    `json:"table"`
 	Description string `json:"description,omitempty"`
 }
@@ -1097,7 +1137,7 @@ type upstreamListOut struct {
 func buildUpstreamListOut(cfg upstream.Config) upstreamListOut {
 	rows := make([]upstreamOut, len(cfg.Upstreams))
 	for i, u := range cfg.Upstreams {
-		rows[i] = upstreamOut{u.ID, upstream.IfaceExists(u.Iface), u.Iface, u.Gateway, u.Table, u.Description}
+		rows[i] = upstreamOut{u.ID, u.IsUp(), u.Iface, u.Gateway, upstream.RedactSOCKS(u.SOCKS), u.Table, u.Description}
 	}
 	return upstreamListOut{rows, cfg.Default, cfg.PerCN}
 }
@@ -1110,191 +1150,230 @@ func upStatus(up bool) string {
 	return "down"
 }
 
-func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
+func cmdUpstreamStatus(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "upstream", upstreamOps, upstreamOpDesc)
 		s := ctx.openStore()
 		defer s.Close()
-		switch op {
-		case "status":
-			ver, path, ok := controller.NftablesVersion()
-			out := upstreamStatusOut{
-				Enabled:    ok && os.Getenv("OVCP_UPSTREAMS_ENABLED") != "false",
-				NftVersion: ver, NftPath: path, Default: api.LoadUpstreamConfig(s).Default,
-			}
-			output(out, func(o upstreamStatusOut) {
-				if !o.Enabled {
-					fmt.Println("upstreams: disabled (nftables not found, or OVCP_UPSTREAMS_ENABLED=false)")
-					return
-				}
-				fmt.Println("upstreams: enabled,", o.NftVersion)
-				if o.Default == "" {
-					fmt.Println("default: off (host's own default route)")
-				} else {
-					fmt.Println("default:", o.Default)
-				}
-			})
-
-		case "list":
-			cfg := api.LoadUpstreamConfig(s)
-			output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
-				fmt.Println("Upstreams:")
-				fmt.Printf("%-14s %-*s %-10s %-15s %-6s %s\n", "ID", statusWidth, "STATUS", "IFACE", "GATEWAY", "TABLE", "DESCRIPTION")
-				for _, u := range r.Upstreams {
-					gw := u.Gateway
-					if gw == "" {
-						gw = "onlink"
-					}
-					mark := ""
-					if u.ID == r.Default {
-						mark = green(" (default)")
-					}
-					fmt.Printf("%-14s %s %-10s %-15s %-6d %s%s\n", u.ID, coloredStatus(upStatus(u.Up)), u.Iface, gw, u.Table, u.Description, mark)
-				}
-				if len(r.PerCN) > 0 {
-					cns := make([]string, 0, len(r.PerCN))
-					for cn := range r.PerCN {
-						cns = append(cns, cn)
-					}
-					slices.Sort(cns)
-					fmt.Println("Per-CN overrides:")
-					fmt.Printf("%-24s %s\n", "CN", "UPSTREAM")
-					for _, cn := range cns {
-						fmt.Printf("%-24s %s\n", cn, r.PerCN[cn])
-					}
-				}
-			})
-
-		case "add":
-			upstreamsReady()
-			afs := newFlags("upstream add")
-			id := afs.String("id", "", "short name (required)")
-			iface := afs.String("iface", "", "egress interface, e.g. eth1, wg0 (required)")
-			gateway := afs.String("gateway", "", "next-hop IP (empty = onlink)")
-			desc := afs.String("desc", "", "description")
-			afs.Parse(rest)
-			if *id == "" || *iface == "" {
-				die(fmt.Errorf("-id and -iface required"))
-			}
-			cfg, added, err := api.LoadUpstreamConfig(s).WithAdded(upstream.Upstream{
-				ID: *id, Iface: *iface, Gateway: *gateway, Description: *desc,
-			})
-			die(err)
-			die(api.SaveUpstreamConfig(s, cfg))
-			warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
-			s.Audit("cli", "upstream_add", *id)
-			output(msg("added: %s (table %d)", *id, added.Table), printMsg)
-
-		case "del":
-			upstreamsReady()
-			dfs := newFlags("upstream del")
-			id := dfs.String("id", "", "upstream id (required)")
-			dfs.Parse(rest)
-			if *id == "" {
-				die(fmt.Errorf("-id required"))
-			}
-			cfg, found := api.LoadUpstreamConfig(s).Without(*id)
-			if !found {
-				die(fmt.Errorf("upstream %q not found", *id))
-			}
-			die(api.SaveUpstreamConfig(s, cfg))
-			warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
-			s.Audit("cli", "upstream_del", *id)
-			output(msg("deleted: %s", *id), printMsg)
-
-		case "set-default":
-			upstreamsReady()
-			sfs := newFlags("upstream set-default")
-			id := sfs.String("id", "", "upstream id, empty turns it off")
-			clear := sfs.Bool("clear", false, "turn off the default (same as -id \"\")")
-			sfs.Parse(rest)
-			if *clear {
-				*id = ""
-			}
-			cfg, err := api.LoadUpstreamConfig(s).SetDefault(*id)
-			die(err)
-			die(api.SaveUpstreamConfig(s, cfg))
-			warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
-			action := "upstream_default_set"
-			if *id == "" {
-				action = "upstream_default_off"
-			}
-			s.Audit("cli", action, *id)
-			text := "default: " + *id
-			if *id == "" {
-				text = "default: off (host's own default route)"
-			}
-			output(msg("%s", text), printMsg)
-
-		case "assign":
-			upstreamsReady()
-			afs := newFlags("upstream assign")
-			cn := afs.String("cn", "", "client CN (required)")
-			id := afs.String("id", "", "upstream id to assign")
-			clear := afs.Bool("clear", false, "clear this CN's override, fall back to default")
-			ctrl := ctrlFlag(afs, "")
-			afs.Parse(rest)
-			if *cn == "" {
-				die(fmt.Errorf("-cn required"))
-			}
-			if *clear == (*id != "") {
-				die(fmt.Errorf("exactly one of -id or -clear required"))
-			}
-			before := api.UpstreamAuthActive(s)
-			cfg, err := api.LoadUpstreamConfig(s).Assign(*cn, *id, *clear)
-			die(err)
-			die(api.SaveUpstreamConfig(s, cfg))
-			if after := api.UpstreamAuthActive(s); before != after {
-				regenManagementClientAuthCLI(ctx, s, after)
-				if after {
-					// management-client-auth is a config-file directive:
-					// the already-running openvpn won't pick it up until
-					// restarted, so per-CN routing stays inactive until then.
-					warnUpstream("run `ovcp vpn restart` to activate per-CN routing")
-				}
-			}
-			action := "upstream_assign"
-			if *clear {
-				action = "upstream_unassign"
-			}
-			s.Audit("cli", action, *cn)
-			// Best-effort: instantly rewrites an already-connected client's live
-			// rule; unreachable serve just means it applies on next reconnect.
-			if err := controller.UpstreamAssign(*ctrl, *cn); err != nil {
-				slog.Warn("upstream assign: live rewrite skipped", "cn", *cn, "err", err)
-			}
-			text := fmt.Sprintf("assigned: %s -> %s", *cn, *id)
-			if *clear {
-				text = "cleared: " + *cn
-			}
-			output(msg("%s", text), printMsg)
-
-		case "reconcile":
-			upstreamsReady()
-			rfs := newFlags("upstream reconcile")
-			ctrl := ctrlFlag(rfs, "")
-			rfs.Parse(rest)
-			cfg := api.LoadUpstreamConfig(s)
-			warnUpstream(applyUpstreamsCLI(s, cfg, *ctrl))
-			s.Audit("cli", "upstream_reconcile", "")
-			output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
-				inUse := make(map[string]bool, len(r.PerCN)+1)
-				if r.Default != "" {
-					inUse[r.Default] = true
-				}
-				for _, id := range r.PerCN {
-					inUse[id] = true
-				}
-				fmt.Printf("%-14s %-*s %s\n", "ID", statusWidth, "STATUS", "NOTE")
-				for _, u := range r.Upstreams {
-					note := ""
-					if !u.Up && inUse[u.ID] {
-						note = "actively routed, traffic is being kill-switched"
-					}
-					fmt.Printf("%-14s %s %s\n", u.ID, coloredStatus(upStatus(u.Up)), note)
-				}
-			})
+		ver, path, ok := controller.NftablesVersion()
+		out := upstreamStatusOut{
+			Enabled:    ok && os.Getenv("OVCP_UPSTREAMS_ENABLED") != "false",
+			NftVersion: ver, NftPath: path, Default: api.LoadUpstreamConfig(s).Default,
 		}
+		output(out, func(o upstreamStatusOut) {
+			if !o.Enabled {
+				fmt.Println("upstreams: disabled (nftables not found, or OVCP_UPSTREAMS_ENABLED=false)")
+				return
+			}
+			fmt.Println("upstreams: enabled,", o.NftVersion)
+			if o.Default == "" {
+				fmt.Println("default: off (host's own default route)")
+			} else {
+				fmt.Println("default:", o.Default)
+			}
+		})
+	}
+}
+
+func cmdUpstreamList(_ *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		s := ctx.openStore()
+		defer s.Close()
+		cfg := api.LoadUpstreamConfig(s)
+		output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
+			fmt.Println("Upstreams:")
+			fmt.Printf("%-14s %-*s %-10s %-15s %-6s %s\n", "ID", statusWidth, "STATUS", "IFACE", "GATEWAY", "TABLE", "DESCRIPTION")
+			for _, u := range r.Upstreams {
+				iface, gw, extra := u.Iface, u.Gateway, ""
+				if gw == "" {
+					gw = "onlink"
+				}
+				if u.SOCKS != "" {
+					iface, gw, extra = "(socks)", "-", " "+u.SOCKS
+				}
+				mark := ""
+				if u.ID == r.Default {
+					mark = green(" (default)")
+				}
+				fmt.Printf("%-14s %s %-10s %-15s %-6d %s%s%s\n", u.ID, coloredStatus(upStatus(u.Up)), iface, gw, u.Table, u.Description, extra, mark)
+			}
+			if len(r.PerCN) > 0 {
+				cns := make([]string, 0, len(r.PerCN))
+				for cn := range r.PerCN {
+					cns = append(cns, cn)
+				}
+				slices.Sort(cns)
+				fmt.Println("Per-CN overrides:")
+				fmt.Printf("%-24s %s\n", "CN", "UPSTREAM")
+				for _, cn := range cns {
+					fmt.Printf("%-24s %s\n", cn, r.PerCN[cn])
+				}
+			}
+		})
+	}
+}
+
+func cmdUpstreamAdd(afs *flag.FlagSet) func(ctx *cliContext) {
+	id := afs.String("id", "", "short name (required)")
+	iface := afs.String("iface", "", "egress interface, e.g. eth1, wg0")
+	gateway := afs.String("gateway", "", "next-hop IP (empty = onlink); -iface mode only")
+	socks := afs.String("socks", "", "socks5://[user:pass@]host:port backend (Tor, proxychains, self-hosted); mutually exclusive with -iface/-gateway")
+	desc := afs.String("desc", "", "description")
+	return func(ctx *cliContext) {
+		upstreamsReady()
+		if *id == "" {
+			die(fmt.Errorf("-id required"))
+		}
+		if (*iface == "") == (*socks == "") {
+			die(fmt.Errorf("exactly one of -iface or -socks required"))
+		}
+		if *socks != "" && *gateway != "" {
+			die(fmt.Errorf("-gateway is not valid with -socks"))
+		}
+		s := ctx.openStore()
+		defer s.Close()
+		cfg, added, err := api.LoadUpstreamConfig(s).WithAdded(upstream.Upstream{
+			ID: *id, Iface: *iface, Gateway: *gateway, SOCKS: *socks, Description: *desc,
+		})
+		die(err)
+		die(api.SaveUpstreamConfig(s, cfg))
+		warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
+		s.Audit("cli", "upstream_add", *id)
+		output(msg("added: %s (table %d)", *id, added.Table), printMsg)
+	}
+}
+
+func cmdUpstreamDel(dfs *flag.FlagSet) func(ctx *cliContext) {
+	id := dfs.String("id", "", "upstream id (required)")
+	return func(ctx *cliContext) {
+		upstreamsReady()
+		if *id == "" {
+			die(fmt.Errorf("-id required"))
+		}
+		s := ctx.openStore()
+		defer s.Close()
+		cfg, found := api.LoadUpstreamConfig(s).Without(*id)
+		if !found {
+			die(fmt.Errorf("upstream %q not found", *id))
+		}
+		die(api.SaveUpstreamConfig(s, cfg))
+		warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
+		s.Audit("cli", "upstream_del", *id)
+		output(msg("deleted: %s", *id), printMsg)
+	}
+}
+
+func cmdUpstreamSetDefault(sfs *flag.FlagSet) func(ctx *cliContext) {
+	id := sfs.String("id", "", "upstream id, empty turns it off")
+	clear := sfs.Bool("clear", false, "turn off the default (same as -id \"\")")
+	return func(ctx *cliContext) {
+		upstreamsReady()
+		if *clear {
+			*id = ""
+		}
+		s := ctx.openStore()
+		defer s.Close()
+		cfg, err := api.LoadUpstreamConfig(s).SetDefault(*id)
+		die(err)
+		die(api.SaveUpstreamConfig(s, cfg))
+		warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
+		action := "upstream_default_set"
+		if *id == "" {
+			action = "upstream_default_off"
+		}
+		s.Audit("cli", action, *id)
+		text := "default: " + *id
+		if *id == "" {
+			text = "default: off (host's own default route)"
+		}
+		output(msg("%s", text), printMsg)
+	}
+}
+
+func cmdUpstreamAssign(afs *flag.FlagSet) func(ctx *cliContext) {
+	cn := afs.String("cn", "", "client CN (required)")
+	id := afs.String("id", "", "upstream id to assign")
+	clear := afs.Bool("clear", false, "clear this CN's override, fall back to default")
+	ctrl := ctrlFlag(afs, "")
+	return func(ctx *cliContext) {
+		upstreamsReady()
+		if *cn == "" {
+			die(fmt.Errorf("-cn required"))
+		}
+		if *clear == (*id != "") {
+			die(fmt.Errorf("exactly one of -id or -clear required"))
+		}
+		s := ctx.openStore()
+		defer s.Close()
+		before := api.UpstreamAuthActive(s)
+		cfg, err := api.LoadUpstreamConfig(s).Assign(*cn, *id, *clear)
+		die(err)
+		die(api.SaveUpstreamConfig(s, cfg))
+		if after := api.UpstreamAuthActive(s); before != after {
+			regenManagementClientAuthCLI(ctx, s, after)
+			if after {
+				// management-client-auth is a config-file directive:
+				// the already-running openvpn won't pick it up until
+				// restarted, so per-CN routing stays inactive until then.
+				warnUpstream("run `ovcp vpn restart` to activate per-CN routing")
+			}
+		}
+		action := "upstream_assign"
+		if *clear {
+			action = "upstream_unassign"
+		}
+		s.Audit("cli", action, *cn)
+		// Best-effort: instantly rewrites an already-connected client's live
+		// rule; unreachable serve just means it applies on next reconnect.
+		if err := controller.UpstreamAssign(*ctrl, *cn); err != nil {
+			slog.Warn("upstream assign: live rewrite skipped", "cn", *cn, "err", err)
+		}
+		text := fmt.Sprintf("assigned: %s -> %s", *cn, *id)
+		if *clear {
+			text = "cleared: " + *cn
+		}
+		output(msg("%s", text), printMsg)
+	}
+}
+
+func cmdUpstreamReconcile(rfs *flag.FlagSet) func(ctx *cliContext) {
+	ctrl := ctrlFlag(rfs, "")
+	return func(ctx *cliContext) {
+		upstreamsReady()
+		s := ctx.openStore()
+		defer s.Close()
+		cfg := api.LoadUpstreamConfig(s)
+		warnUpstream(applyUpstreamsCLI(s, cfg, *ctrl))
+		s.Audit("cli", "upstream_reconcile", "")
+		output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
+			inUse := make(map[string]bool, len(r.PerCN)+1)
+			if r.Default != "" {
+				inUse[r.Default] = true
+			}
+			for _, id := range r.PerCN {
+				inUse[id] = true
+			}
+			fmt.Printf("%-14s %-*s %s\n", "ID", statusWidth, "STATUS", "NOTE")
+			for _, u := range r.Upstreams {
+				note := ""
+				if !u.Up && inUse[u.ID] {
+					note = "actively routed, traffic is being kill-switched"
+				}
+				fmt.Printf("%-14s %s %s\n", u.ID, coloredStatus(upStatus(u.Up)), note)
+			}
+		})
+	}
+}
+
+// upstreamBodies wires upstream's ops through opDispatch.
+var upstreamBodies = map[string]opBody{
+	"status": cmdUpstreamStatus, "list": cmdUpstreamList, "add": cmdUpstreamAdd,
+	"del": cmdUpstreamDel, "set-default": cmdUpstreamSetDefault,
+	"assign": cmdUpstreamAssign, "reconcile": cmdUpstreamReconcile,
+}
+
+func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		opDispatch("upstream", upstreamOps, upstreamOpDesc, upstreamBodies)(ctx, fs.Args())
 	}
 }
 
@@ -1321,28 +1400,49 @@ func activeCertByCN(certs []store.Cert, cn string) (store.Cert, bool) {
 	return store.Cert{}, false
 }
 
-// runProcOp executes one already-resolved lifecycle op (start/stop/restart/
-// reconnect/status) against the control socket — shared by procCmd (dns) and
-// cmdVPN (vpn, which special-cases kill before falling through to this).
-func runProcOp(ctx *cliContext, name, op string, rest []string, wirePrefix string) {
-	ofs := newFlags(name + " " + op)
-	ctrl := ctrlFlag(ofs, "")
-	ofs.Parse(rest)
-	r, err := controller.Control(*ctrl, wirePrefix+op)
-	die(err)
-	if op != "status" { // status is read-only, don't audit
-		s := ctx.openStore()
-		s.Audit("cli", name+"_"+op, fmt.Sprintf("pid=%d", r.Pid))
-		s.Close()
+// procOpBody registers one already-resolved lifecycle op's (start/stop/
+// restart/reconnect/status) one flag (-ctrl) and returns its closure — the
+// one place that flag is declared, real dispatch (runProcOp) and completion
+// (opBodies) alike.
+func procOpBody(name, op, wirePrefix string) opBody {
+	return func(fs *flag.FlagSet) func(ctx *cliContext) {
+		ctrl := ctrlFlag(fs, "")
+		return func(ctx *cliContext) {
+			r, err := controller.Control(*ctrl, wirePrefix+op)
+			die(err)
+			if op != "status" { // status is read-only, don't audit
+				s := ctx.openStore()
+				s.Audit("cli", name+"_"+op, fmt.Sprintf("pid=%d", r.Pid))
+				s.Close()
+			}
+			output(r, func(r controller.ControlResult) { printProcText(name, op, r) })
+		}
 	}
-	output(r, func(r controller.ControlResult) { printProcText(name, op, r) })
 }
 
-// dnsConfigBodies wires dns's config sub-ops through configOp — same
+// runProcOp executes one already-resolved lifecycle op against the control
+// socket — shared by procCmd (dns) and cmdVPN (vpn, which special-cases
+// kill/config before falling through to this).
+func runProcOp(ctx *cliContext, name, op string, rest []string, wirePrefix string) {
+	ofs := newFlags(name + " " + op)
+	body := procOpBody(name, op, wirePrefix)(ofs)
+	ofs.Parse(rest)
+	body(ctx)
+}
+
+// dnsConfigBodies wires dns's config sub-ops through opDispatch — same
 // GET/POST /api/dns/config the web UI's Records tab uses.
-var dnsConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+var dnsConfigBodies = map[string]opBody{
 	"get": cmdDNSConfigGet, "set": cmdDNSConfigSet,
 }
+
+// dnsBodies/dnsNested back completion for dns's ops — same procOpBody/
+// dnsConfigBodies real dispatch already runs through.
+var dnsBodies = map[string]opBody{
+	"start": procOpBody("dns", "start", "dns-"), "stop": procOpBody("dns", "stop", "dns-"),
+	"restart": procOpBody("dns", "restart", "dns-"), "status": procOpBody("dns", "status", "dns-"),
+}
+var dnsNested = map[string]nestedDispatch{"config": {ops: dnsConfigOps, bodies: dnsConfigBodies}}
 
 // cmdDNS drives the dnsmasq worker's lifecycle, plus `config` (settings, not
 // a lifecycle op) — mirrors cmdVPN's kill/config special-cases.
@@ -1350,7 +1450,7 @@ func cmdDNS(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		op, rest := opArg(fs, "dns", dnsOps, dnsOpDesc)
 		if op == "config" {
-			configOp("dns config", dnsConfigOps, configOpDesc, dnsConfigBodies)(ctx, rest)
+			opDispatch("dns config", dnsConfigOps, configOpDesc, dnsConfigBodies)(ctx, rest)
 			return
 		}
 		runProcOp(ctx, "dns", op, rest, "dns-")
@@ -1403,13 +1503,22 @@ func cmdDNSConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// vpnConfigBodies wires vpn's config sub-ops through configOp — get/set
+// vpnConfigBodies wires vpn's config sub-ops through opDispatch — get/set
 // mirror the web UI's GET/PUT /api/vpn/config exactly (same ovpnconf.Config,
 // same wire shape).
-var vpnConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+var vpnConfigBodies = map[string]opBody{
 	"get": cmdVPNConfigGet, "set": cmdVPNConfigSet,
 	"preview": cmdVPNConfigPreview,
 }
+
+// vpnBodies/vpnNested back completion for vpn's ops — same procOpBody/
+// cmdKill/vpnConfigBodies real dispatch already runs through.
+var vpnBodies = map[string]opBody{
+	"start": procOpBody("vpn", "start", ""), "stop": procOpBody("vpn", "stop", ""),
+	"restart": procOpBody("vpn", "restart", ""), "reconnect": procOpBody("vpn", "reconnect", ""),
+	"status": procOpBody("vpn", "status", ""), "kill": cmdKill,
+}
+var vpnNested = map[string]nestedDispatch{"config": {ops: vpnConfigOps, bodies: vpnConfigBodies}}
 
 // cmdVPN drives the openvpn worker's lifecycle, plus `kill` (disconnect one
 // client) and `config` (settings, not a lifecycle op) — both keep their own
@@ -1425,7 +1534,7 @@ func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 			kfs.Parse(rest)
 			body(ctx)
 		case "config":
-			configOp("vpn config", vpnConfigOps, configOpDesc, vpnConfigBodies)(ctx, rest)
+			opDispatch("vpn config", vpnConfigOps, configOpDesc, vpnConfigBodies)(ctx, rest)
 		default:
 			runProcOp(ctx, "vpn", op, rest, "")
 		}
@@ -1687,25 +1796,16 @@ type previewOut struct {
 	Changed bool     `json:"changed"`
 }
 
-// cmdCA wraps the CA-level ops (passphrase rotation, cert renewal) — the
-// most sensitive surface, deliberately CLI-only, kept on its own top-level
-// menu instead of folded into `certificate` (the CA isn't a certs-table row, see store's schema).
+// caBodies wires ca's ops through opDispatch — the most sensitive surface,
+// deliberately CLI-only, kept on its own top-level menu instead of folded
+// into `certificate` (the CA isn't a certs-table row, see store's schema).
+var caBodies = map[string]opBody{
+	"rotate": cmdRotateCA, "renew": cmdRenewCA, "status": cmdCAStatus,
+}
+
 func cmdCA(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "ca", caOps, caOpDesc)
-		cfs := newFlags("ca " + op)
-		subUsage(cfs, "ca "+op)
-		var body func(ctx *cliContext)
-		switch op {
-		case "rotate":
-			body = cmdRotateCA(cfs)
-		case "renew":
-			body = cmdRenewCA(cfs)
-		case "status":
-			body = cmdCAStatus(cfs)
-		}
-		cfs.Parse(rest)
-		body(ctx)
+		opDispatch("ca", caOps, caOpDesc, caBodies)(ctx, fs.Args())
 	}
 }
 
@@ -1769,51 +1869,46 @@ type renewCAOut struct {
 
 // cmdBackup and cmdUser take no top-level flags: opArg's rest is fed to a
 // fresh FlagSet per op, same as vpn/debug/telegram.
-func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
+func cmdBackupCreate(cfs *flag.FlagSet) func(ctx *cliContext) {
+	out := cfs.String("out", "", "output file (default: ovcp-backup-<timestamp>.ovcpbak)")
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "backup", backupOps, backupOpDesc)
-		switch op {
-		case "create":
-			cfs := newFlags("backup create")
-			out := cfs.String("out", "", "output file (default: ovcp-backup-<timestamp>.ovcpbak)")
-			cfs.Parse(rest)
-			if *out == "" {
-				*out = "ovcp-backup-" + time.Now().Format("20060102-150405") + ".ovcpbak"
-			}
-			pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", true)
-			s := ctx.openStore()
-			defer s.Close()
-			f, err := os.Create(*out)
-			die(err)
-			defer f.Close()
-			die(backup.Create(ctx.dataDir, s, f, pass))
-			s.Audit("cli", "backup_create", "file="+*out)
-			output(backupCreateOut{*out}, func(o backupCreateOut) {
-				fmt.Println("backup written:", o.File)
-				fmt.Println("keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
-			})
-
-		case "restore":
-			rfs := newFlags("backup restore")
-			force := rfs.Bool("force", false, "overwrite an already-initialized data directory")
-			rfs.Parse(rest)
-			file := rfs.Arg(0)
-			if file == "" {
-				die(fmt.Errorf("usage: ovcp backup restore [-force] FILE"))
-			}
-			pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", false)
-			f, err := os.Open(file)
-			die(err)
-			defer f.Close()
-			die(backup.Restore(ctx.dataDir, f, pass, *force))
-			output(msg("restored CA, CRL, tls-crypt key, config, and database into %s; "+
-				"next: OVCP_SERVER_CN=<host> ovcp certificate renew, then ovcp vpn start", ctx.dataDir),
-				func(o outcome) {
-					fmt.Println("[1/2] restored CA, CRL, tls-crypt key, config, and database into", ctx.dataDir)
-					fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp certificate renew   (issues the openvpn server cert)")
-					fmt.Println("      then: ovcp vpn start")
-				})
+		if *out == "" {
+			*out = "ovcp-backup-" + time.Now().Format("20060102-150405") + ".ovcpbak"
 		}
+		pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", true)
+		s := ctx.openStore()
+		defer s.Close()
+		f, err := os.Create(*out)
+		die(err)
+		defer f.Close()
+		die(backup.Create(ctx.dataDir, s, f, pass))
+		s.Audit("cli", "backup_create", "file="+*out)
+		output(backupCreateOut{*out}, func(o backupCreateOut) {
+			fmt.Println("backup written:", o.File)
+			fmt.Println("keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
+		})
+	}
+}
+
+func cmdBackupRestore(rfs *flag.FlagSet) func(ctx *cliContext) {
+	force := rfs.Bool("force", false, "overwrite an already-initialized data directory")
+	return func(ctx *cliContext) {
+		file := rfs.Arg(0)
+		if file == "" {
+			die(fmt.Errorf("usage: ovcp backup restore [-force] FILE"))
+		}
+		pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", false)
+		f, err := os.Open(file)
+		die(err)
+		defer f.Close()
+		die(backup.Restore(ctx.dataDir, f, pass, *force))
+		output(msg("restored CA, CRL, tls-crypt key, config, and database into %s; "+
+			"next: OVCP_SERVER_CN=<host> ovcp certificate renew, then ovcp vpn start", ctx.dataDir),
+			func(o outcome) {
+				fmt.Println("[1/2] restored CA, CRL, tls-crypt key, config, and database into", ctx.dataDir)
+				fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp certificate renew   (issues the openvpn server cert)")
+				fmt.Println("      then: ovcp vpn start")
+			})
 	}
 }
 
@@ -1821,23 +1916,42 @@ type backupCreateOut struct {
 	File string `json:"file"`
 }
 
-func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
+// backupBodies wires backup's ops through opDispatch.
+var backupBodies = map[string]opBody{"create": cmdBackupCreate, "restore": cmdBackupRestore}
+
+func cmdBackup(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "debug", debugOps, debugOpDesc)
-		ofs := newFlags("debug " + op)
-		ctrl := ctrlFlag(ofs, "")
-		ofs.Parse(rest)
-		_, err := controller.Control(*ctrl, "debug "+op)
-		die(err)
-		output(map[string]bool{"debug": op == "on"}, func(o map[string]bool) {
-			fmt.Println("debug logging", op)
-		})
+		opDispatch("backup", backupOps, backupOpDesc, backupBodies)(ctx, fs.Args())
 	}
 }
 
-// telegramConfigBodies wires telegram's config sub-ops through configOp —
+// cmdDebugOp: one body shared by "on"/"off" (same single -ctrl flag),
+// parameterized by op.
+func cmdDebugOp(op string) opBody {
+	return func(ofs *flag.FlagSet) func(ctx *cliContext) {
+		ctrl := ctrlFlag(ofs, "")
+		return func(ctx *cliContext) {
+			_, err := controller.Control(*ctrl, "debug "+op)
+			die(err)
+			output(map[string]bool{"debug": op == "on"}, func(o map[string]bool) {
+				fmt.Println("debug logging", op)
+			})
+		}
+	}
+}
+
+// debugBodies wires debug's ops through opDispatch.
+var debugBodies = map[string]opBody{"on": cmdDebugOp("on"), "off": cmdDebugOp("off")}
+
+func cmdDebug(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		opDispatch("debug", debugOps, debugOpDesc, debugBodies)(ctx, fs.Args())
+	}
+}
+
+// telegramConfigBodies wires telegram's config sub-ops through opDispatch —
 // same GET/PUT /api/telegram/config the web UI uses.
-var telegramConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+var telegramConfigBodies = map[string]opBody{
 	"get": cmdTelegramConfigGet, "set": cmdTelegramConfigSet,
 }
 
@@ -1882,184 +1996,227 @@ func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// telegramLifecycleBody registers one telegram lifecycle op's -ctrl flag —
+// same shape procOpBody uses for vpn/dns, kept separate since telegram
+// calls its own TelegramStart/Stop/Restart/GetStatus, not controller.Control.
+func telegramLifecycleBody(op string) opBody {
+	return func(fs *flag.FlagSet) func(ctx *cliContext) {
+		ctrl := ctrlFlag(fs, "")
+		return func(ctx *cliContext) {
+			var st controller.TelegramStatus
+			var err error
+			switch op {
+			case "start":
+				st, err = controller.TelegramStart(*ctrl)
+			case "stop":
+				st, err = controller.TelegramStop(*ctrl)
+			case "restart":
+				st, err = controller.TelegramRestart(*ctrl)
+			case "status":
+				st, err = controller.TelegramGetStatus(*ctrl)
+			}
+			die(err)
+			if op != "status" {
+				s := ctx.openStore()
+				s.Audit("cli", "telegram_"+op, fmt.Sprintf("running=%t", st.Running))
+				s.Close()
+			}
+			output(st, func(st controller.TelegramStatus) {
+				if !st.TokenSet {
+					fmt.Println("Telegram: not configured (run 'ovcp telegram config set -token -admin ...')")
+					return
+				}
+				state, color := "stopped", red
+				if st.Running {
+					state, color = "running", green
+				}
+				if (op == "start" || op == "stop") && !st.Changed {
+					state = "already " + state
+				}
+				fmt.Println(color(fmt.Sprintf("Telegram: %s, admin %s", state, st.Admin)))
+			})
+		}
+	}
+}
+
+// telegramBodies/telegramNested back completion for telegram's ops — same
+// telegramLifecycleBody/telegramConfigBodies real dispatch already runs through.
+var telegramBodies = map[string]opBody{
+	"start": telegramLifecycleBody("start"), "stop": telegramLifecycleBody("stop"),
+	"restart": telegramLifecycleBody("restart"), "status": telegramLifecycleBody("status"),
+}
+var telegramNested = map[string]nestedDispatch{"config": {ops: telegramConfigOps, bodies: telegramConfigBodies}}
+
 func cmdTelegram(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		op, rest := opArg(fs, "telegram", telegramOps, telegramOpDesc)
 		if op == "config" {
-			configOp("telegram config", telegramConfigOps, configOpDesc, telegramConfigBodies)(ctx, rest)
+			opDispatch("telegram config", telegramConfigOps, configOpDesc, telegramConfigBodies)(ctx, rest)
 			return
 		}
-
 		ofs := newFlags("telegram " + op)
-		ctrl := ctrlFlag(ofs, "")
+		body := telegramBodies[op](ofs)
 		ofs.Parse(rest)
+		body(ctx)
+	}
+}
 
-		var st controller.TelegramStatus
-		var err error
-		switch op {
-		case "start":
-			st, err = controller.TelegramStart(*ctrl)
-		case "stop":
-			st, err = controller.TelegramStop(*ctrl)
-		case "restart":
-			st, err = controller.TelegramRestart(*ctrl)
-		case "status":
-			st, err = controller.TelegramGetStatus(*ctrl)
+func cmdUserAdd(afs *flag.FlagSet) func(ctx *cliContext) {
+	name := afs.String("name", "", "username (required)")
+	role := afs.String("role", "operator", "admin|operator|readonly")
+	return func(ctx *cliContext) {
+		if *name == "" || !auth.ValidRole(*role) {
+			die(fmt.Errorf("-name required; role admin|operator|readonly"))
 		}
+		pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
+		h, err := auth.HashPassword(pw)
 		die(err)
-		if op != "status" {
-			s := ctx.openStore()
-			s.Audit("cli", "telegram_"+op, fmt.Sprintf("running=%t", st.Running))
-			s.Close()
-		}
-		output(st, func(st controller.TelegramStatus) {
-			if !st.TokenSet {
-				fmt.Println("Telegram: not configured (run 'ovcp telegram config set -token -admin ...')")
-				return
-			}
-			state, color := "stopped", red
-			if st.Running {
-				state, color = "running", green
-			}
-			if (op == "start" || op == "stop") && !st.Changed {
-				state = "already " + state
-			}
-			fmt.Println(color(fmt.Sprintf("Telegram: %s, admin %s", state, st.Admin)))
+		s := ctx.openStore()
+		defer s.Close()
+		_, err = s.AddUser(*name, h, *role)
+		die(err)
+		s.Audit("cli", "user_add", "name="+*name+" role="+*role)
+		output(userAddOut{*name, *role}, func(o userAddOut) {
+			fmt.Println("user added:", o.Username, "("+o.Role+")")
 		})
 	}
 }
 
-func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
+func cmdUserList(lfs *flag.FlagSet) func(ctx *cliContext) {
+	status := lfs.String("status", "all", "all|enabled|disabled")
+	role := lfs.String("role", "all", "all|admin|operator|readonly")
+	sortBy := lfs.String("sort", "", "username|role|created|status|2fa (default: today's order)")
+	desc := lfs.Bool("desc", false, "reverse sort order")
 	return func(ctx *cliContext) {
-		op, rest := opArg(fs, "user", userOps, userOpDesc)
 		s := ctx.openStore()
 		defer s.Close()
-		switch op {
-		case "add":
-			afs := newFlags("user add")
-			name := afs.String("name", "", "username (required)")
-			role := afs.String("role", "operator", "admin|operator|readonly")
-			afs.Parse(rest)
-			if *name == "" || !auth.ValidRole(*role) {
-				die(fmt.Errorf("-name required; role admin|operator|readonly"))
+		users, err := s.ListUsers()
+		die(err)
+		var filtered []store.User
+		for _, u := range users {
+			if *status == "enabled" && u.Disabled {
+				continue
 			}
-			pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
-			h, err := auth.HashPassword(pw)
-			die(err)
-			_, err = s.AddUser(*name, h, *role)
-			die(err)
-			s.Audit("cli", "user_add", "name="+*name+" role="+*role)
-			output(userAddOut{*name, *role}, func(o userAddOut) {
-				fmt.Println("user added:", o.Username, "("+o.Role+")")
-			})
+			if *status == "disabled" && !u.Disabled {
+				continue
+			}
+			if *role != "all" && u.Role != *role {
+				continue
+			}
+			filtered = append(filtered, u)
+		}
+		die(sortByFlag(filtered, userSortGetters, *sortBy, *desc))
+		rows := []api.UserSummary{}
+		for _, u := range filtered {
+			rows = append(rows, api.NewUserSummary(u))
+		}
+		output(rows, func(rows []api.UserSummary) {
+			fmt.Printf("%-20s %-9s %-*s %-4s %s\n", "USERNAME", "ROLE", statusWidth, "STATUS", "2FA", "CREATED")
+			for _, u := range rows {
+				status := "enabled"
+				if u.Disabled {
+					status = "disabled"
+				}
+				st := coloredStatus(status)
+				tf := "-"
+				if u.TOTP {
+					tf = "2fa"
+				}
+				fmt.Printf("%-20s %-9s %s %-4s %s\n", u.Username, u.Role, st, tf, u.CreatedAt.Format("2006-01-02"))
+			}
+		})
+	}
+}
 
-		case "list":
-			lfs := newFlags("user list")
-			status := lfs.String("status", "all", "all|enabled|disabled")
-			role := lfs.String("role", "all", "all|admin|operator|readonly")
-			sortBy := lfs.String("sort", "", "username|role|created|status|2fa (default: today's order)")
-			desc := lfs.Bool("desc", false, "reverse sort order")
-			lfs.Parse(rest)
-			users, err := s.ListUsers()
-			die(err)
-			var filtered []store.User
-			for _, u := range users {
-				if *status == "enabled" && u.Disabled {
-					continue
-				}
-				if *status == "disabled" && !u.Disabled {
-					continue
-				}
-				if *role != "all" && u.Role != *role {
-					continue
-				}
-				filtered = append(filtered, u)
-			}
-			die(sortByFlag(filtered, userSortGetters, *sortBy, *desc))
-			rows := []api.UserSummary{}
-			for _, u := range filtered {
-				rows = append(rows, api.NewUserSummary(u))
-			}
-			output(rows, func(rows []api.UserSummary) {
-				fmt.Printf("%-20s %-9s %-*s %-4s %s\n", "USERNAME", "ROLE", statusWidth, "STATUS", "2FA", "CREATED")
-				for _, u := range rows {
-					status := "enabled"
-					if u.Disabled {
-						status = "disabled"
-					}
-					st := coloredStatus(status)
-					tf := "-"
-					if u.TOTP {
-						tf = "2fa"
-					}
-					fmt.Printf("%-20s %-9s %s %-4s %s\n", u.Username, u.Role, st, tf, u.CreatedAt.Format("2006-01-02"))
-				}
-			})
+func cmdUserDel(dfs *flag.FlagSet) func(ctx *cliContext) {
+	name := dfs.String("name", "", "username (required)")
+	return func(ctx *cliContext) {
+		if *name == "" {
+			die(fmt.Errorf("-name required"))
+		}
+		s := ctx.openStore()
+		defer s.Close()
+		die(s.DeleteUser(*name))
+		s.Audit("cli", "user_del", "name="+*name)
+		output(msg("deleted: %s", *name), printMsg)
+	}
+}
 
-		case "del":
-			dfs := newFlags("user del")
-			name := dfs.String("name", "", "username (required)")
-			dfs.Parse(rest)
+// cmdUserEnableDisable: one body shared by both ops, parameterized by op.
+func cmdUserEnableDisable(op string) opBody {
+	return func(efs *flag.FlagSet) func(ctx *cliContext) {
+		name := efs.String("name", "", "username (required)")
+		return func(ctx *cliContext) {
 			if *name == "" {
 				die(fmt.Errorf("-name required"))
 			}
-			die(s.DeleteUser(*name))
-			s.Audit("cli", "user_del", "name="+*name)
-			output(msg("deleted: %s", *name), printMsg)
-
-		case "disable", "enable":
-			efs := newFlags("user " + op)
-			name := efs.String("name", "", "username (required)")
-			efs.Parse(rest)
-			if *name == "" {
-				die(fmt.Errorf("-name required"))
-			}
+			s := ctx.openStore()
+			defer s.Close()
 			die(s.SetUserDisabled(*name, op == "disable"))
 			s.Audit("cli", "user_"+op, "name="+*name)
 			output(userDisabledOut{*name, op == "disable"}, func(o userDisabledOut) {
 				fmt.Println(op+"d:", o.Username)
 			})
-
-		case "passwd":
-			pfs := newFlags("user passwd")
-			name := pfs.String("name", "", "username (required)")
-			pfs.Parse(rest)
-			if *name == "" {
-				die(fmt.Errorf("-name required"))
-			}
-			pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
-			h, err := auth.HashPassword(pw)
-			die(err)
-			die(s.SetUserPassword(*name, h))
-			s.Audit("cli", "user_passwd", "name="+*name)
-			output(msg("password updated: %s", *name), printMsg)
-
-		case "totp":
-			tfs := newFlags("user totp")
-			name := tfs.String("name", "", "username (required)")
-			off := tfs.Bool("off", false, "disable 2FA")
-			tfs.Parse(rest)
-			if *name == "" {
-				die(fmt.Errorf("-name required"))
-			}
-			if *off {
-				die(s.SetUserTOTP(*name, ""))
-				s.Audit("cli", "user_totp_off", "name="+*name)
-				output(msg("2FA disabled: %s", *name), printMsg)
-				break
-			}
-			sec, err := auth.TOTPGenerateSecret()
-			die(err)
-			die(s.SetUserTOTP(*name, sec))
-			s.Audit("cli", "user_totp_enroll", "name="+*name)
-			url := auth.TOTPProvisioningURL(sec, *name, adminCertCN(ctx.dataDir))
-			output(totpOut{sec, url}, func(o totpOut) {
-				printQR(o.URL)
-				fmt.Println("scan with your authenticator, or enter manually:")
-				fmt.Println("  secret:", o.Secret)
-				fmt.Println("  url:   ", o.URL)
-			})
 		}
+	}
+}
+
+func cmdUserPasswd(pfs *flag.FlagSet) func(ctx *cliContext) {
+	name := pfs.String("name", "", "username (required)")
+	return func(ctx *cliContext) {
+		if *name == "" {
+			die(fmt.Errorf("-name required"))
+		}
+		pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
+		h, err := auth.HashPassword(pw)
+		die(err)
+		s := ctx.openStore()
+		defer s.Close()
+		die(s.SetUserPassword(*name, h))
+		s.Audit("cli", "user_passwd", "name="+*name)
+		output(msg("password updated: %s", *name), printMsg)
+	}
+}
+
+func cmdUserTOTP(tfs *flag.FlagSet) func(ctx *cliContext) {
+	name := tfs.String("name", "", "username (required)")
+	off := tfs.Bool("off", false, "disable 2FA")
+	return func(ctx *cliContext) {
+		if *name == "" {
+			die(fmt.Errorf("-name required"))
+		}
+		s := ctx.openStore()
+		defer s.Close()
+		if *off {
+			die(s.SetUserTOTP(*name, ""))
+			s.Audit("cli", "user_totp_off", "name="+*name)
+			output(msg("2FA disabled: %s", *name), printMsg)
+			return
+		}
+		sec, err := auth.TOTPGenerateSecret()
+		die(err)
+		die(s.SetUserTOTP(*name, sec))
+		s.Audit("cli", "user_totp_enroll", "name="+*name)
+		url := auth.TOTPProvisioningURL(sec, *name, adminCertCN(ctx.dataDir))
+		output(totpOut{sec, url}, func(o totpOut) {
+			printQR(o.URL)
+			fmt.Println("scan with your authenticator, or enter manually:")
+			fmt.Println("  secret:", o.Secret)
+			fmt.Println("  url:   ", o.URL)
+		})
+	}
+}
+
+// userBodies wires user's ops through opDispatch.
+var userBodies = map[string]opBody{
+	"add": cmdUserAdd, "list": cmdUserList, "del": cmdUserDel,
+	"disable": cmdUserEnableDisable("disable"), "enable": cmdUserEnableDisable("enable"),
+	"passwd": cmdUserPasswd, "totp": cmdUserTOTP,
+}
+
+func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
+	return func(ctx *cliContext) {
+		opDispatch("user", userOps, userOpDesc, userBodies)(ctx, fs.Args())
 	}
 }
 

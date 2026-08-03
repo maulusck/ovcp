@@ -36,9 +36,11 @@ func TestCompleteArgs(t *testing.T) {
 }
 
 // TestCompleteFlags: commands with no fixed sub list complete their flag
-// names; commands with one complete the sub list instead, at every position
-// (including nested ones like certificate/config — flags one level below an
-// op, e.g. `certificate issue -cn`, are out of scope, same as `vpn start -ctrl`).
+// names; commands with one complete the sub list at the op position, then
+// that op's own flags one level below (e.g. `certificate issue -cn`) — and
+// one level deeper still for a nested op-of-op dispatch (`vpn config set
+// -subnet`), driven by the exact same bodies maps/factories real dispatch
+// runs through, not a second declaration.
 func TestCompleteFlags(t *testing.T) {
 	if r := run(t, nil, "__complete", "ovcp", "stats"); r.code != 0 ||
 		!strings.Contains(r.stdout, "-cn") || !strings.Contains(r.stdout, "-follow") {
@@ -48,15 +50,25 @@ func TestCompleteFlags(t *testing.T) {
 		!strings.Contains(r.stdout, "issue") || strings.Contains(r.stdout, "-cn") {
 		t.Fatalf("__complete certificate: subcommands, not flags: %+v", r)
 	}
-	if r := run(t, nil, "__complete", "ovcp", "certificate", "issue"); r.code != 0 || strings.TrimSpace(r.stdout) != "" {
-		t.Fatalf("__complete certificate issue: out of scope, expected no candidates: %+v", r)
+	if r := run(t, nil, "__complete", "ovcp", "certificate", "issue"); r.code != 0 ||
+		!strings.Contains(r.stdout, "-cn") || !strings.Contains(r.stdout, "-export") {
+		t.Fatalf("__complete certificate issue: op-level flags, got %+v", r)
 	}
 	if r := run(t, nil, "__complete", "ovcp", "vpn"); r.code != 0 ||
 		strings.Contains(r.stdout, "-ctrl") || !strings.Contains(r.stdout, "start") {
 		t.Fatalf("__complete vpn: subcommands, not flags: %+v", r)
 	}
-	if r := run(t, nil, "__complete", "ovcp", "vpn", "start"); r.code != 0 || strings.TrimSpace(r.stdout) != "" {
-		t.Fatalf("__complete vpn start: out of scope, expected no candidates: %+v", r)
+	if r := run(t, nil, "__complete", "ovcp", "vpn", "start"); r.code != 0 ||
+		!strings.Contains(r.stdout, "-ctrl") {
+		t.Fatalf("__complete vpn start: op-level flag -ctrl, got %+v", r)
+	}
+	if r := run(t, nil, "__complete", "ovcp", "vpn", "config"); r.code != 0 ||
+		!strings.Contains(r.stdout, "get") || !strings.Contains(r.stdout, "set") || strings.Contains(r.stdout, "-subnet") {
+		t.Fatalf("__complete vpn config: nested op names, not flags yet: %+v", r)
+	}
+	if r := run(t, nil, "__complete", "ovcp", "vpn", "config", "set"); r.code != 0 ||
+		!strings.Contains(r.stdout, "-subnet") {
+		t.Fatalf("__complete vpn config set: nested op's own flags, got %+v", r)
 	}
 	if r := run(t, nil, "__complete", "ovcp", "serve"); r.code != 0 ||
 		!strings.Contains(r.stdout, "-mgmt") || !strings.Contains(r.stdout, "-ctrl") ||

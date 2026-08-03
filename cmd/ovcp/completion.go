@@ -6,8 +6,12 @@ import (
 	"io"
 )
 
-// completeArgs answers "what comes next" for the words typed so far, reading the same commands table -h/dispatch use.
-// Commands with a fixed sub list complete that; others offer their flag names.
+// completeArgs answers "what comes next" for the words typed so far, reading
+// the same commands table -h/dispatch use — command names, then op names
+// (command.sub), then that op's own flags (command.opBodies), and one level
+// deeper still for a nested op-of-op dispatch like `vpn config set`
+// (command.nested). Every level reads the exact bodies map or factory real
+// dispatch (opDispatch) runs the op through, never a separate declaration.
 func completeArgs(words []string) []string {
 	find := func(name string) *command {
 		for i := range commands {
@@ -44,11 +48,21 @@ func completeArgs(words []string) []string {
 		}
 		return c.flagNames()
 	default:
+		// rest[1] is the op; a further-nested op (only "config" today) drills
+		// one level deeper into its own ops/flags, same data opDispatch
+		// itself runs on for real execution — nothing hardcoded here.
 		c := find(rest[0])
-		if c == nil || c.sub != nil {
+		if c == nil {
 			return nil
 		}
-		return c.flagNames()
+		op := rest[1]
+		if nd, ok := c.nested[op]; ok {
+			if len(rest) == 2 {
+				return nd.ops
+			}
+			return opBodiesFlagNames(nd.bodies, rest[2])
+		}
+		return opBodiesFlagNames(c.opBodies, op)
 	}
 }
 

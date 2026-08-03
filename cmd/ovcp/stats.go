@@ -25,9 +25,13 @@ type statsSnapshot struct {
 
 var (
 	statsConfigOps    = []string{"get", "set"}
-	statsConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+	statsConfigBodies = map[string]opBody{
 		"get": cmdStatsConfigGet, "set": cmdStatsConfigSet,
 	}
+	// statsNested backs completion for `stats config <op>` — stats has no
+	// sub list (it's a hybrid: top-level flags + this one nested escape
+	// hatch), so this is looked up independently of command.sub.
+	statsNested = map[string]nestedDispatch{"config": {ops: statsConfigOps, bodies: statsConfigBodies}}
 )
 
 func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -37,7 +41,7 @@ func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 	ctrl := ctrlFlag(fs, ", -follow only")
 	return func(ctx *cliContext) {
 		if args := fs.Args(); len(args) > 0 && args[0] == "config" {
-			configOp("stats config", statsConfigOps, configOpDesc, statsConfigBodies)(ctx, args[1:])
+			opDispatch("stats config", statsConfigOps, configOpDesc, statsConfigBodies)(ctx, args[1:])
 			return
 		}
 		if *follow {

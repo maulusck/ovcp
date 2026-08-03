@@ -52,9 +52,13 @@ func saveLogConfig(s *store.Store, cfg controller.LogConfig) error {
 	return store.SaveJSON(s, "log_config", cfg)
 }
 
-var logConfigBodies = map[string]func(fs *flag.FlagSet) func(ctx *cliContext){
+var logConfigBodies = map[string]opBody{
 	"get": cmdLogsConfigGet, "set": cmdLogsConfigSet,
 }
+
+// logsNested backs completion for `logs config <op>` — same logConfigBodies
+// real dispatch (opDispatch) already runs through.
+var logsNested = map[string]nestedDispatch{"config": {ops: logConfigOps, bodies: logConfigBodies}}
 
 // cmdLogs wraps config get/set, a one-shot rotate (what cron should call),
 // and a status summary. No dry-run or prune subcommand — rotation is a
@@ -64,7 +68,7 @@ func cmdLogs(fs *flag.FlagSet) func(ctx *cliContext) {
 		op, rest := opArg(fs, "logs", logsOps, logsOpDesc)
 		switch op {
 		case "config":
-			configOp("logs config", logConfigOps, configOpDesc, logConfigBodies)(ctx, rest)
+			opDispatch("logs config", logConfigOps, configOpDesc, logConfigBodies)(ctx, rest)
 		case "rotate":
 			rfs := newFlags("logs rotate")
 			subUsage(rfs, "logs rotate")
