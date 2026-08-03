@@ -8,6 +8,25 @@ import (
 	"time"
 )
 
+func TestEnvSeconds(t *testing.T) {
+	const key = "OVCP_TEST_ENV_SECONDS"
+	cases := map[string]time.Duration{
+		"":    5 * time.Second,  // unset
+		"20":  20 * time.Second, // valid override
+		"0":   5 * time.Second,  // zero, not positive: falls back
+		"-3":  5 * time.Second,  // negative: falls back
+		"abc": 5 * time.Second,  // unparseable: falls back
+	}
+	for v, want := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv(key, v) // "" counts as unset for os.Getenv
+			if got := envSeconds(key, 5); got != want {
+				t.Errorf("envSeconds(%q, 5) = %v, want %v", v, got, want)
+			}
+		})
+	}
+}
+
 // TestRelayToDstRefusesLoopback locks in a real security fix: a client
 // choosing a loopback destination must never reach the SOCKS backend at
 // all — a self-hosted backend on the same host as ovcp would otherwise let

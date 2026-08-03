@@ -1099,6 +1099,16 @@ URL, same one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR
 above \(en see \fBupstream add \-socks\fR in \fBCOMMANDS\fR. Invalid or
 already superseded by a saved config: ignored, logged, never fatal.
 .TP
+.B OVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT, OVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT
+Seconds; override the SOCKS relay's connect timeout (default \fB10\fR) and
+SOCKS negotiation timeout (default \fB30\fR) for a slower or faster network
+\(en the handshake bound is separate and more generous by default since a
+Tor backend's real circuit\-build time can run past a plain TCP connect's.
+Invalid or non\-positive values fall back to the default. No \fIiface\fR/
+\fIgateway\fR equivalent exists: that mode is plain kernel routing (\fBip
+route\fR/\fBip rule\fR), not a software connection with anything to time
+out \(en its kill\-switch is an unreachable fallback route, not time\-based.
+.TP
 .B OVCP_STATS_SAMPLE_INTERVAL, OVCP_STATS_RETENTION_HOURS
 Seed \fBstats config set\fR's \fB\-sample\-interval\-sec\fR/
 \fB\-retention\-hours\fR (default \fB60\fR seconds, \fB24\fR hours). Same

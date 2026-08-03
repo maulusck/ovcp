@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
+	"strconv"
 	"time"
 	"unsafe"
 
@@ -148,21 +150,35 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 	return &net.TCPAddr{IP: net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3]), Port: port}, nil
 }
 
-const (
-	// dialTimeout bounds the raw TCP connect only — should never legitimately
-	// take long regardless of backend type.
-	dialTimeout = 10 * time.Second
-	// handshakeTimeout bounds the SOCKS negotiation once connected, in
-	// particular the CONNECT reply wait — for a Tor backend specifically
-	// that covers real circuit-build time, which can legitimately run well
-	// past dialTimeout under network load, so this stays separate and more
-	// generous. Without any bound here, a slow or malicious backend that
-	// never completes the handshake leaks one goroutine and one fd per
-	// stuck client connection, forever (no cap on concurrent attempts
-	// either). Cleared once the handshake succeeds: the relay phase (pipe)
-	// is meant to be long-lived, unlike the handshake.
-	handshakeTimeout = 30 * time.Second
+// dialTimeout/handshakeTimeout: package vars, not consts, so
+// OVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT/OVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT
+// (seconds) can override the sane default for a slower or faster network —
+// same override-by-env-var shape OVCP_STATS_SAMPLE_INTERVAL etc. already use
+// elsewhere. dialTimeout bounds the raw TCP connect only — should never
+// legitimately take long regardless of backend type. handshakeTimeout bounds
+// the SOCKS negotiation once connected, in particular the CONNECT reply
+// wait — for a Tor backend specifically that covers real circuit-build time,
+// which can legitimately run well past dialTimeout under network load, so it
+// stays separate and more generous by default. Without any bound here, a
+// slow or malicious backend that never completes the handshake leaks one
+// goroutine and one fd per stuck client connection, forever (no cap on
+// concurrent attempts either). Cleared once the handshake succeeds: the
+// relay phase (pipe) is meant to be long-lived, unlike the handshake.
+var (
+	dialTimeout      = envSeconds("OVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT", 10)
+	handshakeTimeout = envSeconds("OVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT", 30)
 )
+
+// envSeconds reads key as a positive integer number of seconds, def if unset
+// or invalid.
+func envSeconds(key string, def int) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return time.Duration(def) * time.Second
+}
 
 // socksConnect dials backend and performs a SOCKS5 CONNECT handshake for
 // dst (RFC 1928, plus RFC 1929 user/pass auth when backend carries
