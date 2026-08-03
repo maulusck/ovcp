@@ -51,6 +51,36 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
+func TestValidateSOCKS(t *testing.T) {
+	c := Config{
+		Upstreams: []Upstream{{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase}},
+		Default:   "tor",
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid socks upstream rejected: %v", err)
+	}
+}
+
+func TestValidateRejectsSOCKS(t *testing.T) {
+	base := func() Upstream { return Upstream{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase} }
+	cases := map[string]Upstream{
+		"socks with iface":   func() Upstream { u := base(); u.Iface = "eth0"; return u }(),
+		"socks with gateway": func() Upstream { u := base(); u.Gateway = "192.0.2.1"; return u }(),
+		"non-socks5 scheme":  func() Upstream { u := base(); u.SOCKS = "http://127.0.0.1:9050"; return u }(),
+		"missing port":       func() Upstream { u := base(); u.SOCKS = "socks5://127.0.0.1"; return u }(),
+		"missing host":       func() Upstream { u := base(); u.SOCKS = "socks5://:9050"; return u }(),
+		"unparseable url":    func() Upstream { u := base(); u.SOCKS = "socks5://%zz"; return u }(),
+	}
+	for name, u := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := Config{Upstreams: []Upstream{u}}
+			if err := c.Validate(); err == nil {
+				t.Fatalf("%s: expected error, got nil", name)
+			}
+		})
+	}
+}
+
 func TestNextTable(t *testing.T) {
 	if got, err := NextTable(nil); err != nil || got != tableBase {
 		t.Fatalf("empty: got %d, %v; want %d, nil", got, err, tableBase)
@@ -318,6 +348,80 @@ func TestNFTRulesetActive(t *testing.T) {
 	out := string(nftRuleset(valid(), "10.8.0.0/24"))
 	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark set 100") {
 		t.Errorf("missing mark rule for active default:\n%s", out)
+	}
+}
+
+func TestNFTRulesetSOCKSRedirect(t *testing.T) {
+	defer swapIfaceExists(func(string) bool { return true })()
+	c := Config{
+		Upstreams: []Upstream{
+			{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase},
+			{ID: "wan2", Iface: "eth1", Table: tableBase + 1},
+		},
+		Default: "tor",
+	}
+	out := string(nftRuleset(c, "10.8.0.0/24"))
+	if !strings.Contains(out, "meta mark 100 meta l4proto tcp redirect to :20000") {
+		t.Errorf("missing socks redirect rule:\n%s", out)
+	}
+	if strings.Contains(out, "mark 100 oif") {
+		t.Errorf("socks-kind upstream must not get a masquerade rule:\n%s", out)
+	}
+	if !strings.Contains(out, `oif "eth1" masquerade`) {
+		t.Errorf("iface-kind upstream masquerade must be unaffected:\n%s", out)
+	}
+	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark set 100") {
+		t.Errorf("missing mark rule for socks default:\n%s", out)
+	}
+}
+
+// Real-nft-gated: string-matching tests can't tell valid nft syntax from
+// invalid (the "mark" keyword bug already taught this package that lesson).
+func TestNFTRulesetValidatesSOCKSAgainstRealNFT(t *testing.T) {
+	nft := RequireRealNFT(t)
+	c := Config{
+		Upstreams: []Upstream{{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase}},
+		Default:   "tor",
+	}
+	ruleset := nftRuleset(c, "10.8.0.0/24")
+	cmd := exec.Command(nft, "-c", "-f", "-")
+	cmd.Stdin = bytes.NewReader(ruleset)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("nft -c rejected the socks redirect ruleset: %v\n%s\nruleset:\n%s", err, out, ruleset)
+	}
+}
+
+// A socks-kind upstream has no interface to route via — Apply must not emit
+// any ip route/rule for it, only the nft redirect (checked separately above).
+func TestApplySkipsRouteCommandsForSOCKS(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls.log")
+	fake := func(name string) string {
+		p := filepath.Join(dir, name)
+		script := "#!/bin/sh\necho \"$0 $*\" >> " + log + "\nexit 0\n"
+		if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	origIP, origNFT := ipBin, nftBin
+	ipBin, nftBin = fake("ip"), fake("nft")
+	defer func() { ipBin, nftBin = origIP, origNFT }()
+
+	cfg := Config{
+		Upstreams: []Upstream{{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase}},
+		Default:   "tor",
+	}
+	if err := Apply(cfg, "10.8.0.0/24"); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+	out, _ := os.ReadFile(log)
+	if strings.Contains(string(out), "route replace default") {
+		t.Errorf("socks-kind upstream must not get an ip route:\n%s", out)
+	}
+	if !strings.Contains(string(out), "-c -f -") {
+		t.Error("nft apply must still run for a socks-only config")
 	}
 }
 

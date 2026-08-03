@@ -520,7 +520,7 @@ errors the same as any CN with no active cert.
 .TP
 .B upstream list
 .TQ
-.B upstream add \fB\-id\fR \fINAME\fR \fB\-iface\fR \fIIFACE\fR [\fB\-gateway\fR \fIIP\fR] [\fB\-desc\fR \fITEXT\fR]
+.B upstream add \fB\-id\fR \fINAME\fR (\fB\-iface\fR \fIIFACE\fR [\fB\-gateway\fR \fIIP\fR] | \fB\-socks\fR \fIURL\fR) [\fB\-desc\fR \fITEXT\fR]
 .TQ
 .B upstream del \fB\-id\fR \fINAME\fR
 .TQ
@@ -531,17 +531,34 @@ errors the same as any CN with no active cert.
 .B upstream reconcile
 .TQ
 .B upstream status
-Policy\-route VPN client traffic out an admin\-chosen egress \(en a second
-NIC, a WireGuard peer, anything else already up on the host \(en instead of
-the box's own default route.
+Route VPN client traffic out an admin\-chosen egress instead of the box's
+own default route: either
+.B \-iface
+(a second NIC, a WireGuard peer, anything else already up on the host \(en
+routed at the IP layer, kill\-switched on its own if the gateway dies) or
+.B \-socks
+(a
+.I socks5://[user:pass@]host:port
+URL \(en Tor, proxychains, or any self\-hosted SOCKS5 backend, relayed
+through a small in\-process proxy instead of routed). Exactly one of the two
+is required; \fB\-gateway\fR only applies to \fB\-iface\fR mode.
 .B ovcp
-never brings the upstream connection itself up; the admin does, by whatever
-means, and only names it here (\fB\-iface\fR, optionally \fB\-gateway\fR) so
+never brings the upstream connection itself up (nor the SOCKS backend) \(en
+the admin does, by whatever means, and only names it here so
 .B ovcp
-knows where to steer matching traffic.
+knows where to steer matching traffic. A socks\-mode upstream has no
+interface to route via: traffic is redirected locally to ovcp's own relay,
+which speaks the SOCKS5 CONNECT handshake (user/pass auth if the URL carries
+credentials) to the backend; it carries TCP only, never UDP, and fails
+closed the same way \-iface's kill\-switch does \(en a dead or unreachable
+backend just drops the connection, never falls through to the host's own
+route. The URL's password never appears again in
+.B list/reconcile/status
+output or the REST API once saved, only \fB***\fR.
 .B add
-assigns the next free routing table in ovcp's own reserved band
-automatically. \fBset\-default\fR is the ad\-hoc exit switch \(en instant,
+assigns the next free routing table (or, for socks\-mode, the derived local
+relay port) in ovcp's own reserved band automatically. \fBset\-default\fR is
+the ad\-hoc exit switch \(en instant,
 no
 .B vpn restart
 needed, since it only reprograms host routing/NAT, never openvpn itself;
@@ -885,14 +902,19 @@ right now \(en connected, or the server's own always\-on address);
 \fBcustom\fR is \fIcustom.hosts\fR' raw content as one string.
 .TP
 .B upstream list, upstream reconcile
-\fB{upstreams: [{id, up, iface, gateway, table, description}], default,
-perCN}\fR \(en \fBup\fR is a live \fInet.InterfaceByName\fR check, same one
+\fB{upstreams: [{id, up, iface, gateway, socks, table, description}],
+default, perCN}\fR \(en \fBiface\fR/\fBgateway\fR and \fBsocks\fR are
+mutually exclusive per entry; \fBsocks\fR' password, if any, is always
+\fB***\fR in this output, never the real value. \fBup\fR is a live
+\fInet.InterfaceByName\fR check for \-iface mode, always true for \-socks
+mode (no cheap liveness check without dialing the backend) \(en same value
 the text table's STATUS column reads; \fBreconcile\fR re\-applies first.
 Same \fBdns config\fR exception as above: the REST API's \fBGET
 /api/upstreams\fR and \fBPOST /api/upstreams/reconcile\fR instead return
-the untagged \fBupstream.Config\fR plus a \fBwarning\fR string \(en the
-CLI needs the live per\-upstream \fBup\fR flag REST has no field for, so
-this is the one other upstream surface where the two shapes don't match.
+the untagged \fBupstream.Config\fR (also \fBsocks\fR\-password\-redacted)
+plus a \fBwarning\fR string \(en the CLI needs the live per\-upstream
+\fBup\fR flag REST has no field for, so this is the one other upstream
+surface where the two shapes don't match.
 .TP
 .B upstream status
 \fB{enabled, nftVersion, nftPath, default}\fR \(en version/path pair omitted
@@ -1069,6 +1091,13 @@ feature (see \fBCOMMANDS\fR) is on: default \fBtrue\fR, but only takes
 effect when nftables is also found on \fBPATH\fR \(en set to \fBfalse\fR to
 turn it off even when nftables is present. Same
 \(lqanything but \fBfalse\fR means on\(rq rule as \fBOVCP_LOG_ROTATE_ENABLED\fR.
+.TP
+.B OVCP_UPSTREAM_SOCKS
+Seeds one SOCKS upstream (id \fBsocks\fR, set as the default) from a
+.I socks5://[user:pass@]host:port
+URL, same one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR
+above \(en see \fBupstream add \-socks\fR in \fBCOMMANDS\fR. Invalid or
+already superseded by a saved config: ignored, logged, never fatal.
 .TP
 .B OVCP_STATS_SAMPLE_INTERVAL, OVCP_STATS_RETENTION_HOURS
 Seed \fBstats config set\fR's \fB\-sample\-interval\-sec\fR/

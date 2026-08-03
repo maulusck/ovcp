@@ -18,7 +18,7 @@ codebase.
 | `internal/backup` | Encrypted export/import of the CA, CRL, tls-crypt key, TOTP key, server config, and database. |
 | `internal/controller` | OpenVPN process supervision (fork/exec, reap, restart backoff), the control-socket server, and the management-socket client used to query and drive a running OpenVPN process. |
 | `internal/ovpnconf` | Validated `server.conf` generation from stored configuration. |
-| `internal/upstream` | Policy-routed VPN egress: renders and applies the routing-table/nftables rules that steer client traffic out an admin-chosen interface. |
+| `internal/upstream` | Policy-routed VPN egress: renders and applies the routing-table/nftables rules that steer client traffic out an admin-chosen interface, or redirects it to an in-process relay that speaks SOCKS5 to an admin-chosen backend (Tor, proxychains, self-hosted). |
 | `internal/auth` | Password hashing (argon2id), sessions, TOTP, login rate-limiting, RBAC. |
 | `internal/telegram` | Optional notification bot: long-poller, narrow command surface, expiry sweep. |
 | `internal/api` | REST/JSON handlers, the embedded web UI, HTTPS, CSRF, and the session/RBAC middleware chain. |

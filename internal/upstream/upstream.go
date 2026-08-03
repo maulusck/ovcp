@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -25,6 +26,7 @@ const (
 	nftTable         = "ovcp-upstreams"
 	preroutingChain  = "ovcp-prerouting"
 	postroutingChain = "ovcp-postrouting"
+	redirectChain    = "ovcp-redirect" // SOCKS-mode: DNATs marked traffic to the local relay
 )
 
 // ipBin/nftBin: package vars, not hardcoded argv[0], so tests can swap in a fake script.
@@ -41,16 +43,12 @@ var ifaceExists = func(name string) bool {
 	return err == nil
 }
 
-// IfaceExists is ifaceExists exported for status/reporting callers outside
-// this package — the one check, not a second one reimplemented elsewhere.
-func IfaceExists(name string) bool { return ifaceExists(name) }
-
-// DownIDs returns the IDs of every upstream whose Iface isn't up right now
-// — nil if all are reachable.
+// DownIDs returns the IDs of every upstream that isn't up right now — nil
+// if all are reachable.
 func DownIDs(ups []Upstream) []string {
 	var down []string
 	for _, u := range ups {
-		if !ifaceExists(u.Iface) {
+		if !u.IsUp() {
 			down = append(down, u.ID)
 		}
 	}
@@ -72,12 +70,28 @@ func Warning(ups []Upstream) string {
 var applyMu sync.Mutex
 
 type Upstream struct {
-	ID          string // slug, referenced by Config.Default/PerCN
-	Iface       string // egress interface; admin brings it up, ovcp only references it
-	Gateway     string // next-hop IP; empty = onlink route via Iface
-	Table       int    // routing table number, assigned once via NextTable, stable
+	ID      string // slug, referenced by Config.Default/PerCN
+	Iface   string // egress interface; admin brings it up, ovcp only references it
+	Gateway string // next-hop IP; empty = onlink route via Iface. Iface-mode only.
+	SOCKS   string // socks5://[user:pass@]host:port; mutually exclusive with Iface/Gateway
+
+	Table       int // routing table number (Iface-mode) or, offset from tableBase, the local relay port (SOCKS-mode); assigned once via NextTable, stable
 	Description string
 }
+
+// IsSOCKS reports whether u is relayed through a SOCKS backend instead of
+// routed via Iface — the one check both nftRuleset and Apply branch on.
+func (u Upstream) IsSOCKS() bool { return u.SOCKS != "" }
+
+// socksPort derives u's local relay port from its Table slot — no second
+// allocator, stable for the same reason Table already is.
+func (u Upstream) socksPort() int { return 20000 + (u.Table - tableBase) }
+
+// IsUp reports whether u can carry traffic right now. Iface-mode needs its
+// interface to exist; socks-mode has no cheap liveness check (that would
+// mean dialing the backend), so it's reported up once configured — the one
+// check DownIDs and every "is this upstream reachable" caller shares.
+func (u Upstream) IsUp() bool { return u.IsSOCKS() || ifaceExists(u.Iface) }
 
 type Config struct {
 	Upstreams []Upstream
@@ -204,6 +218,59 @@ func NextTable(existing []Upstream) (int, error) {
 // an nft ruleset string — this regex is what keeps it there, not %q.
 var ifaceRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,14}$`)
 
+// validateSOCKSURL: scheme must be socks5 (only CONNECT is implemented, see
+// socks.go), host:port required. User:pass in the URL is optional auth,
+// consumed as-is by socksConnect — no further shape to check here.
+func validateSOCKSURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		// Not %w-wrapped: url.Error.Error() echoes the raw input verbatim,
+		// which may carry a password — this error can reach slog (e.g.
+		// OVCP_UPSTREAM_SOCKS's own invalid-input warning), a credential
+		// must never get there even indirectly.
+		return fmt.Errorf("bad socks url: unparseable")
+	}
+	if u.Scheme != "socks5" {
+		return fmt.Errorf("socks url must use socks5://, got %q", u.Scheme)
+	}
+	if u.Hostname() == "" || u.Port() == "" {
+		return fmt.Errorf("socks url needs host:port")
+	}
+	return nil
+}
+
+// RedactSOCKS masks a socks5:// URL's password for display (CLI/REST
+// listings) — a stored credential, same posture as every other secret this
+// CLI never echoes back in plain text. Returns raw unchanged if it doesn't
+// parse or carries no password.
+func RedactSOCKS(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	if _, hasPass := u.User.Password(); !hasPass {
+		return raw
+	}
+	u.User = url.UserPassword(u.User.Username(), "***")
+	return u.String()
+}
+
+// Redacted returns cfg with every upstream's SOCKS password masked — the
+// shape REST responses return, so a stored credential never round-trips to
+// the browser in plain text.
+func (c Config) Redacted() Config {
+	out := c
+	out.Upstreams = make([]Upstream, len(c.Upstreams))
+	for i, u := range c.Upstreams {
+		u.SOCKS = RedactSOCKS(u.SOCKS)
+		out.Upstreams[i] = u
+	}
+	return out
+}
+
 // Validate checks syntax and internal references only — host state (does
 // Iface actually exist) is an Apply-time concern, not this one.
 func (c Config) Validate() error {
@@ -217,11 +284,20 @@ func (c Config) Validate() error {
 			return fmt.Errorf("upstream: duplicate id %q", u.ID)
 		}
 		seen[u.ID] = true
-		if !ifaceRe.MatchString(u.Iface) {
-			return fmt.Errorf("upstream: %q: invalid iface %q", u.ID, u.Iface)
-		}
-		if u.Gateway != "" && net.ParseIP(u.Gateway) == nil {
-			return fmt.Errorf("upstream: %q: bad gateway %q", u.ID, u.Gateway)
+		if u.IsSOCKS() {
+			if u.Iface != "" || u.Gateway != "" {
+				return fmt.Errorf("upstream: %q: socks is mutually exclusive with iface/gateway", u.ID)
+			}
+			if err := validateSOCKSURL(u.SOCKS); err != nil {
+				return fmt.Errorf("upstream: %q: %w", u.ID, err)
+			}
+		} else {
+			if !ifaceRe.MatchString(u.Iface) {
+				return fmt.Errorf("upstream: %q: invalid iface %q", u.ID, u.Iface)
+			}
+			if u.Gateway != "" && net.ParseIP(u.Gateway) == nil {
+				return fmt.Errorf("upstream: %q: bad gateway %q", u.ID, u.Gateway)
+			}
 		}
 		if u.Table < tableBase || u.Table >= tableBase+maxUpstreams {
 			return fmt.Errorf("upstream: %q: table %d outside managed range [%d,%d)", u.ID, u.Table, tableBase, tableBase+maxUpstreams)
@@ -291,9 +367,19 @@ func nftRuleset(cfg Config, vpnSubnet string) []byte {
 			fmt.Fprintf(&b, "\t\tip saddr %s meta mark set %d\n", vpnSubnet, u.Table)
 		}
 	}
+	// SOCKS-mode marks never reach postrouting/masquerade: redirect rewrites
+	// the destination in prerouting, dstnat priority runs right after this
+	// mangle chain, so the mark set above is already in place by then.
+	fmt.Fprintf(&b, "\t}\n\tchain %s {\n\t\ttype nat hook prerouting priority dstnat; policy accept;\n", redirectChain)
+	for _, u := range cfg.Upstreams {
+		if !u.IsSOCKS() {
+			continue
+		}
+		fmt.Fprintf(&b, "\t\tmeta mark %d meta l4proto tcp redirect to :%d\n", u.Table, u.socksPort())
+	}
 	fmt.Fprintf(&b, "\t}\n\tchain %s {\n\t\ttype nat hook postrouting priority srcnat; policy accept;\n", postroutingChain)
 	for _, u := range cfg.Upstreams {
-		if !ifaceExists(u.Iface) {
+		if u.IsSOCKS() || !ifaceExists(u.Iface) {
 			continue
 		}
 		fmt.Fprintf(&b, "\t\tmeta mark %d oif %q masquerade\n", u.Table, u.Iface)
@@ -335,11 +421,17 @@ func Apply(cfg Config, vpnSubnet string) error {
 
 	var errs []error
 	for _, u := range cfg.Upstreams {
+		if u.IsSOCKS() {
+			continue // no interface to route via; redirect (nftRuleset) handles it
+		}
 		for _, args := range routeArgs(u) {
 			if err := run(ipBin, args...); err != nil {
 				errs = append(errs, err)
 			}
 		}
+	}
+	if err := startSOCKSRelays(cfg); err != nil {
+		errs = append(errs, err)
 	}
 
 	ruleset := nftRuleset(cfg, vpnSubnet)

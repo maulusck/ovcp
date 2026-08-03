@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
 	"sync"
 
 	"github.com/ovcp/ovcp/internal/controller"
@@ -14,8 +15,30 @@ import (
 
 const upstreamConfigKey = "upstream_config"
 
+// DefaultUpstreamConfig seeds one SOCKS upstream from OVCP_UPSTREAM_SOCKS
+// (container/unattended init), same shape as DefaultDNSConfig/
+// DefaultStatsConfig. Reuses WithAdded/SetDefault (not a hand-built Config)
+// so a seeded config is validated exactly like an admin-run `upstream add`.
+// Malformed input is only ever consulted before any config exists — logged
+// and ignored, not fatal; an admin can still fix it via CLI/UI afterward.
+func DefaultUpstreamConfig() upstream.Config {
+	raw := os.Getenv("OVCP_UPSTREAM_SOCKS")
+	if raw == "" {
+		return upstream.Config{}
+	}
+	cfg, _, err := upstream.Config{}.WithAdded(upstream.Upstream{ID: "socks", SOCKS: raw})
+	if err == nil {
+		cfg, err = cfg.SetDefault("socks")
+	}
+	if err != nil {
+		slog.Warn("OVCP_UPSTREAM_SOCKS invalid, ignoring", "err", err)
+		return upstream.Config{}
+	}
+	return cfg
+}
+
 func LoadUpstreamConfig(s *store.Store) upstream.Config {
-	return store.LoadJSON(s, upstreamConfigKey, upstream.Config{})
+	return store.LoadJSON(s, upstreamConfigKey, DefaultUpstreamConfig())
 }
 
 func SaveUpstreamConfig(s *store.Store, cfg upstream.Config) error {
@@ -62,7 +85,7 @@ type upstreamApplyResult struct {
 }
 
 func (s *Server) handleUpstreamsGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, LoadUpstreamConfig(s.Store))
+	jsonOK(w, LoadUpstreamConfig(s.Store).Redacted())
 }
 
 func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -70,13 +93,21 @@ func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *st
 		jsonErr(w, 400, "upstreams disabled: nftables not found or turned off")
 		return
 	}
-	var in struct{ ID, Iface, Gateway, Description string }
-	if !decode(r, &in) || in.ID == "" || in.Iface == "" {
-		jsonErr(w, 400, "id and iface required")
+	var in struct{ ID, Iface, Gateway, SOCKS, Description string }
+	if !decode(r, &in) || in.ID == "" {
+		jsonErr(w, 400, "id required")
+		return
+	}
+	if (in.Iface == "") == (in.SOCKS == "") {
+		jsonErr(w, 400, "exactly one of iface or socks required")
+		return
+	}
+	if in.SOCKS != "" && in.Gateway != "" {
+		jsonErr(w, 400, "gateway is not valid with socks")
 		return
 	}
 	cfg, _, err := LoadUpstreamConfig(s.Store).WithAdded(upstream.Upstream{
-		ID: in.ID, Iface: in.Iface, Gateway: in.Gateway, Description: in.Description,
+		ID: in.ID, Iface: in.Iface, Gateway: in.Gateway, SOCKS: in.SOCKS, Description: in.Description,
 	})
 	if err != nil {
 		jsonErr(w, 400, err.Error())
@@ -88,7 +119,7 @@ func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *st
 	}
 	warning := s.applyUpstreams(cfg)
 	s.Store.Audit(u.Username, "upstream_add", in.ID)
-	jsonOK(w, upstreamApplyResult{cfg, warning})
+	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
 func (s *Server) handleUpstreamDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -104,7 +135,7 @@ func (s *Server) handleUpstreamDelete(w http.ResponseWriter, r *http.Request, u 
 	}
 	warning := s.applyUpstreams(cfg)
 	s.Store.Audit(u.Username, "upstream_del", id)
-	jsonOK(w, upstreamApplyResult{cfg, warning})
+	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
 // regenManagementClientAuth rewrites server.conf's management-client-auth
@@ -163,7 +194,7 @@ func (s *Server) handleUpstreamAssign(w http.ResponseWriter, r *http.Request, u 
 		action = "upstream_unassign"
 	}
 	s.Store.Audit(u.Username, action, in.CN)
-	jsonOK(w, upstreamApplyResult{cfg, warning})
+	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
 // handleUpstreamSetDefault: the ad-hoc exit switch — id="" turns it off,
@@ -189,7 +220,7 @@ func (s *Server) handleUpstreamSetDefault(w http.ResponseWriter, r *http.Request
 		action = "upstream_default_off"
 	}
 	s.Store.Audit(u.Username, action, in.ID)
-	jsonOK(w, upstreamApplyResult{cfg, warning})
+	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
 // handleUpstreamReconcile is the explicit "situation's stable now" trigger
@@ -197,7 +228,7 @@ func (s *Server) handleUpstreamSetDefault(w http.ResponseWriter, r *http.Request
 func (s *Server) handleUpstreamReconcile(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cfg, warning := s.ReconcileUpstreams()
 	s.Store.Audit(u.Username, "upstream_reconcile", "")
-	jsonOK(w, upstreamApplyResult{cfg, warning})
+	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
 // trackedRule is one live per-CN nft rule. Keyed by CID (not CN) so a fast

@@ -29,9 +29,11 @@ second-class citizen.
   connected client by hostname over the tunnel, plus custom hosts-file
   entries. Switch it to answer only local names, no upstream forwarding.
 - **Upstreams** (optional) — pick which egress connected clients exit
-  through (a second NIC, a WireGuard peer, anything else already up on the
-  host) instead of the box's own default route, switchable ad hoc with no
-  restart. ovcp only steers and NATs; the admin brings the connection up.
+  through instead of the box's own default route, switchable ad hoc with no
+  restart: an interface (a second NIC, a WireGuard peer, anything else
+  already up on the host — ovcp only steers and NATs, the admin brings the
+  connection up) or a SOCKS5 backend (Tor, proxychains, self-hosted —
+  relayed through a small in-process proxy, auth in the URL).
 - **Live stats & audit log** — per-client traffic history, a top-like
   `stats -follow`, and an audit trail of every admin action.
 - **Telegram bot** (optional) — notifications for revokes, user changes,

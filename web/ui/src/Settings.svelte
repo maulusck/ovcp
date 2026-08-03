@@ -114,7 +114,8 @@
   let upCfg = $state(null)
   let upErr = $state('')
   let upOk = $state('')
-  let newID = $state(''), newIface = $state(''), newGateway = $state(''), newDesc = $state('')
+  let newID = $state(''), newIface = $state(''), newGateway = $state(''), newSocks = $state(''), newDesc = $state('')
+  let newMode = $state('iface') // 'iface' | 'socks' — which fields the add form sends
 
   async function loadUpstreams() {
     try { upCfg = await api('GET', '/upstreams') } catch (x) { flash(v => upErr = v, x.error) }
@@ -125,8 +126,11 @@
     e.preventDefault()
     upErr = ''; upOk = ''
     try {
-      upCfg = await api('POST', '/upstreams', { ID: newID, Iface: newIface, Gateway: newGateway, Description: newDesc })
-      newID = ''; newIface = ''; newGateway = ''; newDesc = ''
+      const body = newMode === 'socks'
+        ? { ID: newID, SOCKS: newSocks, Description: newDesc }
+        : { ID: newID, Iface: newIface, Gateway: newGateway, Description: newDesc }
+      upCfg = await api('POST', '/upstreams', body)
+      newID = ''; newIface = ''; newGateway = ''; newSocks = ''; newDesc = ''
       flash(v => upOk = v, 'Added.')
     } catch (x) { flash(v => upErr = v, x.error) }
   }
@@ -383,19 +387,19 @@
 {#if upstreamsAvailable}
   <div class="card">
     <h2>Upstreams</h2>
-    <p class="muted small">Policy-route connected clients' traffic out a chosen interface instead of the host's own default route. ovcp only steers and NATs — bring the interface itself up first.</p>
+    <p class="muted small">Route connected clients' traffic out a chosen interface or SOCKS proxy (Tor, proxychains, self-hosted) instead of the host's own default route. ovcp only steers and NATs/relays — bring the interface or SOCKS backend itself up first.</p>
     {#if !upCfg}
       <p class="muted">Loading…</p>
     {:else}
       {#if upCfg.Upstreams?.length}
         <table>
-          <thead><tr><th>ID</th><th>Interface</th><th>Gateway</th><th>Description</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Interface</th><th>Gateway / SOCKS</th><th>Description</th><th></th></tr></thead>
           <tbody>
             {#each upCfg.Upstreams as u}
               <tr>
                 <td>{u.ID}{u.ID === upCfg.Default ? ' (default)' : ''}</td>
-                <td>{u.Iface}</td>
-                <td>{u.Gateway || '(onlink)'}</td>
+                <td>{u.Iface || (u.SOCKS ? '(socks)' : '')}</td>
+                <td>{u.SOCKS || u.Gateway || '(onlink)'}</td>
                 <td>{u.Description}</td>
                 <td>{#if isAdmin}<button type="button" class="ghost" onclick={() => delUpstream(u.ID)}>Remove</button>{/if}</td>
               </tr>
@@ -419,12 +423,24 @@
             <label>ID
               <input bind:value={newID} placeholder="wan2" required />
             </label>
-            <label>Interface
-              <input bind:value={newIface} placeholder="eth1, wg0" required />
+            <label>Mode
+              <select bind:value={newMode}>
+                <option value="iface">Interface</option>
+                <option value="socks">SOCKS proxy</option>
+              </select>
             </label>
-            <label>Gateway
-              <input bind:value={newGateway} placeholder="empty = onlink" />
-            </label>
+            {#if newMode === 'iface'}
+              <label>Interface
+                <input bind:value={newIface} placeholder="eth1, wg0" required />
+              </label>
+              <label>Gateway
+                <input bind:value={newGateway} placeholder="empty = onlink" />
+              </label>
+            {:else}
+              <label>SOCKS URL
+                <input bind:value={newSocks} placeholder="socks5://[user:pass@]host:port" required />
+              </label>
+            {/if}
             <label>Description
               <input bind:value={newDesc} placeholder="optional" />
             </label>
