@@ -6,12 +6,9 @@ import (
 	"io"
 )
 
-// completeArgs answers "what comes next" for the words typed so far, reading
-// the same commands table -h/dispatch use — command names, then op names
-// (command.sub), then that op's own flags (command.opBodies), and one level
-// deeper still for a nested op-of-op dispatch like `vpn config set`
-// (command.nested). Every level reads the exact bodies map or factory real
-// dispatch (opDispatch) runs the op through, never a separate declaration.
+// completeArgs walks command name -> op (command.sub) -> op's flags
+// (command.opBodies) -> nested op's flags (command.nested), reading the
+// exact bodies/factories real dispatch (opDispatch) runs through.
 func completeArgs(words []string) []string {
 	find := func(name string) *command {
 		for i := range commands {

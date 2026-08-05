@@ -35,12 +35,8 @@ func TestCompleteArgs(t *testing.T) {
 	}
 }
 
-// TestCompleteFlags: commands with no fixed sub list complete their flag
-// names; commands with one complete the sub list at the op position, then
-// that op's own flags one level below (e.g. `certificate issue -cn`) — and
-// one level deeper still for a nested op-of-op dispatch (`vpn config set
-// -subnet`), driven by the exact same bodies maps/factories real dispatch
-// runs through, not a second declaration.
+// TestCompleteFlags: flags for a flat command, op names then op flags for a
+// dispatched one, and one level deeper still for nested ops (`vpn config set`).
 func TestCompleteFlags(t *testing.T) {
 	if r := run(t, nil, "__complete", "ovcp", "stats"); r.code != 0 ||
 		!strings.Contains(r.stdout, "-cn") || !strings.Contains(r.stdout, "-follow") {

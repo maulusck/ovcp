@@ -439,6 +439,25 @@ func TestSortByFlag(t *testing.T) {
 	}
 }
 
+func TestVisibleWidth(t *testing.T) {
+	// ansi() wraps unconditionally (unlike red/green/yellow, which no-op
+	// outside a real terminal) — needed here so the ANSI-stripping path is
+	// actually exercised regardless of whether the test runs on a tty.
+	cases := map[string]int{
+		"":                           0,
+		"up":                         2,
+		ansi(ansiRed, "REVOKED"):     7,
+		ansi(ansiGreen, "enabled"):   7,
+		ansi(ansiYellow, "expiring"): 8,
+		"café":                       4, // rune count, not byte count
+	}
+	for s, want := range cases {
+		if got := visibleWidth(s); got != want {
+			t.Errorf("visibleWidth(%q) = %d, want %d", s, got, want)
+		}
+	}
+}
+
 func TestListFilterSort(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {

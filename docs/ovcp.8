@@ -520,7 +520,7 @@ errors the same as any CN with no active cert.
 .TP
 .B upstream list
 .TQ
-.B upstream add \fB\-id\fR \fINAME\fR (\fB\-iface\fR \fIIFACE\fR [\fB\-gateway\fR \fIIP\fR] | \fB\-socks\fR \fIURL\fR) [\fB\-desc\fR \fITEXT\fR]
+.B upstream add \fB\-id\fR \fINAME\fR (\fB\-iface\fR \fIIFACE\fR [\fB\-gateway\fR \fIIP\fR] | \fB\-socks\fR \fIURL\fR [\fB\-dial\-timeout\fR \fIN\fR] [\fB\-handshake\-timeout\fR \fIN\fR]) [\fB\-desc\fR \fITEXT\fR]
 .TQ
 .B upstream del \fB\-id\fR \fINAME\fR
 .TQ
@@ -552,7 +552,12 @@ which speaks the SOCKS5 CONNECT handshake (user/pass auth if the URL carries
 credentials) to the backend; it carries TCP only, never UDP, and fails
 closed the same way \-iface's kill\-switch does \(en a dead or unreachable
 backend just drops the connection, never falls through to the host's own
-route. The URL's password never appears again in
+route. \fB\-dial\-timeout\fR/\fB\-handshake\-timeout\fR (seconds) override
+this one upstream's connect/negotiation timeout \(en a fast local backend
+wants these low, Tor wants headroom for real circuit\-build time; 0 (the
+default) uses the server\-wide default (see \fBOVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT\fR/
+\fBOVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT\fR in \fBENVIRONMENT\fR). The URL's
+password never appears again in
 .B list/reconcile/status
 output or the REST API once saved, only \fB***\fR.
 .B add
@@ -1100,11 +1105,15 @@ above \(en see \fBupstream add \-socks\fR in \fBCOMMANDS\fR. Invalid or
 already superseded by a saved config: ignored, logged, never fatal.
 .TP
 .B OVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT, OVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT
-Seconds; override the SOCKS relay's connect timeout (default \fB10\fR) and
-SOCKS negotiation timeout (default \fB30\fR) for a slower or faster network
-\(en the handshake bound is separate and more generous by default since a
-Tor backend's real circuit\-build time can run past a plain TCP connect's.
-Invalid or non\-positive values fall back to the default. No \fIiface\fR/
+Seconds; server\-wide default for the SOCKS relay's connect timeout
+(default \fB10\fR) and SOCKS negotiation timeout (default \fB30\fR) \(en
+the handshake bound is separate and more generous by default since a Tor
+backend's real circuit\-build time can run past a plain TCP connect's. Any
+upstream's own \fB\-dial\-timeout\fR/\fB\-handshake\-timeout\fR (see
+\fBupstream add\fR in \fBCOMMANDS\fR) overrides these per\-upstream, e.g. a
+low value for a fast local backend alongside a high one for Tor in the
+same config. Invalid or non\-positive values fall back to the default. No
+\fIiface\fR/
 \fIgateway\fR equivalent exists: that mode is plain kernel routing (\fBip
 route\fR/\fBip rule\fR), not a software connection with anything to time
 out \(en its kill\-switch is an unreachable fallback route, not time\-based.

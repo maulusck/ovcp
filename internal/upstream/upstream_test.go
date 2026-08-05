@@ -61,15 +61,40 @@ func TestValidateSOCKS(t *testing.T) {
 	}
 }
 
+// TestValidateSOCKSTimeoutOverrides: per-upstream dial/handshake timeout
+// overrides are accepted for socks-mode.
+func TestValidateSOCKSTimeoutOverrides(t *testing.T) {
+	c := Config{
+		Upstreams: []Upstream{{
+			ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase,
+			DialTimeout: 5, HandshakeTimeout: 60,
+		}},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid socks timeout overrides rejected: %v", err)
+	}
+}
+
 func TestValidateRejectsSOCKS(t *testing.T) {
 	base := func() Upstream { return Upstream{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase} }
 	cases := map[string]Upstream{
-		"socks with iface":   func() Upstream { u := base(); u.Iface = "eth0"; return u }(),
-		"socks with gateway": func() Upstream { u := base(); u.Gateway = "192.0.2.1"; return u }(),
-		"non-socks5 scheme":  func() Upstream { u := base(); u.SOCKS = "http://127.0.0.1:9050"; return u }(),
-		"missing port":       func() Upstream { u := base(); u.SOCKS = "socks5://127.0.0.1"; return u }(),
-		"missing host":       func() Upstream { u := base(); u.SOCKS = "socks5://:9050"; return u }(),
-		"unparseable url":    func() Upstream { u := base(); u.SOCKS = "socks5://%zz"; return u }(),
+		"socks with iface":      func() Upstream { u := base(); u.Iface = "eth0"; return u }(),
+		"socks with gateway":    func() Upstream { u := base(); u.Gateway = "192.0.2.1"; return u }(),
+		"non-socks5 scheme":     func() Upstream { u := base(); u.SOCKS = "http://127.0.0.1:9050"; return u }(),
+		"missing port":          func() Upstream { u := base(); u.SOCKS = "socks5://127.0.0.1"; return u }(),
+		"missing host":          func() Upstream { u := base(); u.SOCKS = "socks5://:9050"; return u }(),
+		"unparseable url":       func() Upstream { u := base(); u.SOCKS = "socks5://%zz"; return u }(),
+		"negative dial timeout": func() Upstream { u := base(); u.DialTimeout = -1; return u }(),
+		"negative handshake timeout": func() Upstream {
+			u := base()
+			u.HandshakeTimeout = -1
+			return u
+		}(),
+		"timeout on iface-mode": func() Upstream {
+			u := Upstream{ID: "wan2", Iface: "eth1", Table: tableBase}
+			u.DialTimeout = 5
+			return u
+		}(),
 	}
 	for name, u := range cases {
 		t.Run(name, func(t *testing.T) {

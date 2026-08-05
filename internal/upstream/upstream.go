@@ -75,6 +75,12 @@ type Upstream struct {
 	Gateway string // next-hop IP; empty = onlink route via Iface. Iface-mode only.
 	SOCKS   string // socks5://[user:pass@]host:port; mutually exclusive with Iface/Gateway
 
+	// DialTimeout/HandshakeTimeout: seconds, 0 = server default (see
+	// OVCP_UPSTREAM_SOCKS_*_TIMEOUT). SOCKS-mode only — a fast/local backend
+	// wants these low, Tor wants headroom for real circuit-build time.
+	DialTimeout      int
+	HandshakeTimeout int
+
 	Table       int // routing table number (Iface-mode) or, offset from tableBase, the local relay port (SOCKS-mode); assigned once via NextTable, stable
 	Description string
 }
@@ -87,10 +93,9 @@ func (u Upstream) IsSOCKS() bool { return u.SOCKS != "" }
 // allocator, stable for the same reason Table already is.
 func (u Upstream) socksPort() int { return 20000 + (u.Table - tableBase) }
 
-// IsUp reports whether u can carry traffic right now. Iface-mode needs its
-// interface to exist; socks-mode has no cheap liveness check (that would
-// mean dialing the backend), so it's reported up once configured — the one
-// check DownIDs and every "is this upstream reachable" caller shares.
+// IsUp: Iface-mode needs its interface to exist; socks-mode has no cheap
+// liveness check (that means dialing the backend), so it's reported up
+// once configured. The one check DownIDs and every caller shares.
 func (u Upstream) IsUp() bool { return u.IsSOCKS() || ifaceExists(u.Iface) }
 
 type Config struct {
@@ -224,10 +229,8 @@ var ifaceRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,14}$`)
 func validateSOCKSURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		// Not %w-wrapped: url.Error.Error() echoes the raw input verbatim,
-		// which may carry a password — this error can reach slog (e.g.
-		// OVCP_UPSTREAM_SOCKS's own invalid-input warning), a credential
-		// must never get there even indirectly.
+		// Not %w-wrapped: url.Error echoes the raw input (may carry a
+		// password) verbatim, and this can reach slog. Never even indirectly.
 		return fmt.Errorf("bad socks url: unparseable")
 	}
 	if u.Scheme != "socks5" {
@@ -239,10 +242,9 @@ func validateSOCKSURL(raw string) error {
 	return nil
 }
 
-// RedactSOCKS masks a socks5:// URL's password for display (CLI/REST
-// listings) — a stored credential, same posture as every other secret this
-// CLI never echoes back in plain text. Returns raw unchanged if it doesn't
-// parse or carries no password.
+// RedactSOCKS masks a socks5:// URL's password for display — same posture
+// as every other secret this CLI never echoes back. Returns raw unchanged
+// if it doesn't parse or carries no password.
 func RedactSOCKS(raw string) string {
 	if raw == "" {
 		return ""
@@ -291,12 +293,18 @@ func (c Config) Validate() error {
 			if err := validateSOCKSURL(u.SOCKS); err != nil {
 				return fmt.Errorf("upstream: %q: %w", u.ID, err)
 			}
+			if u.DialTimeout < 0 || u.HandshakeTimeout < 0 {
+				return fmt.Errorf("upstream: %q: timeouts must not be negative", u.ID)
+			}
 		} else {
 			if !ifaceRe.MatchString(u.Iface) {
 				return fmt.Errorf("upstream: %q: invalid iface %q", u.ID, u.Iface)
 			}
 			if u.Gateway != "" && net.ParseIP(u.Gateway) == nil {
 				return fmt.Errorf("upstream: %q: bad gateway %q", u.ID, u.Gateway)
+			}
+			if u.DialTimeout != 0 || u.HandshakeTimeout != 0 {
+				return fmt.Errorf("upstream: %q: dial/handshake timeout is socks-mode only", u.ID)
 			}
 		}
 		if u.Table < tableBase || u.Table >= tableBase+maxUpstreams {

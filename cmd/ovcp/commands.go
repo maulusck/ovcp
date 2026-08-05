@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 
@@ -30,15 +32,12 @@ import (
 	"github.com/ovcp/ovcp/internal/upstream"
 )
 
-// opBody is one op's flag-registration + closure — the shape every op with
-// its own flags is written in, real dispatch and completion alike, so a
-// flag is only ever declared once. Same shape as command.run itself, one
-// level down.
+// opBody is one op's flag-registration + closure, real dispatch and
+// completion alike — a flag is only ever declared once. command.run's shape, one level down.
 type opBody = func(fs *flag.FlagSet) func(ctx *cliContext)
 
-// nestedDispatch describes an op that is itself an op-of-op dispatch (only
-// "config" today: `vpn config get|set`, etc) — completion's own copy of
-// what opDispatch already drives for real execution.
+// nestedDispatch is an op-of-op dispatch (only "config": `vpn config
+// get|set`) — completion's copy of what opDispatch drives for real execution.
 type nestedDispatch struct {
 	ops    []string
 	bodies map[string]opBody
@@ -55,10 +54,8 @@ type command struct {
 	subDesc map[string]string
 	run     func(fs *flag.FlagSet) func(ctx *cliContext)
 
-	// opBodies/nested back completion for ops below this command — the same
-	// bodies maps (opDispatch) or factories real dispatch already runs
-	// through, never a second declaration of the same flags. Both nil for a
-	// command with no op-level flags to complete.
+	// opBodies/nested back completion — same bodies/factories real dispatch
+	// (opDispatch) already runs through. Nil if no op-level flags exist.
 	opBodies map[string]opBody
 	nested   map[string]nestedDispatch
 }
@@ -118,12 +115,9 @@ func opArg(fs *flag.FlagSet, name string, ops []string, desc map[string]string) 
 	return opArgList(name, ops, desc, fs.Args())
 }
 
-// opDispatch is one op-dispatch level's real execution: pick op from rest,
-// register its own flags via bodies[op] (a throwaway FlagSet is exactly
-// what completion also runs bodies[op] against — one declaration, both
-// uses), parse, run. Originally just the "<name> config get|set[|preview]"
-// wiring (vpn/dns/logs/stats/telegram all share it); now every op-dispatched
-// command's whole op switch, not "config" only.
+// opDispatch: pick op from rest, register its flags via bodies[op] (same
+// call completion runs against a throwaway FlagSet), parse, run. Every
+// op-dispatched command's whole switch now, not just "<name> config" anymore.
 func opDispatch(name string, ops []string, desc map[string]string, bodies map[string]opBody) func(ctx *cliContext, rest []string) {
 	return func(ctx *cliContext, rest []string) {
 		op, crest := opArgList(name, ops, desc, rest)
@@ -621,23 +615,54 @@ type certOut struct {
 	NotAfter time.Time `json:"expires"`
 }
 
-// statusWidth is the STATUS column's width everywhere it appears — the one
-// number coloredStatus and every table header derive from, so a header can
-// never drift out of sync with what coloredStatus actually pads to.
-const statusWidth = 8
-
-// coloredStatus is every command's shared "STATUS  " text cell.
+// coloredStatus is every command's shared colored status cell. Padding is
+// printTable's job now, not this function's — it just colors the word.
 func coloredStatus(status string) string {
-	st := fmt.Sprintf("%-*s", statusWidth, status) // pad first: color codes must not count toward width
 	switch status {
 	case "REVOKED", "expired", "down", "disabled":
-		return red(st)
+		return red(status)
 	case "expiring":
-		return yellow(st)
+		return yellow(status)
 	case "valid", "up", "enabled":
-		return green(st)
+		return green(status)
 	}
-	return st
+	return status
+}
+
+// ansiSGR matches the color escapes ovcp's own red/green/yellow emit —
+// visibleWidth strips them so colored and plain cells still measure right.
+var ansiSGR = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// visibleWidth: rune count, ANSI stripped first.
+// ponytail: not display-width-aware, a wide (CJK) rune still misaligns —
+// real content here (IDs, CNs, English text) is single-width; upgrade if that changes.
+func visibleWidth(s string) int {
+	return utf8.RuneCountInString(ansiSGR.ReplaceAllString(s, ""))
+}
+
+// printTable is the one aligned-table mechanism every list command shares
+// — auto-sizes each column to its widest cell, no hardcoded widths to
+// drift out of sync with real data.
+func printTable(headers []string, rows [][]string) {
+	all := append([][]string{headers}, rows...)
+	widths := make([]int, len(headers))
+	for _, row := range all {
+		for i, cell := range row {
+			if w := visibleWidth(cell); w > widths[i] {
+				widths[i] = w
+			}
+		}
+	}
+	for _, row := range all {
+		var b strings.Builder
+		for i, cell := range row {
+			b.WriteString(cell)
+			if i < len(row)-1 {
+				b.WriteString(strings.Repeat(" ", widths[i]-visibleWidth(cell)+1))
+			}
+		}
+		fmt.Println(b.String())
+	}
 }
 
 // filterSortCerts applies `list`/`record list`'s shared -status/-kind
@@ -676,11 +701,11 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 			rows = append(rows, certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter})
 		}
 		output(rows, func(rows []certOut) {
-			fmt.Printf("%-*s %-10s %-24s %-18s %s\n", statusWidth, "STATUS", "KIND", "CN", "EXPIRES", "SERIAL")
-			for _, c := range rows {
-				fmt.Printf("%s %-10s %-24s expires %s  %s\n",
-					coloredStatus(c.Status), c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial)
+			trows := make([][]string, len(rows))
+			for i, c := range rows {
+				trows[i] = []string{coloredStatus(c.Status), c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial}
 			}
+			printTable([]string{"STATUS", "KIND", "CN", "EXPIRES", "SERIAL"}, trows)
 		})
 	}
 }
@@ -984,8 +1009,8 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		output(recordListOut{rows, string(customData)}, func(o recordListOut) {
 			fmt.Println("Certificate records:")
-			fmt.Printf("%-*s %-10s %-24s %-18s %-*s %s\n", statusWidth, "STATUS", "KIND", "CN", "EXPIRES", statusWidth, "DNS", "SERIAL")
-			for _, r := range o.Certs {
+			trows := make([][]string, len(o.Certs))
+			for i, r := range o.Certs {
 				text := "excluded"
 				if r.IncludeDNS {
 					text = "included"
@@ -993,13 +1018,13 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 						text = r.IP
 					}
 				}
-				dns := fmt.Sprintf("%-*s", statusWidth, text) // pad first: color codes must not count toward width
+				dns := text
 				if r.IncludeDNS {
-					dns = green(dns)
+					dns = green(text)
 				}
-				fmt.Printf("%s %-10s %-24s expires %s  %s  %s\n",
-					coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial)
+				trows[i] = []string{coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial}
 			}
+			printTable([]string{"STATUS", "KIND", "CN", "EXPIRES", "DNS", "SERIAL"}, trows)
 			fmt.Println("Custom records:")
 			fmt.Print(o.Custom)
 		})
@@ -1181,21 +1206,22 @@ func cmdUpstreamList(_ *flag.FlagSet) func(ctx *cliContext) {
 		cfg := api.LoadUpstreamConfig(s)
 		output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
 			fmt.Println("Upstreams:")
-			fmt.Printf("%-14s %-*s %-10s %-15s %-6s %s\n", "ID", statusWidth, "STATUS", "IFACE", "GATEWAY", "TABLE", "DESCRIPTION")
-			for _, u := range r.Upstreams {
-				iface, gw, extra := u.Iface, u.Gateway, ""
+			trows := make([][]string, len(r.Upstreams))
+			for i, u := range r.Upstreams {
+				iface, gw := u.Iface, u.Gateway
 				if gw == "" {
 					gw = "onlink"
 				}
 				if u.SOCKS != "" {
-					iface, gw, extra = "(socks)", "-", " "+u.SOCKS
+					iface, gw = "(socks)", u.SOCKS
 				}
-				mark := ""
+				id := u.ID
 				if u.ID == r.Default {
-					mark = green(" (default)")
+					id += green(" (default)")
 				}
-				fmt.Printf("%-14s %s %-10s %-15s %-6d %s%s%s\n", u.ID, coloredStatus(upStatus(u.Up)), iface, gw, u.Table, u.Description, extra, mark)
+				trows[i] = []string{id, coloredStatus(upStatus(u.Up)), iface, gw, fmt.Sprintf("%d", u.Table), u.Description}
 			}
+			printTable([]string{"ID", "STATUS", "IFACE", "GATEWAY/SOCKS", "TABLE", "DESCRIPTION"}, trows)
 			if len(r.PerCN) > 0 {
 				cns := make([]string, 0, len(r.PerCN))
 				for cn := range r.PerCN {
@@ -1203,10 +1229,11 @@ func cmdUpstreamList(_ *flag.FlagSet) func(ctx *cliContext) {
 				}
 				slices.Sort(cns)
 				fmt.Println("Per-CN overrides:")
-				fmt.Printf("%-24s %s\n", "CN", "UPSTREAM")
-				for _, cn := range cns {
-					fmt.Printf("%-24s %s\n", cn, r.PerCN[cn])
+				perCNRows := make([][]string, len(cns))
+				for i, cn := range cns {
+					perCNRows[i] = []string{cn, r.PerCN[cn]}
 				}
+				printTable([]string{"CN", "UPSTREAM"}, perCNRows)
 			}
 		})
 	}
@@ -1217,6 +1244,8 @@ func cmdUpstreamAdd(afs *flag.FlagSet) func(ctx *cliContext) {
 	iface := afs.String("iface", "", "egress interface, e.g. eth1, wg0")
 	gateway := afs.String("gateway", "", "next-hop IP (empty = onlink); -iface mode only")
 	socks := afs.String("socks", "", "socks5://[user:pass@]host:port backend (Tor, proxychains, self-hosted); mutually exclusive with -iface/-gateway")
+	dialTimeout := afs.Int("dial-timeout", 0, "TCP connect timeout in seconds, 0 = server default; -socks mode only")
+	handshakeTimeout := afs.Int("handshake-timeout", 0, "SOCKS negotiation timeout in seconds, 0 = server default (higher for Tor, lower for a fast/local backend); -socks mode only")
 	desc := afs.String("desc", "", "description")
 	return func(ctx *cliContext) {
 		upstreamsReady()
@@ -1229,10 +1258,15 @@ func cmdUpstreamAdd(afs *flag.FlagSet) func(ctx *cliContext) {
 		if *socks != "" && *gateway != "" {
 			die(fmt.Errorf("-gateway is not valid with -socks"))
 		}
+		if *socks == "" && (*dialTimeout != 0 || *handshakeTimeout != 0) {
+			die(fmt.Errorf("-dial-timeout/-handshake-timeout are only valid with -socks"))
+		}
 		s := ctx.openStore()
 		defer s.Close()
 		cfg, added, err := api.LoadUpstreamConfig(s).WithAdded(upstream.Upstream{
-			ID: *id, Iface: *iface, Gateway: *gateway, SOCKS: *socks, Description: *desc,
+			ID: *id, Iface: *iface, Gateway: *gateway, SOCKS: *socks,
+			DialTimeout: *dialTimeout, HandshakeTimeout: *handshakeTimeout,
+			Description: *desc,
 		})
 		die(err)
 		die(api.SaveUpstreamConfig(s, cfg))
@@ -1352,14 +1386,15 @@ func cmdUpstreamReconcile(rfs *flag.FlagSet) func(ctx *cliContext) {
 			for _, id := range r.PerCN {
 				inUse[id] = true
 			}
-			fmt.Printf("%-14s %-*s %s\n", "ID", statusWidth, "STATUS", "NOTE")
-			for _, u := range r.Upstreams {
+			trows := make([][]string, len(r.Upstreams))
+			for i, u := range r.Upstreams {
 				note := ""
 				if !u.Up && inUse[u.ID] {
 					note = "actively routed, traffic is being kill-switched"
 				}
-				fmt.Printf("%-14s %s %s\n", u.ID, coloredStatus(upStatus(u.Up)), note)
+				trows[i] = []string{u.ID, coloredStatus(upStatus(u.Up)), note}
 			}
+			printTable([]string{"ID", "STATUS", "NOTE"}, trows)
 		})
 	}
 }
@@ -1400,10 +1435,8 @@ func activeCertByCN(certs []store.Cert, cn string) (store.Cert, bool) {
 	return store.Cert{}, false
 }
 
-// procOpBody registers one already-resolved lifecycle op's (start/stop/
-// restart/reconnect/status) one flag (-ctrl) and returns its closure — the
-// one place that flag is declared, real dispatch (runProcOp) and completion
-// (opBodies) alike.
+// procOpBody registers a lifecycle op's one flag (-ctrl) and returns its
+// closure — the one place it's declared, runProcOp and completion alike.
 func procOpBody(name, op, wirePrefix string) opBody {
 	return func(fs *flag.FlagSet) func(ctx *cliContext) {
 		ctrl := ctrlFlag(fs, "")
@@ -2111,19 +2144,19 @@ func cmdUserList(lfs *flag.FlagSet) func(ctx *cliContext) {
 			rows = append(rows, api.NewUserSummary(u))
 		}
 		output(rows, func(rows []api.UserSummary) {
-			fmt.Printf("%-20s %-9s %-*s %-4s %s\n", "USERNAME", "ROLE", statusWidth, "STATUS", "2FA", "CREATED")
-			for _, u := range rows {
+			trows := make([][]string, len(rows))
+			for i, u := range rows {
 				status := "enabled"
 				if u.Disabled {
 					status = "disabled"
 				}
-				st := coloredStatus(status)
 				tf := "-"
 				if u.TOTP {
 					tf = "2fa"
 				}
-				fmt.Printf("%-20s %-9s %s %-4s %s\n", u.Username, u.Role, st, tf, u.CreatedAt.Format("2006-01-02"))
+				trows[i] = []string{u.Username, u.Role, coloredStatus(status), tf, u.CreatedAt.Format("2006-01-02")}
 			}
+			printTable([]string{"USERNAME", "ROLE", "STATUS", "2FA", "CREATED"}, trows)
 		})
 	}
 }
@@ -2252,10 +2285,11 @@ func cmdAudit(fs *flag.FlagSet) func(ctx *cliContext) {
 		slices.Reverse(tail) // newest first, in both output modes
 		die(sortByFlag(tail, auditSortGetters, *sortBy, *desc))
 		output(tail, func(tail []store.AuditEntry) {
-			fmt.Printf("%-25s %-12s %-16s %s\n", "TIME", "ACTOR", "ACTION", "DETAIL")
-			for _, e := range tail {
-				fmt.Printf("%s %-12s %-16s %s\n", e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail)
+			trows := make([][]string, len(tail))
+			for i, e := range tail {
+				trows[i] = []string{e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail}
 			}
+			printTable([]string{"TIME", "ACTOR", "ACTION", "DETAIL"}, trows)
 		})
 	}
 }
