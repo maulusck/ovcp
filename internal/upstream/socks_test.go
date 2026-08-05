@@ -27,14 +27,29 @@ func TestEnvSeconds(t *testing.T) {
 	}
 }
 
-// TestRelayToDstRefusesLoopback locks in a real security fix: a client
-// choosing a loopback destination must never reach the SOCKS backend at
-// all — a self-hosted backend on the same host as ovcp would otherwise let
-// any VPN client reach whatever else is bound to that host's own loopback,
-// bypassing the kernel's own "loopback is never externally routable"
-// protection that every other upstream mode still has (this relay dials via
-// userspace net.Dial, not kernel routing). Asserts the backend's handler
-// never even runs, not just that the client connection gets closed.
+func TestResolveTimeout(t *testing.T) {
+	cases := []struct {
+		name        string
+		perUpstream int
+		def         time.Duration
+		want        time.Duration
+	}{
+		{"unset falls back to default", 0, 10 * time.Second, 10 * time.Second},
+		{"negative falls back to default", -1, 10 * time.Second, 10 * time.Second},
+		{"positive override wins", 5, 10 * time.Second, 5 * time.Second},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := resolveTimeout(c.perUpstream, c.def); got != c.want {
+				t.Errorf("resolveTimeout(%d, %v) = %v, want %v", c.perUpstream, c.def, got, c.want)
+			}
+		})
+	}
+}
+
+// TestRelayToDstRefusesLoopback: a loopback destination must never reach
+// the backend at all (SSRF guard) — asserts the handler never even runs,
+// not just that the client connection gets closed.
 func TestRelayToDstRefusesLoopback(t *testing.T) {
 	called := false
 	backend := fakeSOCKSServer(t, func(conn net.Conn) { called = true })
@@ -47,13 +62,9 @@ func TestRelayToDstRefusesLoopback(t *testing.T) {
 	}
 }
 
-// TestPipeClosesBothOnEitherSideFinishing locks in a real bug: pipe used to
-// CloseWrite (half-close) the far side instead of fully closing it, so if
-// the client disconnected while the backend stayed idle/unresponsive (never
-// noticing the FIN), the relay's other io.Copy direction blocked on Read()
-// forever — a goroutine + fd leaked per abandoned client. A full Close on
-// either direction finishing fixes it; this proves pipe returns promptly
-// and the far side is actually torn down, not left open.
+// TestPipeClosesBothOnEitherSideFinishing: pipe used to CloseWrite (half-
+// close) instead of fully closing, leaking the other leg against an
+// unresponsive peer. Proves pipe returns promptly and the far side closes.
 func TestPipeClosesBothOnEitherSideFinishing(t *testing.T) {
 	aClient, aServer := net.Pipe() // stands in for relayConn's client leg
 	bClient, bServer := net.Pipe() // stands in for relayConn's backend leg
@@ -78,9 +89,67 @@ func TestPipeClosesBothOnEitherSideFinishing(t *testing.T) {
 	}
 }
 
+// TestRelayConnRejectsDirectConnection: listening on 0.0.0.0 (needed so
+// nft's redirect, which always targets the inbound interface's own
+// address, can reach the relay) means a direct, non-redirected connection
+// can reach this port too. SO_ORIGINAL_DST for one of those equals the
+// accepted socket's own local address (not some other real destination),
+// which is exactly what relayConn checks for — asserts the backend's
+// handler never even runs.
+func TestRelayConnRejectsDirectConnection(t *testing.T) {
+	called := false
+	backend := fakeSOCKSServer(t, func(conn net.Conn) { called = true })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	accept := func() *net.TCPConn {
+		accepted := make(chan *net.TCPConn, 1)
+		go func() {
+			c, err := ln.Accept()
+			if err == nil {
+				accepted <- c.(*net.TCPConn)
+			} else {
+				accepted <- nil
+			}
+		}()
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return <-accepted
+	}
+
+	// Probe first, on the accepted side relayConn actually uses — skip if
+	// this host can't give a SO_ORIGINAL_DST answer at all (same gate as
+	// TestGetOriginalDst).
+	probe := accept()
+	if probe == nil {
+		t.Fatal("accept failed")
+	}
+	if _, err := getOriginalDst(probe); err != nil {
+		t.Skipf("SO_ORIGINAL_DST unavailable on this host (no conntrack entry): %v", err)
+	}
+	probe.Close()
+
+	server := accept()
+	if server == nil {
+		t.Fatal("accept failed")
+	}
+	relayConn(server, backend)
+
+	if called {
+		t.Fatal("relayConn must refuse a direct, non-redirected connection before ever dialing the backend")
+	}
+}
+
 // fakeSOCKSServer accepts one connection and runs handle against it —
 // enough to drive socksHandshake's exact wire format from the other side.
-func fakeSOCKSServer(t *testing.T, handle func(conn net.Conn)) *url.URL {
+func fakeSOCKSServer(t *testing.T, handle func(conn net.Conn)) socksBackend {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -99,7 +168,7 @@ func fakeSOCKSServer(t *testing.T, handle func(conn net.Conn)) *url.URL {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return u
+	return socksBackend{url: u, dialTimeout: 2 * time.Second, handshakeTimeout: 2 * time.Second}
 }
 
 func TestSOCKSConnectNoAuth(t *testing.T) {
@@ -155,7 +224,7 @@ func TestSOCKSConnectWithAuth(t *testing.T) {
 		io.ReadFull(conn, req)
 		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	})
-	backend.User = url.UserPassword("alice", "hunter2")
+	backend.url.User = url.UserPassword("alice", "hunter2")
 	dst := &net.TCPAddr{IP: net.ParseIP("93.184.216.34"), Port: 443}
 	conn, err := socksConnect(backend, dst)
 	if err != nil {
@@ -173,7 +242,7 @@ func TestSOCKSConnectAuthRejected(t *testing.T) {
 		io.ReadFull(conn, make([]byte, int(authHead[1])+1))
 		conn.Write([]byte{0x01, 0x01}) // auth failed
 	})
-	backend.User = url.UserPassword("alice", "wrong")
+	backend.url.User = url.UserPassword("alice", "wrong")
 	if _, err := socksConnect(backend, &net.TCPAddr{IP: net.ParseIP("1.2.3.4"), Port: 80}); err == nil {
 		t.Fatal("expected error on rejected auth")
 	}
@@ -210,14 +279,9 @@ func TestSOCKSConnectIPv6Dest(t *testing.T) {
 	conn.Close()
 }
 
-// getOriginalDst reads SO_ORIGINAL_DST, which needs a conntrack entry —
-// present for any tracked connection, not just a redirected one, so on a
-// plain unredirected connection "original" trivially equals the real
-// destination. Verifying that exercises the real syscall + RawSockaddrInet4
-// parsing + port byte-swap against ground truth, without needing a real
-// nft redirect (root/netns) to set one up. Skips cleanly if this host has
-// no conntrack entry to read (module not loaded) — getOriginalDst returning
-// an error there is exactly the fail-closed behavior relayConn depends on.
+// getOriginalDst needs a conntrack entry — present for any tracked
+// connection, so an unredirected one just has "original" == real dest.
+// Skips cleanly if unavailable; erroring there is relayConn's fail-closed contract.
 func TestGetOriginalDst(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

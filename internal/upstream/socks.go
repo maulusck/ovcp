@@ -20,6 +20,15 @@ import (
 // applyMu for its whole run — no separate lock needed here.
 var socksRelays = map[int]net.Listener{}
 
+// socksBackend bundles a SOCKS backend's connection target with its
+// resolved timeouts — one value threaded through the relay chain instead of
+// three positional params growing at every call site.
+type socksBackend struct {
+	url              *url.URL
+	dialTimeout      time.Duration
+	handshakeTimeout time.Duration
+}
+
 // startSOCKSRelays tears down every relay and starts one fresh per
 // SOCKS-kind upstream in cfg — the same tear-down-then-rebuild shape Apply
 // already uses for routes and the nft table.
@@ -30,18 +39,25 @@ func startSOCKSRelays(cfg Config) error {
 		if !u.IsSOCKS() {
 			continue
 		}
-		backend, err := url.Parse(u.SOCKS) // shape already checked by Config.Validate
+		parsed, err := url.Parse(u.SOCKS) // shape already checked by Config.Validate
 		if err != nil {
-			// Not %w-wrapped: see validateSOCKSURL's identical note — this
-			// error can reach slog via Apply's caller, a credential-bearing
-			// URL must never get there even indirectly. Unreachable in
-			// practice (Validate already guarantees a successful parse
-			// before any config is stored), kept safe anyway.
+			// Not %w-wrapped: raw URL may carry a password, and this can
+			// reach slog via Apply's caller. Unreachable in practice.
 			errs = append(errs, fmt.Errorf("upstream: %q: unparseable socks url", u.ID))
 			continue
 		}
+		backend := socksBackend{
+			url:              parsed,
+			dialTimeout:      resolveTimeout(u.DialTimeout, dialTimeout),
+			handshakeTimeout: resolveTimeout(u.HandshakeTimeout, handshakeTimeout),
+		}
+		// 0.0.0.0, not 127.0.0.1: nft's redirect always targets the packet's
+		// own inbound interface address (tun0), never loopback — a listener
+		// bound to 127.0.0.1 never receives redirected traffic. A direct,
+		// non-redirected connection to this port is still rejected, by
+		// relayConn (see its own comment), not by the bind address.
 		port := u.socksPort()
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("upstream: %q: socks relay listen: %w", u.ID, err))
 			continue
@@ -50,6 +66,15 @@ func startSOCKSRelays(cfg Config) error {
 		go relayLoop(ln, backend)
 	}
 	return errors.Join(errs...)
+}
+
+// resolveTimeout: an upstream's own override (seconds, positive) if set,
+// else the server-wide default.
+func resolveTimeout(perUpstream int, def time.Duration) time.Duration {
+	if perUpstream <= 0 {
+		return def
+	}
+	return time.Duration(perUpstream) * time.Second
 }
 
 func stopSOCKSRelays() {
@@ -61,7 +86,7 @@ func stopSOCKSRelays() {
 
 // relayLoop accepts until ln is closed (by the next Apply/Teardown rebuild),
 // which is the normal, expected way this loop ends.
-func relayLoop(ln net.Listener, backend *url.URL) {
+func relayLoop(ln net.Listener, backend socksBackend) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -71,15 +96,22 @@ func relayLoop(ln net.Listener, backend *url.URL) {
 	}
 }
 
-// relayConn recovers the client's real destination (rewritten to this
-// listener's own address by nft's redirect) and hands off to relayToDst.
-// Any failure just drops the connection — the client's TCP connect times
-// out/resets, never falls through to a leak.
-func relayConn(conn *net.TCPConn, backend *url.URL) {
+// relayConn recovers the real destination and hands off to relayToDst —
+// any failure just drops the connection, never falls through to a leak.
+// Listening on 0.0.0.0 (needed because nft's redirect targets the inbound
+// interface's own address, never loopback) means a direct, non-redirected
+// connection can reach this port too; SO_ORIGINAL_DST for one of those
+// equals the socket's own local address rather than some other real
+// destination (proven by TestGetOriginalDst), which is exactly how this
+// tells the two apart.
+func relayConn(conn *net.TCPConn, backend socksBackend) {
 	defer conn.Close()
 	dst, err := getOriginalDst(conn)
 	if err != nil {
 		return
+	}
+	if local, ok := conn.LocalAddr().(*net.TCPAddr); ok && dst.IP.Equal(local.IP) && dst.Port == local.Port {
+		return // not actually redirected — a direct connection to the relay itself
 	}
 	relayToDst(conn, backend, dst)
 }
@@ -87,18 +119,10 @@ func relayConn(conn *net.TCPConn, backend *url.URL) {
 // relayToDst is relayConn's testable half (getOriginalDst needs a real
 // SO_ORIGINAL_DST-tagged connection, this doesn't) — pipes bytes through a
 // fresh SOCKS5 CONNECT to backend for dst, unless refused first.
-func relayToDst(conn net.Conn, backend *url.URL, dst *net.TCPAddr) {
-	// A client can pick any destination, including the ovcp host's own
-	// loopback — normally unreachable from a VPN client no matter which
-	// upstream carries their traffic, since the kernel never routes to
-	// 127.0.0.0/8 via a real interface. This relay dials via userspace
-	// net.Dial instead of kernel routing, which does not carry that
-	// protection: a self-hosted SOCKS backend running on the same host
-	// (one of the three documented backend types) would otherwise let any
-	// VPN client reach whatever else is bound to loopback on that host —
-	// the admin UI, or any other locally-bound service. Refused here,
-	// unconditionally, the same fail-closed treatment as every other error
-	// in this file.
+func relayToDst(conn net.Conn, backend socksBackend, dst *net.TCPAddr) {
+	// SSRF guard: userspace net.Dial (unlike kernel routing) can reach
+	// loopback — a same-host self-hosted backend would let any client
+	// reach whatever else is bound there. Refused unconditionally.
 	if dst.IP.IsLoopback() {
 		return
 	}
@@ -109,12 +133,9 @@ func relayToDst(conn net.Conn, backend *url.URL, dst *net.TCPAddr) {
 	pipe(conn, up)
 }
 
-// pipe relays bytes both directions until either side finishes, then closes
-// both — full close, not half: a half-close (CloseWrite) left the other
-// direction's io.Copy blocked forever on Read() whenever that peer didn't
-// respond to a FIN by closing its own side — goroutine + fd leaked per
-// client that disconnects against an idle/unresponsive backend, until the
-// backend eventually timed out on its own (if ever).
+// pipe relays both directions, full-closing both when either finishes —
+// a half-close (CloseWrite) left the other io.Copy blocked on Read()
+// forever against an unresponsive peer: a goroutine+fd leak, now fixed.
 func pipe(a, b net.Conn) {
 	defer a.Close()
 	defer b.Close()
@@ -125,10 +146,9 @@ func pipe(a, b net.Conn) {
 	io.Copy(a, b)
 }
 
-// getOriginalDst recovers the pre-redirect destination via SO_ORIGINAL_DST —
-// the same mechanism iptables/nft REDIRECT has always exposed for this.
-// x/sys/unix has no typed wrapper for it, so this goes straight to the
-// syscall it already provides (Syscall6, SO_ORIGINAL_DST, RawSockaddrInet4).
+// getOriginalDst recovers the pre-redirect destination via SO_ORIGINAL_DST,
+// same as iptables/nft REDIRECT — no typed wrapper in x/sys/unix, so this
+// goes straight to the syscall.
 func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 	sc, err := conn.SyscallConn()
 	if err != nil {
@@ -150,20 +170,9 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 	return &net.TCPAddr{IP: net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3]), Port: port}, nil
 }
 
-// dialTimeout/handshakeTimeout: package vars, not consts, so
-// OVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT/OVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT
-// (seconds) can override the sane default for a slower or faster network —
-// same override-by-env-var shape OVCP_STATS_SAMPLE_INTERVAL etc. already use
-// elsewhere. dialTimeout bounds the raw TCP connect only — should never
-// legitimately take long regardless of backend type. handshakeTimeout bounds
-// the SOCKS negotiation once connected, in particular the CONNECT reply
-// wait — for a Tor backend specifically that covers real circuit-build time,
-// which can legitimately run well past dialTimeout under network load, so it
-// stays separate and more generous by default. Without any bound here, a
-// slow or malicious backend that never completes the handshake leaks one
-// goroutine and one fd per stuck client connection, forever (no cap on
-// concurrent attempts either). Cleared once the handshake succeeds: the
-// relay phase (pipe) is meant to be long-lived, unlike the handshake.
+// dialTimeout/handshakeTimeout: server-wide defaults, env-var overridable
+// (same shape as OVCP_STATS_SAMPLE_INTERVAL) and further per-upstream
+// (resolveTimeout) — unbounded, a stuck handshake leaks a goroutine+fd forever.
 var (
 	dialTimeout      = envSeconds("OVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT", 10)
 	handshakeTimeout = envSeconds("OVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT", 30)
@@ -181,16 +190,14 @@ func envSeconds(key string, def int) time.Duration {
 }
 
 // socksConnect dials backend and performs a SOCKS5 CONNECT handshake for
-// dst (RFC 1928, plus RFC 1929 user/pass auth when backend carries
-// credentials). CONNECT is the only command implemented — ovcp never needs
-// BIND or UDP ASSOCIATE, and dst always comes from SO_ORIGINAL_DST, never a
-// domain name, so the request side only ever emits an IPv4/IPv6 address.
-func socksConnect(backend *url.URL, dst *net.TCPAddr) (net.Conn, error) {
-	conn, err := net.DialTimeout("tcp", backend.Host, dialTimeout)
+// dst (RFC 1928/1929). CONNECT-only — no BIND/UDP ASSOCIATE needed, and
+// dst is always a raw IP (from SO_ORIGINAL_DST), never a domain name.
+func socksConnect(backend socksBackend, dst *net.TCPAddr) (net.Conn, error) {
+	conn, err := net.DialTimeout("tcp", backend.url.Host, backend.dialTimeout)
 	if err != nil {
 		return nil, err
 	}
-	conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	conn.SetDeadline(time.Now().Add(backend.handshakeTimeout))
 	if err := socksHandshake(conn, backend, dst); err != nil {
 		conn.Close()
 		return nil, err
@@ -199,9 +206,9 @@ func socksConnect(backend *url.URL, dst *net.TCPAddr) (net.Conn, error) {
 	return conn, nil
 }
 
-func socksHandshake(conn net.Conn, backend *url.URL, dst *net.TCPAddr) error {
+func socksHandshake(conn net.Conn, backend socksBackend, dst *net.TCPAddr) error {
 	methods := []byte{0x00} // no-auth
-	if backend.User != nil {
+	if backend.url.User != nil {
 		methods = []byte{0x02} // user/pass, offered only when the URL carries credentials
 	}
 	if _, err := conn.Write(append([]byte{0x05, byte(len(methods))}, methods...)); err != nil {
@@ -217,7 +224,7 @@ func socksHandshake(conn net.Conn, backend *url.URL, dst *net.TCPAddr) error {
 	switch reply[1] {
 	case 0x00:
 	case 0x02:
-		if err := socksAuth(conn, backend.User); err != nil {
+		if err := socksAuth(conn, backend.url.User); err != nil {
 			return err
 		}
 	default:
