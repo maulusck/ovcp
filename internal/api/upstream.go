@@ -15,12 +15,9 @@ import (
 
 const upstreamConfigKey = "upstream_config"
 
-// DefaultUpstreamConfig seeds one SOCKS upstream from OVCP_UPSTREAM_SOCKS
-// (container/unattended init), same shape as DefaultDNSConfig/
-// DefaultStatsConfig. Reuses WithAdded/SetDefault (not a hand-built Config)
-// so a seeded config is validated exactly like an admin-run `upstream add`.
-// Malformed input is only ever consulted before any config exists — logged
-// and ignored, not fatal; an admin can still fix it via CLI/UI afterward.
+// DefaultUpstreamConfig seeds one SOCKS upstream from OVCP_UPSTREAM_SOCKS,
+// same shape as DefaultDNSConfig/DefaultStatsConfig, validated the same way
+// `upstream add` is. Invalid: logged and ignored, never fatal.
 func DefaultUpstreamConfig() upstream.Config {
 	raw := os.Getenv("OVCP_UPSTREAM_SOCKS")
 	if raw == "" {
