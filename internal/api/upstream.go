@@ -228,9 +228,10 @@ func (s *Server) handleUpstreamReconcile(w http.ResponseWriter, r *http.Request,
 	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
-// trackedRule is one live per-CN nft rule. Keyed by CID (not CN) so a fast
-// reconnect can't have its handle clobbered by a stale disconnect for the
-// session it replaced.
+// trackedRule is one live client's ovcp-assigned IP, plus its nft rule
+// handle if it has one (0 = none, e.g. no PerCN override). Keyed by CID
+// (not CN) so a fast reconnect can't have its handle clobbered by a stale
+// disconnect for the session it replaced.
 type trackedRule struct {
 	handle int
 	ip     string
@@ -260,6 +261,15 @@ func (t *upstreamTracker) set(cid string, e trackedRule) {
 	t.entries[cid] = e
 }
 
+// setHandle updates cid's nft rule handle in place, leaving ip/cn untouched.
+func (t *upstreamTracker) setHandle(cid string, handle int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e := t.entries[cid]
+	e.handle = handle
+	t.entries[cid] = e
+}
+
 func (t *upstreamTracker) delete(cid string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -279,17 +289,25 @@ func (t *upstreamTracker) findByCN(cn string) (cid string, e trackedRule, ok boo
 	return "", trackedRule{}, false
 }
 
-// inUse lists every IP currently reserved by a tracked entry — checked
-// alongside the live client list so two near-simultaneous connects can't
-// race onto the same address before either shows up as "live".
-func (t *upstreamTracker) inUse() map[string]bool {
+// allocate picks a free subnet IP and reserves it under cid, all under one
+// lock — read-live, read-reserved, pick and reserve as one step, so two
+// connects racing for the same address can't both win it.
+func (t *upstreamTracker) allocate(cid, cn, subnet string, live []controller.VPNClient) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := make(map[string]bool, len(t.entries))
+	reserved := make(map[string]bool, len(t.entries))
 	for _, e := range t.entries {
-		out[e.ip] = true
+		reserved[e.ip] = true
 	}
-	return out
+	ip, err := pickFreeIP(subnet, live, reserved)
+	if err != nil {
+		return "", err
+	}
+	if t.entries == nil {
+		t.entries = map[string]trackedRule{}
+	}
+	t.entries[cid] = trackedRule{ip: ip, cn: cn}
+	return ip, nil
 }
 
 // snapshot copies every tracked entry, keyed by CID — the reinstall path's
@@ -331,21 +349,28 @@ func pickFreeIP(subnet string, live []controller.VPNClient, reserved map[string]
 }
 
 // OnClientConnect wires directly to controller.Client.OnClientConnect in
-// runServe. A CN with no PerCN override approves immediately — nothing
-// below this can affect that path.
+// runServe, and only ever fires while management-client-auth is active
+// (UpstreamAuthActive, i.e. PerCN non-empty) — so every client connecting
+// in that state, overridden or not, goes through ovcp for its IP rather
+// than OpenVPN's own --ifconfig-pool. ifconfig-push always overrides pool
+// allocation per client (see ifconfig-push(8)), so having ovcp assign it
+// for every connect here is what actually closes the gap: previously only
+// overridden CNs got a push, leaving everyone else to OpenVPN's pool,
+// which has no idea an address was already handed out from under it.
 func (s *Server) OnClientConnect(cid, kid string, env map[string]string) controller.AuthReply {
 	if _, ok := s.upstream.get(cid); ok {
 		return controller.AuthReply{} // REAUTH of an already-tracked session — don't re-add
 	}
 	cn := env["common_name"]
 	cfg := LoadUpstreamConfig(s.Store)
-	id, ok := cfg.PerCN[cn]
-	if !ok {
-		return controller.AuthReply{}
-	}
-	up, ok := cfg.Find(id)
-	if !ok {
-		return controller.AuthReply{Deny: "assigned upstream no longer exists"}
+	id, overridden := cfg.PerCN[cn]
+	var up upstream.Upstream
+	if overridden {
+		var ok bool
+		up, ok = cfg.Find(id)
+		if !ok {
+			return controller.AuthReply{Deny: "assigned upstream no longer exists"}
+		}
 	}
 	vpnCfg := s.LoadConfig()
 	mask, err := vpnCfg.Netmask()
@@ -358,20 +383,27 @@ func (s *Server) OnClientConnect(cid, kid string, env map[string]string) control
 		// IP to two clients at once. Deny, don't guess.
 		return controller.AuthReply{Deny: err.Error()}
 	}
-	ip, err := pickFreeIP(vpnCfg.Subnet, live, s.upstream.inUse())
+	ip, err := s.upstream.allocate(cid, cn, vpnCfg.Subnet, live)
 	if err != nil {
 		return controller.AuthReply{Deny: err.Error()}
 	}
-	handle, err := upstream.AddClientRule(ip, up.Table)
-	if err != nil {
-		return controller.AuthReply{Deny: err.Error()}
+	if overridden {
+		handle, err := upstream.AddClientRule(ip, up.Table)
+		if err != nil {
+			s.upstream.delete(cid) // this connect never completes, release the reservation
+			return controller.AuthReply{Deny: err.Error()}
+		}
+		s.upstream.setHandle(cid, handle)
+		slog.Debug("upstream: per-CN rule installed", "cn", cn, "upstream", id, "ip", ip)
+	} else {
+		slog.Debug("upstream: ip assigned", "cn", cn, "ip", ip)
 	}
-	s.upstream.set(cid, trackedRule{handle: handle, ip: ip, cn: cn})
-	slog.Debug("upstream: per-CN rule installed", "cn", cn, "upstream", id, "ip", ip)
 	return controller.AuthReply{Directives: []string{fmt.Sprintf("ifconfig-push %s %s", ip, mask)}}
 }
 
-// OnClientDisconnect wires directly to controller.Client.OnClientDisconnect.
+// OnClientDisconnect wires directly to controller.Client.OnClientDisconnect,
+// releasing cid's IP reservation (every tracked client has one, not just
+// per-CN ones) and, if it had an nft rule (handle != 0), removing that too.
 // A failed removal stays tracked (not deleted) so OnVPNExit retries it on
 // the next vpn restart — a one-shot failure here shouldn't orphan the rule
 // permanently.
@@ -380,17 +412,21 @@ func (s *Server) OnClientDisconnect(cid string, env map[string]string) {
 	if !ok {
 		return
 	}
-	if err := upstream.RemoveClientRule(e.handle); err != nil {
-		slog.Warn("upstream: remove client rule failed, will retry on next vpn restart", "cn", e.cn, "err", err)
-		return
+	if e.handle != 0 {
+		if err := upstream.RemoveClientRule(e.handle); err != nil {
+			slog.Warn("upstream: remove client rule failed, will retry on next vpn restart", "cn", e.cn, "err", err)
+			return
+		}
 	}
 	s.upstream.delete(cid)
-	slog.Debug("upstream: per-CN rule removed", "cn", e.cn)
+	slog.Debug("upstream: ip released", "cn", e.cn, "ip", e.ip)
 }
 
 // RewriteConnectedClientRule updates cn's live rule if they're currently
-// connected, reading the just-persisted PerCN mapping fresh — a no-op
-// otherwise, since the new mapping takes effect on their next reconnect.
+// connected — every connected client is tracked now, overridden or not, so
+// this also covers a plain client getting its first-ever override without
+// needing a reconnect. A cid with no tracked entry is a genuine no-op: not
+// connected, so the new mapping takes effect on their next connect.
 func (s *Server) RewriteConnectedClientRule(cn string) error {
 	cid, old, ok := s.upstream.findByCN(cn)
 	if !ok {
@@ -399,10 +435,13 @@ func (s *Server) RewriteConnectedClientRule(cn string) error {
 	cfg := LoadUpstreamConfig(s.Store)
 	id, has := cfg.PerCN[cn]
 	if !has {
+		if old.handle == 0 {
+			return nil // wasn't overridden to begin with, nothing to clear
+		}
 		if err := upstream.RemoveClientRule(old.handle); err != nil {
 			return err
 		}
-		s.upstream.delete(cid)
+		s.upstream.setHandle(cid, 0)
 		slog.Debug("upstream: per-CN override cleared, live rule removed", "cn", cn)
 		return nil
 	}
@@ -416,45 +455,54 @@ func (s *Server) RewriteConnectedClientRule(cn string) error {
 	if err != nil {
 		return err
 	}
-	s.upstream.set(cid, trackedRule{handle: newHandle, ip: old.ip, cn: cn})
-	if err := upstream.RemoveClientRule(old.handle); err != nil {
-		slog.Warn("upstream: assign left an inert old rule behind", "cn", cn, "err", err)
+	s.upstream.setHandle(cid, newHandle)
+	if old.handle != 0 {
+		if err := upstream.RemoveClientRule(old.handle); err != nil {
+			slog.Warn("upstream: assign left an inert old rule behind", "cn", cn, "err", err)
+		}
 	}
 	slog.Debug("upstream: live rule rewritten", "cn", cn, "upstream", id)
 	return nil
 }
 
-// reinstallTrackedRules re-adds every rule Apply's rebuild deletes — a
+// reinstallTrackedRules re-adds every nft rule Apply's rebuild deletes — a
 // plain re-add, not add-then-remove-old: nft reuses handle numbers
-// post-rebuild, so removing the pre-rebuild handle risks deleting the new one.
+// post-rebuild, so removing the pre-rebuild handle risks deleting the new
+// one. Every tracked entry's IP reservation stands regardless of PerCN
+// status — only entries actually in PerCN get a rule; the stale handle on
+// everyone else is cleared to 0, since the rebuild already dropped it.
 func (s *Server) reinstallTrackedRules() {
 	cfg := LoadUpstreamConfig(s.Store)
 	for cid, e := range s.upstream.snapshot() {
 		id, has := cfg.PerCN[e.cn]
 		if !has {
-			s.upstream.delete(cid)
+			s.upstream.setHandle(cid, 0)
 			continue
 		}
 		up, ok := cfg.Find(id)
 		if !ok {
 			slog.Warn("upstream: reinstall skipped, assigned upstream no longer exists", "cn", e.cn, "id", id)
+			s.upstream.setHandle(cid, 0)
 			continue
 		}
 		handle, err := upstream.AddClientRule(e.ip, up.Table)
 		if err != nil {
 			slog.Warn("upstream: reinstall failed", "cn", e.cn, "err", err)
+			s.upstream.setHandle(cid, 0)
 			continue
 		}
-		s.upstream.set(cid, trackedRule{handle: handle, ip: e.ip, cn: e.cn})
+		s.upstream.setHandle(cid, handle)
 	}
 }
 
-// OnVPNExit clears every tracked per-CN rule on any openvpn exit (Supervisor's
+// OnVPNExit clears every tracked entry on any openvpn exit (Supervisor's
 // OnExit) — every session it held is gone unconditionally, no poll lag.
 func (s *Server) OnVPNExit() {
 	for cid, e := range s.upstream.snapshot() {
-		if err := upstream.RemoveClientRule(e.handle); err != nil {
-			slog.Warn("upstream: cleanup on vpn exit failed", "cn", e.cn, "err", err)
+		if e.handle != 0 {
+			if err := upstream.RemoveClientRule(e.handle); err != nil {
+				slog.Warn("upstream: cleanup on vpn exit failed", "cn", e.cn, "err", err)
+			}
 		}
 		s.upstream.delete(cid)
 	}

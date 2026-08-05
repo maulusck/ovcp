@@ -49,12 +49,33 @@ func TestUpstreamTracker(t *testing.T) {
 	if !ok || e.handle != 5 || e.ip != "10.8.0.5" {
 		t.Fatalf("got %+v, %v", e, ok)
 	}
-	if !tr.inUse()["10.8.0.5"] {
-		t.Fatal("inUse must reflect the tracked ip")
+	tr.setHandle("cid1", 6)
+	if e, _ := tr.get("cid1"); e.handle != 6 || e.ip != "10.8.0.5" {
+		t.Fatalf("setHandle must update handle without touching ip/cn: %+v", e)
 	}
 	tr.delete("cid1")
 	if _, ok := tr.get("cid1"); ok {
 		t.Fatal("delete must remove the entry")
+	}
+}
+
+// TestAllocateAvoidsAlreadyReserved: allocate must skip an IP a prior
+// allocate already reserved for a different cid — the exact collision that
+// used to happen between a per-CN push and OpenVPN's own pool, now that
+// every connect goes through this one path.
+func TestAllocateAvoidsAlreadyReserved(t *testing.T) {
+	var tr upstreamTracker
+	ip1, err := tr.allocate("cid1", "alice", "10.8.0.0/24", nil)
+	if err != nil || ip1 != "10.8.0.2" {
+		t.Fatalf("got %q, %v; want 10.8.0.2", ip1, err)
+	}
+	ip2, err := tr.allocate("cid2", "bob", "10.8.0.0/24", nil)
+	if err != nil || ip2 == ip1 {
+		t.Fatalf("got %q, %v; want a different ip than %q", ip2, err, ip1)
+	}
+	e, ok := tr.get("cid1")
+	if !ok || e.ip != ip1 || e.cn != "alice" || e.handle != 0 {
+		t.Fatalf("allocate must track ip/cn with handle 0 (no nft rule yet): %+v", e)
 	}
 }
 
@@ -139,14 +160,61 @@ func TestReconcileReinstallsTrackedRules(t *testing.T) {
 	}
 }
 
-func TestOnClientConnectNoOverrideApproves(t *testing.T) {
+// TestOnClientConnectNoOverrideStillGetsIP: this handler only ever runs
+// while management-client-auth is active (some CN is overridden), and once
+// it does, every connecting client needs an ovcp-assigned IP — not just
+// overridden ones — or they fall back to OpenVPN's own --ifconfig-pool,
+// which doesn't know an override already claimed an address from under it.
+func TestOnClientConnectNoOverrideStillGetsIP(t *testing.T) {
 	srv := testUpstreamServer(t)
+	if err := os.WriteFile(srv.Mgmt.StatusPath, []byte("TITLE\tfake\r\nEND\r\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if err := SaveUpstreamConfig(srv.Store, upstream.Config{PerCN: map[string]string{"bob": "wan2"}}); err != nil {
 		t.Fatal(err)
 	}
 	reply := srv.OnClientConnect("1", "0", map[string]string{"common_name": "alice"})
-	if reply.Deny != "" || len(reply.Directives) != 0 {
-		t.Fatalf("got %+v, want a plain approve — alice has no override", reply)
+	if reply.Deny != "" || len(reply.Directives) != 1 {
+		t.Fatalf("got %+v, want one ifconfig-push — alice has no override but still needs an ip", reply)
+	}
+	e, ok := srv.upstream.get("1")
+	if !ok || e.handle != 0 {
+		t.Fatalf("got %+v, %v; want tracked with no nft rule (alice isn't overridden)", e, ok)
+	}
+}
+
+// TestOnClientConnectNoCollisionAcrossOverrideAndPlain is the regression
+// test for the bug this replaces: a per-CN client and a plain client used
+// to draw from two unrelated allocators (ovcp's push vs OpenVPN's own
+// pool) and could both land on the same address. Now there's one allocator
+// for both.
+func TestOnClientConnectNoCollisionAcrossOverrideAndPlain(t *testing.T) {
+	upstream.RequireRealNFT(t)
+	srv := testUpstreamServer(t)
+	if err := os.WriteFile(srv.Mgmt.StatusPath, []byte("TITLE\tfake\r\nEND\r\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	upCfg := upstream.Config{
+		Upstreams: []upstream.Upstream{{ID: "lo-test", Iface: "lo", Table: 100}},
+		PerCN:     map[string]string{"alice": "lo-test"},
+	}
+	if err := SaveUpstreamConfig(srv.Store, upCfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := upstream.Apply(upCfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer upstream.Teardown()
+
+	aliceReply := srv.OnClientConnect("1", "0", map[string]string{"common_name": "alice"})
+	bobReply := srv.OnClientConnect("2", "0", map[string]string{"common_name": "bob"})
+	if aliceReply.Deny != "" || bobReply.Deny != "" {
+		t.Fatalf("unexpected deny: alice=%+v bob=%+v", aliceReply, bobReply)
+	}
+	aliceIP, _ := srv.upstream.get("1")
+	bobIP, _ := srv.upstream.get("2")
+	if aliceIP.ip == bobIP.ip {
+		t.Fatalf("collision: both got %q", aliceIP.ip)
 	}
 }
 
