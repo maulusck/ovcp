@@ -79,7 +79,7 @@ func (a AuthReply) command(cid, kid string) string {
 func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn != nil {
+	if c.getConn() != nil {
 		return nil
 	}
 	return c.connect()
@@ -124,9 +124,15 @@ func (c *Client) connect() error {
 	return nil
 }
 
-// setConn/drop guard c.conn with writeMu, not just c.mu: write() (the
-// reader goroutine, only ever under writeMu) reads c.conn too, so writeMu
-// is the one lock both sides actually share.
+// c.conn has exactly one lock, writeMu — every read and write goes through
+// it (getConn/setConn/drop/write), so c.mu-held callers must use getConn,
+// never read c.conn directly.
+func (c *Client) getConn() net.Conn {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn
+}
+
 func (c *Client) setConn(conn net.Conn) {
 	c.writeMu.Lock()
 	c.conn = conn
@@ -316,7 +322,7 @@ func (c *Client) exec(cmd string, parse func(*bufio.Reader) error) error {
 // tryExec times out via select, not conn.SetDeadline: the connection is
 // shared with the reader's indefinite wait for the next notification.
 func (c *Client) tryExec(cmd string, parse func(*bufio.Reader) error) error {
-	if c.conn == nil {
+	if c.getConn() == nil {
 		if err := c.connect(); err != nil {
 			return err
 		}
