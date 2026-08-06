@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/ovcp/ovcp/internal/controller"
 )
 
 // Reserved band ovcp exclusively owns — never touches a rule/table outside
@@ -67,6 +65,7 @@ func Warning(ups []Upstream) string {
 
 // applyMu serializes every Apply call in this process — intrinsic to Apply
 // itself so every caller (API, CLI, serve's startup/shutdown) shares it.
+// Blocking, not TryLock: a racing caller must eventually apply, not no-op.
 var applyMu sync.Mutex
 
 type Upstream struct {
@@ -418,9 +417,7 @@ func Apply(cfg Config, vpnSubnet string) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	if !applyMu.TryLock() {
-		return fmt.Errorf("upstream: %w", controller.ErrBusy)
-	}
+	applyMu.Lock()
 	defer applyMu.Unlock()
 	for _, args := range teardownArgs() {
 		run(ipBin, args...) // best-effort, see doc comment

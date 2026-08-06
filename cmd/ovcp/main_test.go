@@ -1,7 +1,8 @@
 package main
 
 // Black-box CLI tests: main() calls die() (os.Exit(1)), unsafe in-process, so
-// these drive the compiled binary as a subprocess. serve/vpn start spawning real openvpn is covered elsewhere.
+// these drive the compiled binary as a subprocess. serve/vpn start spawning
+// real openvpn against real upstreams is covered in upstream_test.go.
 
 import (
 	"bytes"
@@ -22,6 +23,10 @@ import (
 var binPath string
 
 func TestMain(m *testing.M) {
+	if mode := os.Getenv(e2eHelperEnv); mode != "" {
+		runE2EHelper(mode, os.Getenv("OVCP_E2E_HELPER_ADDR"))
+		return
+	}
 	dir, err := os.MkdirTemp("", "ovcp-test-bin")
 	if err != nil {
 		panic(err)

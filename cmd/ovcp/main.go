@@ -304,7 +304,13 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	ctl, err := controller.ServeControl(ctrl, controller.ControlDeps{
 		VPN: sup, DNS: dnsSup, Mgmt: mgmt, Level: logLevel, Telegram: tg,
 		UpstreamRewrite: srv.RewriteConnectedClientRule,
-		UpstreamReapply: func() error { srv.ReconcileUpstreams(); return nil },
+		UpstreamReapply: func() error {
+			srv.ReconcileUpstreams()
+			if upstreamsEnabled && api.UpstreamAuthActive(s) {
+				return mgmt.ConnectRetry(mgmt.Timeout)
+			}
+			return nil
+		},
 	})
 	die(err)
 	defer ctl.Close()
@@ -316,10 +322,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 		}
 	}
 	if perCNActive {
-		// Best-effort: openvpn may still be finishing its own startup
-		// (mgmt socket not bound yet) — RunSampler's tick retries this
-		// every few seconds until it succeeds, so a failure here isn't fatal.
-		if err := mgmt.Connect(); err != nil {
+		if err := mgmt.ConnectRetry(mgmt.Timeout); err != nil {
 			slog.Warn("mgmt connect (per-CN routing)", "err", err)
 		}
 	}

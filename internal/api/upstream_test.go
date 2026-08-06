@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -127,7 +129,7 @@ func TestUpstreamApplyResultJSONIsFlat(t *testing.T) {
 // `upstream add` while a per-CN client is connected) deletes the whole nft
 // table, wiping any incrementally-added client rule — must be reinstalled.
 func TestReconcileReinstallsTrackedRules(t *testing.T) {
-	nft := upstream.RequireRealNFT(t)
+	nft := requireRealNFT(t)
 	srv := testUpstreamServer(t)
 	srv.UpstreamsEnabled = true
 	upCfg := upstream.Config{
@@ -189,7 +191,7 @@ func TestOnClientConnectNoOverrideStillGetsIP(t *testing.T) {
 // pool) and could both land on the same address. Now there's one allocator
 // for both.
 func TestOnClientConnectNoCollisionAcrossOverrideAndPlain(t *testing.T) {
-	upstream.RequireRealNFT(t)
+	requireRealNFT(t)
 	srv := testUpstreamServer(t)
 	if err := os.WriteFile(srv.Mgmt.StatusPath, []byte("TITLE\tfake\r\nEND\r\n"), 0o640); err != nil {
 		t.Fatal(err)
@@ -249,7 +251,7 @@ func TestOnClientConnectDeniesOnStatusError(t *testing.T) {
 // nft: a real upstream, a PerCN override, a connect that installs the rule
 // and returns ifconfig-push, then a disconnect that removes it.
 func TestOnClientConnectRoundTripRealNFT(t *testing.T) {
-	nft := upstream.RequireRealNFT(t)
+	nft := requireRealNFT(t)
 	srv := testUpstreamServer(t)
 	// OnClientConnect needs a real (even if empty) status file — Status()
 	// failing now correctly denies (see TestOnClientConnectDeniesOnStatusError).
@@ -295,7 +297,7 @@ func TestOnClientConnectRoundTripRealNFT(t *testing.T) {
 // A failed removal (bogus handle — nft has nothing to delete) must leave
 // the entry tracked, not silently orphan it — OnVPNExit is the retry.
 func TestOnClientDisconnectKeepsTrackingOnFailure(t *testing.T) {
-	upstream.RequireRealNFT(t)
+	requireRealNFT(t)
 	srv := testUpstreamServer(t)
 	upCfg := upstream.Config{Upstreams: []upstream.Upstream{{ID: "lo-test", Iface: "lo", Table: 100}}}
 	if err := upstream.Apply(upCfg, ""); err != nil {
@@ -315,7 +317,7 @@ func TestOnClientDisconnectKeepsTrackingOnFailure(t *testing.T) {
 // just the in-memory tracker, since that's what a reconnecting client would
 // otherwise silently inherit stale marking from.
 func TestOnVPNExitClearsTrackedRules(t *testing.T) {
-	nft := upstream.RequireRealNFT(t)
+	nft := requireRealNFT(t)
 	srv := testUpstreamServer(t)
 	upCfg := upstream.Config{Upstreams: []upstream.Upstream{{ID: "lo-test", Iface: "lo", Table: 100}}}
 	if err := upstream.Apply(upCfg, ""); err != nil {
@@ -338,4 +340,39 @@ func TestOnVPNExitClearsTrackedRules(t *testing.T) {
 	if strings.Contains(string(out), "10.8.0.55") {
 		t.Fatalf("rule still present in nft after OnVPNExit:\n%s", out)
 	}
+}
+
+// requireRealNFT skips t unless nft/ip work inside a throwaway unprivileged
+// netns (unshare + nsenter, never real root). Same idea as
+// upstream.RequireRealNFT, duplicated: _test.go symbols can't cross packages.
+func requireRealNFT(t *testing.T) (nft string) {
+	t.Helper()
+	for _, bin := range []string{"unshare", "nsenter", "nft", "ip"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not on PATH", bin)
+		}
+	}
+	holder := exec.Command("unshare", "--user", "--net", "--map-root-user", "--", "sleep", "3600")
+	if err := holder.Start(); err != nil {
+		t.Skipf("rootless netns unavailable (unshare): %v", err)
+	}
+	t.Cleanup(func() { holder.Process.Kill(); holder.Wait() })
+	pid := strconv.Itoa(holder.Process.Pid)
+
+	dir := t.TempDir()
+	for _, name := range []string{"ip", "nft"} {
+		script := fmt.Sprintf("#!/bin/sh\nexec nsenter --target %s --net --user --preserve-credentials -- %s \"$@\"\n", pid, name)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if out, err := exec.Command("ip", "link", "set", "lo", "up").CombinedOutput(); err != nil {
+		t.Skipf("rootless netns: lo up failed: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("nft", "list", "tables").CombinedOutput(); err != nil {
+		t.Skipf("rootless netns nft probe failed: %v\n%s", err, out)
+	}
+	return "nft"
 }

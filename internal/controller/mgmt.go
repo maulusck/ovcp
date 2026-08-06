@@ -85,6 +85,24 @@ func (c *Client) Connect() error {
 	return c.connect()
 }
 
+// ConnectRetry blocks until Connect succeeds or timeout elapses. A
+// reconnecting client is admitted ungoverned (no rule, not a denial) until
+// some management client attaches — RunSampler's own poll is too slow for
+// callers about to let clients back in (serve's boot, `vpn start/restart`).
+func (c *Client) ConnectRetry(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var err error
+	for {
+		if err = c.Connect(); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // connect dials a fresh connection, consumes the greeting banner, and
 // starts the background reader. Caller must hold c.mu with no live c.conn.
 func (c *Client) connect() error {

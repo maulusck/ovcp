@@ -465,3 +465,54 @@ func TestConnectRedialsAfterPeerCloses(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// TestConnectRetrySucceedsOnceSocketAppears: socket doesn't exist yet, then
+// appears — ConnectRetry must succeed once it does, not just once at the
+// first attempt (found via an E2E flake: a single Connect() right after
+// `vpn restart` was too early, every time).
+func TestConnectRetrySucceedsOnceSocketAppears(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	c := NewClient(sock, "")
+
+	// Nothing listening yet — Connect() fails immediately (ENOENT-style),
+	// same as right after Supervisor.Restart() launches the new process.
+	if err := c.Connect(); err == nil {
+		t.Fatal("Connect() succeeded against a socket that doesn't exist yet")
+	}
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		l, err := net.Listen("unix", sock)
+		if err != nil {
+			return
+		}
+		defer l.Close()
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		conn.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+		<-make(chan struct{}) // hold the connection open for the test's duration
+	}()
+
+	if err := c.ConnectRetry(2 * time.Second); err != nil {
+		t.Fatalf("ConnectRetry never succeeded once the socket appeared: %v", err)
+	}
+}
+
+// TestConnectRetryBoundedWhenNeverAvailable: ConnectRetry must give up and
+// report the failure, not hang forever, when the socket never appears.
+func TestConnectRetryBoundedWhenNeverAvailable(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock") // nothing ever listens here
+	c := NewClient(sock, "")
+
+	start := time.Now()
+	err := c.ConnectRetry(300 * time.Millisecond)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("ConnectRetry succeeded against a socket that was never created")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("ConnectRetry took %s to give up — not bounded", elapsed)
+	}
+}

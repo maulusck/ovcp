@@ -102,9 +102,19 @@ func Default() Config {
 		Routes:     SplitCSV(os.Getenv("OVCP_OPENVPN_ROUTES")),
 		RedirectGW: os.Getenv("OVCP_OPENVPN_REDIRECT_GW") != "false",
 		Extra:      os.Getenv("OVCP_OPENVPN_EXTRA"),
-		RunAsUser:  cmp.Or(os.Getenv("OVCP_OPENVPN_USER"), "nobody"),
-		RunAsGroup: cmp.Or(os.Getenv("OVCP_OPENVPN_GROUP"), "nogroup"),
+		RunAsUser:  envOr("OVCP_OPENVPN_USER", "nobody"),
+		RunAsGroup: envOr("OVCP_OPENVPN_GROUP", "nogroup"),
 	}
+}
+
+// envOr, unlike cmp.Or(os.Getenv(key), def), honors an explicit empty
+// value — needed for RunAsUser/RunAsGroup, where "" means "drop no
+// privileges" (e.g. no other uid/gid to drop to), not "unset".
+func envOr(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return def
 }
 
 // EnvInt reads key as an int, falling back to def if unset or unparseable —
