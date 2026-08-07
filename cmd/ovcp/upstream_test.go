@@ -569,6 +569,46 @@ func TestE2EPerCNOverride(t *testing.T) {
 	}
 }
 
+// TestE2EAssignLiveToAlreadyConnectedPlainClient: bob connects with no
+// override while per-CN routing is already active for someone else (no
+// restart involved for him). Assigning bob his own override afterward must
+// reroute his traffic immediately, with no reconnect — the one guarantee
+// RewriteConnectedClientRule's Status()-based lookup exists for, and the
+// one path no test exercised through a real client before this.
+func TestE2EAssignLiveToAlreadyConnectedPlainClient(t *testing.T) {
+	outer := requireNetNS(t)
+	h := newE2EHost(t, outer)
+	h.newBackend(t, "n", "sink", "10.90.1.1", "10.90.1.2", 9000)
+	ifaceHost := h.newBackend(t, "i", "sink", "10.90.2.1", "10.90.2.2", 9000)
+	h.upstreamAdd(t, "-id", "wan1", "-iface", ifaceHost)
+
+	h.newClient(t, "alice", "1", "10.90.10.1", "10.90.10.2") // just needs to exist and hold an override; never dialed
+	bob := h.newClient(t, "bob", "2", "10.90.11.1", "10.90.11.2")
+	h.assign(t, "alice", "wan1") // first-ever assign: restarts openvpn, both reconnect
+	h.waitConnected(t, "alice", 8*time.Second)
+	h.waitConnected(t, "bob", 8*time.Second)
+
+	bobGot, err := bob.dialRetry(t, "10.90.1.2:9000", 5*time.Second)
+	if err != nil {
+		t.Fatalf("bob dial before assign (expect transparent): %v\n%s", err, bobGot)
+	}
+	if bobGot != "reached 10.90.1.2:9000\n" {
+		t.Fatalf("bob before assign: got %q, want the normal-route backend", bobGot)
+	}
+
+	// Second-ever assign: per-CN routing is already active, so this must NOT
+	// restart openvpn — bob's session, and his tun/routes, never drop.
+	h.assign(t, "bob", "wan1")
+
+	bobGot, err = bob.dial(t, "10.90.2.2:9000", 5*time.Second) // plain dial: no restart, no reconnect window to retry through
+	if err != nil {
+		t.Fatalf("bob dial after live assign (expect iface override): %v\n%s", err, bobGot)
+	}
+	if bobGot != "reached 10.90.2.2:9000\n" {
+		t.Fatalf("bob after assign: got %q, want the iface backend — live reassignment of an already-connected, previously-plain client failed", bobGot)
+	}
+}
+
 // TestE2EPerCNOverrideNoDefault: no server-wide default at all — only a
 // per-CN override. The overridden client must reach its own upstream,
 // while every other client falls through to the same transparent,
