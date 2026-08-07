@@ -6,13 +6,17 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
+	"net/netip"
 	"net/url"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/ovcp/ovcp/internal/controller"
 )
 
 // Reserved band ovcp exclusively owns — never touches a rule/table outside
@@ -445,8 +449,34 @@ func Apply(cfg Config, vpnSubnet string) error {
 	}
 	if err := runNFTStdin([]string{"-f", "-"}, ruleset); err != nil {
 		errs = append(errs, fmt.Errorf("upstream: nft apply: %w", err))
+	} else {
+		reinstall(cfg, &errs)
 	}
 	return errors.Join(errs...)
+}
+
+// reinstall re-adds every tracked client's nft rule after the rebuild above
+// wiped them — inside Apply's own lock hold, so no Connect/Disconnect/
+// Reassign can land between the wipe and this. Every tracked IP reservation
+// stands regardless of PerCN status; only entries actually in cfg.PerCN get
+// a rule, everyone else's stale handle is cleared to 0 (the rebuild already
+// dropped it).
+func reinstall(cfg Config, errs *[]error) {
+	for cid, e := range tracked {
+		e.handle = 0
+		if id, has := cfg.PerCN[e.cn]; has {
+			if up, ok := cfg.Find(id); ok {
+				if handle, err := addRule(e.ip, up.Table); err == nil {
+					e.handle = handle
+				} else {
+					*errs = append(*errs, fmt.Errorf("upstream: reinstall %q: %w", e.cn, err))
+				}
+			} else {
+				*errs = append(*errs, fmt.Errorf("upstream: reinstall %q: assigned upstream %q no longer exists", e.cn, id))
+			}
+		}
+		tracked[cid] = e
+	}
 }
 
 // runNFTStdin feeds ruleset to nft on stdin — no temp file to leak or clean up.
@@ -464,15 +494,178 @@ func runNFTStdin(args []string, ruleset []byte) error {
 // since an empty Config has nothing to rebuild after.
 func Teardown() error { return Apply(Config{}, "") }
 
-// AddClientRule appends one mark rule — the fast per-connection path
-// Apply's full rebuild is too heavy for. Blocks on applyMu (unlike Apply's
-// TryLock): a waiting client beats a refused one.
-func AddClientRule(ip string, table int) (handle int, err error) {
+// trackedRule is one live client's ovcp-assigned IP and, if it has a per-CN
+// override, the nft rule installed for it (0 = none). Keyed by CID, not CN
+// — a fast reconnect can't have its handle clobbered by a stale disconnect
+// for the session it replaced.
+type trackedRule struct {
+	ip     string
+	cn     string
+	handle int
+}
+
+// tracked is every currently-connected client ovcp has assigned an IP to.
+// Guarded by applyMu, the same lock as every nft mutation below: deciding
+// what a client needs and making it so must happen as one step, never two
+// separately-locked halves a concurrent Apply/Reassign could land between.
+var tracked = map[string]trackedRule{}
+
+// findByCN is Reassign's lookup — it only knows the CN, not which CID
+// currently holds it. Caller must hold applyMu.
+func findByCN(cn string) (cid string, e trackedRule, ok bool) {
+	for c, entry := range tracked {
+		if entry.cn == cn {
+			return c, entry, true
+		}
+	}
+	return "", trackedRule{}, false
+}
+
+// pickFreeIP returns the lowest address in prefix that's neither live nor
+// already tracked — excludes the network address and the server's own
+// (network+1). Caller must hold applyMu.
+func pickFreeIP(prefix netip.Prefix, live []controller.VPNClient) (string, error) {
+	inUse := make(map[string]bool, len(live)+len(tracked))
+	for _, c := range live {
+		inUse[c.VirtualAddress] = true
+	}
+	for _, e := range tracked {
+		inUse[e.ip] = true
+	}
+	size := 1 << (32 - prefix.Bits())
+	ip := prefix.Masked().Addr().Next().Next() // skip network (.0) and server (.1)
+	for i := 2; i < size-1; i++ {              // stop before broadcast
+		if !inUse[ip.String()] {
+			return ip.String(), nil
+		}
+		ip = ip.Next()
+	}
+	return "", fmt.Errorf("upstream: no free ip in %s", prefix)
+}
+
+// Connect is the one place a client gets its IP and, if cn has a per-CN
+// override in cfg, its nft rule — one lock hold covering allocate, decide,
+// mutate and track, so a concurrent Apply/Reassign can never land
+// mid-sequence. already=true means cid is a REAUTH of an already-tracked
+// session: it already has everything it needs, nothing to do.
+func Connect(cid, cn string, cfg Config, subnet string, live []controller.VPNClient) (ip, mask string, already bool, err error) {
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	if _, ok := tracked[cid]; ok {
+		return "", "", true, nil
+	}
+	var up Upstream
+	if id, overridden := cfg.PerCN[cn]; overridden {
+		var ok bool
+		if up, ok = cfg.Find(id); !ok {
+			return "", "", false, fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
+		}
+	}
+	prefix, err := netip.ParsePrefix(subnet)
+	if err != nil || !prefix.Addr().Is4() {
+		return "", "", false, fmt.Errorf("upstream: bad subnet %q", subnet)
+	}
+	if ip, err = pickFreeIP(prefix, live); err != nil {
+		return "", "", false, err
+	}
+	entry := trackedRule{ip: ip, cn: cn}
+	if up.ID != "" {
+		if entry.handle, err = addRule(ip, up.Table); err != nil {
+			return "", "", false, err
+		}
+	}
+	tracked[cid] = entry
+	return ip, net.IP(net.CIDRMask(prefix.Bits(), 32)).String(), false, nil
+}
+
+// Disconnect releases cid's IP and, if it had an nft rule, removes it. A
+// failed removal stays tracked (not deleted) so ClearAll retries it on the
+// next vpn exit — a one-shot failure here shouldn't orphan the rule.
+func Disconnect(cid string) {
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	e, ok := tracked[cid]
+	if !ok {
+		return
+	}
+	if e.handle != 0 {
+		if err := removeRule(e.handle); err != nil {
+			slog.Warn("upstream: remove client rule failed, will retry on next vpn restart", "cn", e.cn, "err", err)
+			return
+		}
+	}
+	delete(tracked, cid)
+}
+
+// Reassign updates cn's live rule to match cfg, if cn is currently
+// connected — a no-op if not, the new mapping takes effect on their next
+// connect. Every connected client is tracked, overridden or not, so this
+// also covers a plain client getting its first-ever override live.
+func Reassign(cn string, cfg Config) error {
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	cid, old, ok := findByCN(cn)
+	if !ok {
+		return nil
+	}
+	id, has := cfg.PerCN[cn]
+	if !has {
+		if old.handle == 0 {
+			return nil // wasn't overridden to begin with, nothing to clear
+		}
+		if err := removeRule(old.handle); err != nil {
+			return err
+		}
+		old.handle = 0
+		tracked[cid] = old
+		return nil
+	}
+	up, ok := cfg.Find(id)
+	if !ok {
+		return fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
+	}
+	// Add the new rule before removing the old — appended last, its mark
+	// wins regardless, so a failed old-removal never leaves cn unrouted.
+	newHandle, err := addRule(old.ip, up.Table)
+	if err != nil {
+		return err
+	}
+	oldHandle := old.handle
+	old.handle = newHandle
+	tracked[cid] = old
+	if oldHandle != 0 {
+		if err := removeRule(oldHandle); err != nil {
+			slog.Warn("upstream: assign left an inert old rule behind", "cn", cn, "err", err)
+		}
+	}
+	return nil
+}
+
+// ClearAll clears every tracked entry and removes its nft rule, if any —
+// call on any openvpn exit (Supervisor's OnExit), including a crash: a
+// crash-triggered auto-restart relaunches openvpn directly, without an
+// Apply, so the nft table (and every per-client rule in it) survives
+// untouched while every CID that held one is now gone regardless.
+func ClearAll() {
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	for cid, e := range tracked {
+		if e.handle != 0 {
+			if err := removeRule(e.handle); err != nil {
+				slog.Warn("upstream: cleanup on vpn exit failed", "cn", e.cn, "err", err)
+				continue
+			}
+		}
+		delete(tracked, cid)
+	}
+}
+
+// addRule appends one mark rule — the fast per-connection path Apply's full
+// rebuild is too heavy for. Caller must hold applyMu.
+func addRule(ip string, table int) (handle int, err error) {
 	if net.ParseIP(ip).To4() == nil {
 		return 0, fmt.Errorf("upstream: bad client ip %q", ip)
 	}
-	applyMu.Lock()
-	defer applyMu.Unlock()
 	out, err := exec.Command(nftBin, "-a", "-e", "add", "rule", "inet", nftTable, preroutingChain,
 		"ip", "saddr", ip, "meta", "mark", "set", strconv.Itoa(table)).CombinedOutput()
 	if err != nil {
@@ -491,9 +684,7 @@ func parseHandle(out []byte) (int, error) {
 	return 0, fmt.Errorf("upstream: no handle in nft output: %s", bytes.TrimSpace(out))
 }
 
-// RemoveClientRule deletes exactly the rule AddClientRule created.
-func RemoveClientRule(handle int) error {
-	applyMu.Lock()
-	defer applyMu.Unlock()
+// removeRule deletes exactly the rule addRule created. Caller must hold applyMu.
+func removeRule(handle int) error {
 	return run(nftBin, "delete", "rule", "inet", nftTable, preroutingChain, "handle", strconv.Itoa(handle))
 }

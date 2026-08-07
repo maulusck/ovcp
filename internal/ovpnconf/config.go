@@ -79,16 +79,6 @@ func (c Config) ServerTunIP() (net.IP, error) {
 	return server, nil
 }
 
-// Netmask returns Subnet's dotted netmask — same value Render's own "server"
-// line uses, and what a per-CN ifconfig-push needs alongside a chosen IP.
-func (c Config) Netmask() (string, error) {
-	_, ipnet, err := net.ParseCIDR(c.Subnet)
-	if err != nil {
-		return "", fmt.Errorf("ovpnconf: subnet: %w", err)
-	}
-	return net.IP(ipnet.Mask).String(), nil
-}
-
 // Default seeds every server setting from its OVCP_OPENVPN_* env var
 // (container/unattended init), falling back to the hardcoded default. Only
 // consulted before anything's persisted — after the first save, `config set` is the override path.

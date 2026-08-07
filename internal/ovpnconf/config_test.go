@@ -111,18 +111,6 @@ func TestManagementClientAuth(t *testing.T) {
 	}
 }
 
-func TestNetmask(t *testing.T) {
-	c := valid()
-	m, err := c.Netmask()
-	if err != nil || m != "255.255.255.0" {
-		t.Fatalf("Netmask() = %v, %v; want 255.255.255.0", m, err)
-	}
-	c.Subnet = "not-a-cidr"
-	if _, err := c.Netmask(); err == nil {
-		t.Fatal("bad subnet must error")
-	}
-}
-
 func TestServerTunIP(t *testing.T) {
 	c := valid()
 	ip, err := c.ServerTunIP()

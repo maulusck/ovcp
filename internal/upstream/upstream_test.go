@@ -3,6 +3,7 @@ package upstream
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ovcp/ovcp/internal/controller"
 )
 
 func valid() Config {
@@ -587,15 +590,15 @@ func TestParseHandle(t *testing.T) {
 	}
 }
 
-func TestAddClientRuleBadIP(t *testing.T) {
-	if _, err := AddClientRule("not-an-ip", tableBase); err == nil {
+func TestAddRuleBadIP(t *testing.T) {
+	if _, err := addRule("not-an-ip", tableBase); err == nil {
 		t.Fatal("expected error for invalid ip")
 	}
 }
 
-// TestClientRuleFakeNFT checks argv shape and handle parsing without a real
+// TestAddRuleFakeNFT checks argv shape and handle parsing without a real
 // nft — same fake-script stand-in as TestApplyInvokesFakeTools.
-func TestClientRuleFakeNFT(t *testing.T) {
+func TestAddRuleFakeNFT(t *testing.T) {
 	dir := t.TempDir()
 	script := "#!/bin/sh\necho \"add rule inet x y ip saddr 10.8.0.55 meta mark set 0x64 # handle 9\"\n"
 	p := filepath.Join(dir, "nft")
@@ -606,13 +609,13 @@ func TestClientRuleFakeNFT(t *testing.T) {
 	nftBin = p
 	defer func() { nftBin = orig }()
 
-	handle, err := AddClientRule("10.8.0.55", tableBase)
+	handle, err := addRule("10.8.0.55", tableBase)
 	if err != nil || handle != 9 {
 		t.Fatalf("got %d, %v; want 9, nil", handle, err)
 	}
 }
 
-// Add/RemoveClientRule against real nft: rule appears, then really gone.
+// Add/removeRule against real nft: rule appears, then really gone.
 func TestClientRuleRoundTripRealNFT(t *testing.T) {
 	nft := RequireRealNFT(t)
 	cfg := Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}
@@ -621,21 +624,227 @@ func TestClientRuleRoundTripRealNFT(t *testing.T) {
 	}
 	defer Teardown()
 
-	handle, err := AddClientRule("10.8.0.77", tableBase)
+	handle, err := addRule("10.8.0.77", tableBase)
 	if err != nil {
-		t.Fatalf("AddClientRule: %v", err)
+		t.Fatalf("addRule: %v", err)
 	}
 	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
 	if !strings.Contains(string(out), "10.8.0.77") {
 		t.Fatalf("rule not present after add:\n%s", out)
 	}
 
-	if err := RemoveClientRule(handle); err != nil {
-		t.Fatalf("RemoveClientRule: %v", err)
+	if err := removeRule(handle); err != nil {
+		t.Fatalf("removeRule: %v", err)
 	}
 	out, _ = exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
 	if strings.Contains(string(out), "10.8.0.77") {
 		t.Fatalf("rule still present after remove:\n%s", out)
+	}
+}
+
+func TestPickFreeIP(t *testing.T) {
+	prefix := netip.MustParsePrefix("10.8.0.0/24")
+	ip, err := pickFreeIP(prefix, nil)
+	if err != nil || ip != "10.8.0.2" {
+		t.Fatalf("got %q, %v; want 10.8.0.2 (skip network+server)", ip, err)
+	}
+
+	live := []controller.VPNClient{{VirtualAddress: "10.8.0.2"}}
+	tracked = map[string]trackedRule{"other": {ip: "10.8.0.3"}}
+	defer func() { tracked = map[string]trackedRule{} }()
+	ip, err = pickFreeIP(prefix, live)
+	if err != nil || ip != "10.8.0.4" {
+		t.Fatalf("got %q, %v; want 10.8.0.4 (skip live and tracked)", ip, err)
+	}
+}
+
+func TestPickFreeIPExhausted(t *testing.T) {
+	// /30: only .1 (server) and .2 are usable; .2 is taken, nothing left.
+	live := []controller.VPNClient{{VirtualAddress: "10.8.0.2"}}
+	if _, err := pickFreeIP(netip.MustParsePrefix("10.8.0.0/30"), live); err == nil {
+		t.Fatal("exhausted subnet must error, not loop forever or return a bad address")
+	}
+}
+
+func TestConnectBadSubnet(t *testing.T) {
+	if _, _, _, err := Connect("1", "alice", Config{}, "not-a-cidr", nil); err == nil {
+		t.Fatal("bad subnet must error")
+	}
+}
+
+func TestConnectReauthIsNoOp(t *testing.T) {
+	defer func() { tracked = map[string]trackedRule{} }()
+	tracked["1"] = trackedRule{ip: "10.8.0.9", cn: "alice"}
+	ip, mask, already, err := Connect("1", "alice", Config{}, "10.8.0.0/24", nil)
+	if err != nil || !already || ip != "" || mask != "" {
+		t.Fatalf("got %q, %q, %v, %v; want already=true and no ip/mask", ip, mask, already, err)
+	}
+}
+
+// TestConnectNoOverrideStillGetsIP: this only ever runs while
+// management-client-auth is active (some CN is overridden), and once it
+// does, every connecting client needs an ovcp-assigned IP — not just
+// overridden ones — or they fall back to OpenVPN's own --ifconfig-pool,
+// which doesn't know an override already claimed an address from under it.
+func TestConnectNoOverrideStillGetsIP(t *testing.T) {
+	defer func() { tracked = map[string]trackedRule{} }()
+	cfg := Config{PerCN: map[string]string{"bob": "wan2"}}
+	ip, mask, already, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
+	if err != nil || already || ip == "" || mask == "" {
+		t.Fatalf("got %q, %q, %v, %v; alice has no override but still needs an ip", ip, mask, already, err)
+	}
+	if e := tracked["1"]; e.handle != 0 {
+		t.Fatalf("got handle %d; want 0, alice isn't overridden so needs no nft rule", e.handle)
+	}
+}
+
+// TestConnectNoCollisionAcrossOverrideAndPlain is the regression test for
+// the bug this replaces: a per-CN client and a plain client used to draw
+// from two unrelated allocators (ovcp's push vs OpenVPN's own pool) and
+// could both land on the same address. Now there's one allocator for both.
+func TestConnectNoCollisionAcrossOverrideAndPlain(t *testing.T) {
+	RequireRealNFT(t)
+	cfg := Config{
+		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
+		PerCN:     map[string]string{"alice": "lo-test"},
+	}
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+
+	aliceIP, _, _, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
+	if err != nil {
+		t.Fatalf("Connect(alice): %v", err)
+	}
+	bobIP, _, _, err := Connect("2", "bob", cfg, "10.8.0.0/24", nil)
+	if err != nil {
+		t.Fatalf("Connect(bob): %v", err)
+	}
+	if aliceIP == bobIP {
+		t.Fatalf("collision: both got %q", aliceIP)
+	}
+}
+
+// TestConnectDeniesOnBadOverride: an override pointing at a since-deleted
+// upstream must error before allocating anything, not silently proceed.
+func TestConnectDeniesOnBadOverride(t *testing.T) {
+	defer func() { tracked = map[string]trackedRule{} }()
+	cfg := Config{PerCN: map[string]string{"alice": "gone"}}
+	if _, _, _, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil); err == nil {
+		t.Fatal("want an error, assigned upstream no longer exists")
+	}
+	if _, ok := tracked["1"]; ok {
+		t.Fatal("a denied connect must not leave a reservation behind")
+	}
+}
+
+// TestConnectAndDisconnectRoundTripRealNFT exercises the whole path against
+// real nft: a per-CN override installs the rule on connect, then removes it
+// on disconnect.
+func TestConnectAndDisconnectRoundTripRealNFT(t *testing.T) {
+	nft := RequireRealNFT(t)
+	cfg := Config{
+		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
+		PerCN:     map[string]string{"alice": "lo-test"},
+	}
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+
+	ip, mask, already, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
+	if err != nil || already || ip == "" || mask == "" {
+		t.Fatalf("got %q, %q, %v, %v", ip, mask, already, err)
+	}
+	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if !strings.Contains(string(out), ip) {
+		t.Fatalf("rule not present after connect:\n%s", out)
+	}
+
+	Disconnect("1")
+	if _, ok := tracked["1"]; ok {
+		t.Fatal("disconnect must clear the tracked entry")
+	}
+	out, _ = exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if strings.Contains(string(out), ip) {
+		t.Fatalf("rule still present after disconnect:\n%s", out)
+	}
+}
+
+// A failed removal (bogus handle — nft has nothing to delete) must leave
+// the entry tracked, not silently orphan it — ClearAll is the retry.
+func TestDisconnectKeepsTrackingOnFailure(t *testing.T) {
+	RequireRealNFT(t)
+	if err := Apply(Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+	defer func() { tracked = map[string]trackedRule{} }()
+
+	tracked["1"] = trackedRule{handle: 99999, ip: "10.8.0.60", cn: "alice"}
+	Disconnect("1")
+	if _, ok := tracked["1"]; !ok {
+		t.Fatal("a failed removal must keep the entry tracked so ClearAll can retry it")
+	}
+}
+
+// TestClearAllRemovesRules: openvpn's process exiting (Stop, Restart, or a
+// crash) must wipe every per-CN rule it was holding — real nft, not just
+// the in-memory tracker, since that's what a reconnecting client would
+// otherwise silently inherit stale marking from.
+func TestClearAllRemovesRules(t *testing.T) {
+	nft := RequireRealNFT(t)
+	if err := Apply(Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+
+	handle, err := addRule("10.8.0.55", tableBase)
+	if err != nil {
+		t.Fatalf("addRule: %v", err)
+	}
+	tracked["1"] = trackedRule{handle: handle, ip: "10.8.0.55", cn: "alice"}
+
+	ClearAll()
+
+	if _, ok := tracked["1"]; ok {
+		t.Fatal("ClearAll must clear every tracked entry")
+	}
+	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if strings.Contains(string(out), "10.8.0.55") {
+		t.Fatalf("rule still present in nft after ClearAll:\n%s", out)
+	}
+}
+
+// TestApplyReinstallsTrackedRules: a second Apply (e.g. an unrelated
+// `upstream add` while a per-CN client is connected) deletes the whole nft
+// table, wiping any incrementally-added client rule — must be reinstalled.
+func TestApplyReinstallsTrackedRules(t *testing.T) {
+	nft := RequireRealNFT(t)
+	cfg := Config{
+		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
+		PerCN:     map[string]string{"alice": "lo-test"},
+	}
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+
+	ip, _, _, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Simulates an unrelated admin mutation triggering a routine re-apply of
+	// the same base config while alice is connected.
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+
+	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if !strings.Contains(string(out), ip) {
+		t.Fatalf("tracked client rule did not survive reconcile:\n%s", out)
 	}
 }
 

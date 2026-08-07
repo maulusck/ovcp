@@ -48,8 +48,6 @@ type Server struct {
 	UI               fs.FS                // built frontend; nil = API only
 	DebugLevel       *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
 	PollInterval     time.Duration        // RunSampler's ticker; set from OVCP_STATUS_INTERVAL, same cadence OpenVPN writes its status file at
-
-	upstream upstreamTracker // per-CN live rule state; zero value is ready to use
 }
 
 const (
