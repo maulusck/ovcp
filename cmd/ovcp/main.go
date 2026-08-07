@@ -322,8 +322,11 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 		}
 	}
 	if perCNActive {
+		// Not fatal: openvpn stays holding until this succeeds, refusing
+		// every client rather than admitting any ungoverned — samplerTick's
+		// own passive Connect() keeps retrying, self-healing without a restart.
 		if err := mgmt.ConnectRetry(mgmt.Timeout); err != nil {
-			slog.Warn("mgmt connect (per-CN routing)", "err", err)
+			slog.Error("mgmt connect (per-CN routing): openvpn will refuse all clients until this recovers", "err", err)
 		}
 	}
 	if os.Getenv("OVCP_DNSMASQ_AUTOSTART") != "false" {

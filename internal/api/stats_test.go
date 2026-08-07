@@ -51,6 +51,8 @@ func listenFakeMgmt(t *testing.T, sock string) *int32 {
 			go func(c net.Conn) {
 				defer c.Close()
 				c.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+				bufio.NewReader(c).ReadString('\n') // "hold release"
+				c.Write([]byte("SUCCESS: hold release succeeded\r\n"))
 				bufio.NewReader(c).ReadString('\n') // keep the conn open, ignore further input
 			}(c)
 		}

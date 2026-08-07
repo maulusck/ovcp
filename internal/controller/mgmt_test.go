@@ -41,6 +41,8 @@ func fakeMgmt(t *testing.T) (string, *int32) {
 						return
 					}
 					switch cmd := strings.TrimSpace(line); {
+					case cmd == "hold release":
+						c.Write([]byte("SUCCESS: hold release succeeded\r\n"))
 					case strings.HasPrefix(cmd, "kill alice"):
 						c.Write([]byte("SUCCESS: common name 'alice' found, 1 client(s) killed\r\n"))
 					case strings.HasPrefix(cmd, "kill "):
@@ -173,6 +175,10 @@ func fakeMgmtNotify(t *testing.T) (sock string, onConn <-chan net.Conn) {
 			return
 		}
 		c.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+		// consume+ack connect()'s "hold release" handshake before handing
+		// the raw conn off — same sequence real openvpn does.
+		bufio.NewReader(c).ReadString('\n')
+		c.Write([]byte("SUCCESS: hold release succeeded\r\n"))
 		ch <- c
 	}()
 	return sock, ch
@@ -436,6 +442,8 @@ func TestConnectRedialsAfterPeerCloses(t *testing.T) {
 				return
 			}
 			c.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+			bufio.NewReader(c).ReadString('\n') // "hold release"
+			c.Write([]byte("SUCCESS: hold release succeeded\r\n"))
 			accepted <- c
 		}
 	}()
@@ -492,6 +500,8 @@ func TestConnectRetrySucceedsOnceSocketAppears(t *testing.T) {
 			return
 		}
 		conn.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+		bufio.NewReader(conn).ReadString('\n') // "hold release"
+		conn.Write([]byte("SUCCESS: hold release succeeded\r\n"))
 		<-make(chan struct{}) // hold the connection open for the test's duration
 	}()
 
@@ -514,5 +524,32 @@ func TestConnectRetryBoundedWhenNeverAvailable(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("ConnectRetry took %s to give up — not bounded", elapsed)
+	}
+}
+
+// TestConnectFailsWhenHoldReleaseErrors: the crux of the fix — Connect()
+// must fail, not silently succeed, if openvpn's own reply to "hold release"
+// says ERROR. A caller trusting a nil error here must actually be governed,
+// never mid-handshake with hold still up.
+func TestConnectFailsWhenHoldReleaseErrors(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+		bufio.NewReader(c).ReadString('\n') // "hold release"
+		c.Write([]byte("ERROR: hold flag not set\r\n"))
+	}()
+
+	if err := NewClient(sock, "").Connect(); err == nil {
+		t.Fatal("Connect() succeeded despite an ERROR reply to hold release")
 	}
 }

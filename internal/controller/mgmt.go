@@ -85,10 +85,9 @@ func (c *Client) Connect() error {
 	return c.connect()
 }
 
-// ConnectRetry blocks until Connect succeeds or timeout elapses. A
-// reconnecting client is admitted ungoverned (no rule, not a denial) until
-// some management client attaches — RunSampler's own poll is too slow for
-// callers about to let clients back in (serve's boot, `vpn start/restart`).
+// ConnectRetry blocks until Connect succeeds or timeout elapses — bounds
+// how long a caller waits for the mgmt socket to appear. Governance
+// itself doesn't depend on this: connect()'s hold-release gates admission.
 func (c *Client) ConnectRetry(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var err error
@@ -103,8 +102,9 @@ func (c *Client) ConnectRetry(timeout time.Duration) error {
 	}
 }
 
-// connect dials a fresh connection, consumes the greeting banner, and
-// starts the background reader. Caller must hold c.mu with no live c.conn.
+// connect dials a fresh connection, consumes the greeting banner, releases
+// any --management-hold, and starts the background reader. Caller must hold
+// c.mu with no live c.conn.
 func (c *Client) connect() error {
 	conn, err := net.DialTimeout("unix", c.SocketPath, c.Timeout)
 	if err != nil {
@@ -116,12 +116,41 @@ func (c *Client) connect() error {
 		conn.Close()
 		return err
 	}
+	if err := releaseHold(conn, r); err != nil {
+		conn.Close()
+		return err
+	}
 	conn.SetDeadline(time.Time{}) // reader blocks indefinitely between notifications, not a hang
 	resp := make(chan string, 8)
 	c.resp = resp
 	c.setConn(conn)
 	go c.readLoop(r, resp)
 	return nil
+}
+
+// releaseHold sends "hold release" and awaits its reply before the async
+// reader takes over — every reconnect path funnels through connect(), so a
+// client can never be admitted ahead of this. Harmless without --management-hold.
+func releaseHold(conn net.Conn, r *bufio.Reader) error {
+	if _, err := conn.Write([]byte("hold release\n")); err != nil {
+		return err
+	}
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, ">") { // e.g. >HOLD: — an async notice, not our reply
+			continue
+		}
+		if strings.HasPrefix(line, "SUCCESS") {
+			return nil
+		}
+		if strings.HasPrefix(line, "ERROR") {
+			return fmt.Errorf("controller: hold release: %s", line)
+		}
+	}
 }
 
 // c.conn has exactly one lock, writeMu — every read and write goes through

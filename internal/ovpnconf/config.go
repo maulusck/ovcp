@@ -220,6 +220,10 @@ func (c *Config) Render() []byte {
 	if c.ManagementClientAuth {
 		w("script-security 2")
 		w("management-client-auth")
+		// hibernates admission until connect() sends "hold release" —
+		// closes the race where a client could get admitted before ovcp
+		// reattaches after a restart.
+		w("management-hold")
 		// clients are cert-only and never send credentials — without this,
 		// deferred auth's shared user/pass code path rejects every client
 		// with "Auth Username/Password was not provided by peer".

@@ -215,10 +215,12 @@ func serveControlConn(c net.Conn, d ControlDeps) {
 		return
 	}
 	// nft's Subnet must match what openvpn is actually running, which only
-	// changes at start/restart (no hot-reload) — resync here, not on save.
+	// changes at start/restart — resync here, not on save. Loud on failure:
+	// per-CN routing active means openvpn stays holding until this reconnects.
 	if target == d.VPN && (verb == "start" || verb == "restart") && d.UpstreamReapply != nil {
 		if err := d.UpstreamReapply(); err != nil {
-			slog.Warn("upstream reapply after vpn "+verb, "err", err)
+			fmt.Fprintf(c, "ERR upstream reapply: %s\n", err)
+			return
 		}
 	}
 	after := target.Pid()
