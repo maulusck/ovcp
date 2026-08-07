@@ -673,20 +673,6 @@ func TestEstablishIgnoresPlainClients(t *testing.T) {
 	}
 }
 
-// TestEstablishReFireIsNoOp: a possible REAUTH re-firing ESTABLISHED for
-// the same session (same cid, same ip) must not re-install the rule.
-func TestEstablishReFireIsNoOp(t *testing.T) {
-	defer func() { tracked = map[string]trackedRule{} }()
-	tracked["1"] = trackedRule{ip: "10.8.0.9", cn: "alice", handle: 42}
-	cfg := Config{PerCN: map[string]string{"alice": "wan2"}}
-	if err := Establish("1", "alice", "10.8.0.9", cfg); err != nil {
-		t.Fatalf("Establish: %v", err)
-	}
-	if tracked["1"].handle != 42 {
-		t.Fatalf("got handle %d, want the original 42 untouched (no re-install)", tracked["1"].handle)
-	}
-}
-
 // TestEstablishDeniesOnBadOverride: an override pointing at a since-deleted
 // upstream must error, not silently proceed or track anything.
 func TestEstablishDeniesOnBadOverride(t *testing.T) {

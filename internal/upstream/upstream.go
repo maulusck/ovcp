@@ -519,8 +519,10 @@ var tracked = map[string]trackedRule{}
 // ifconfig-pool already assigned, reported via >CLIENT:ESTABLISHED. ovcp
 // never chooses a client's address, so there's no allocator here and
 // nothing to collide with OpenVPN's own pool; a plain (non-overridden) cn
-// is not tracked at all. Idempotent against a possible REAUTH re-fire for
-// the same session.
+// is not tracked at all. >CLIENT:ESTABLISHED fires exactly once per
+// session — verified live against real OpenVPN 2.6.14 across three
+// reneg-sec cycles, REAUTH re-fired each time and ESTABLISHED never did —
+// so this never runs twice for the same cid.
 func Establish(cid, cn, ip string, cfg Config) error {
 	id, overridden := cfg.PerCN[cn]
 	if !overridden {
@@ -528,9 +530,6 @@ func Establish(cid, cn, ip string, cfg Config) error {
 	}
 	applyMu.Lock()
 	defer applyMu.Unlock()
-	if e, ok := tracked[cid]; ok && e.ip == ip {
-		return nil
-	}
 	up, ok := cfg.Find(id)
 	if !ok {
 		return fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
