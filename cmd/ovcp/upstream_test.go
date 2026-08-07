@@ -417,10 +417,12 @@ func (h *e2eHost) newBackend(t *testing.T, suffix, mode, hostIP, dstIP string, p
 	return hostIface
 }
 
-// newClient issues cn a real cert, wires a veth to h.outer, exports a real
-// .ovpn (the same `certificate issue -export` a real admin uses), and
-// starts a real openvpn client against it inside its own netns.
-func (h *e2eHost) newClient(t *testing.T, cn, suffix, hostIP, clientIP string) netNS {
+// startClient issues cn a real cert, wires a veth to h.outer, exports a
+// real .ovpn (the same `certificate issue -export` a real admin uses), and
+// starts a real openvpn client against it inside its own netns — doesn't
+// wait for it to connect, so callers can start several clients in a tight
+// burst before waiting on any of them.
+func (h *e2eHost) startClient(t *testing.T, cn, suffix, hostIP, clientIP string) netNS {
 	t.Helper()
 	ns := h.outer.child(t)
 	hostIface, clientIface := "veh"+suffix, "vec"+suffix
@@ -437,7 +439,14 @@ func (h *e2eHost) newClient(t *testing.T, cn, suffix, hostIP, clientIP string) n
 		t.Fatalf("start openvpn client %s: %v", cn, err)
 	}
 	t.Cleanup(func() { c.Process.Kill(); c.Wait() })
+	return ns
+}
 
+// newClient starts cn's client and waits for it to connect — startClient
+// plus the wait every single-client test wants.
+func (h *e2eHost) newClient(t *testing.T, cn, suffix, hostIP, clientIP string) netNS {
+	t.Helper()
+	ns := h.startClient(t, cn, suffix, hostIP, clientIP)
 	h.waitConnected(t, cn, 8*time.Second)
 	return ns
 }
@@ -606,6 +615,68 @@ func TestE2EAssignLiveToAlreadyConnectedPlainClient(t *testing.T) {
 	}
 	if bobGot != "reached 10.90.2.2:9000\n" {
 		t.Fatalf("bob after assign: got %q, want the iface backend — live reassignment of an already-connected, previously-plain client failed", bobGot)
+	}
+}
+
+// TestE2EManyClientsBurst: five real clients started in a tight burst (no
+// waiting on one before starting the next), so their >CLIENT:CONNECT/
+// ESTABLISHED notifications actually queue up on the single mgmt reader
+// goroutine instead of arriving one at a time like every other test here.
+// Two per-CN overrides (two clients each) plus two left on the server-wide
+// default — every one must land on the right backend, none stealing
+// another's rule.
+func TestE2EManyClientsBurst(t *testing.T) {
+	outer := requireNetNS(t)
+	h := newE2EHost(t, outer)
+	ifaceHost := h.newBackend(t, "i", "sink", "10.90.2.1", "10.90.2.2", 9000)
+	h.upstreamAdd(t, "-id", "wan1", "-iface", ifaceHost)
+	h.setDefault(t, "wan1")
+	outer.startHelper(t, "socks5mock", "127.0.0.1:19050")
+	h.upstreamAdd(t, "-id", "tor", "-socks", "socks5://127.0.0.1:19050")
+
+	// Assign overrides before anyone connects — the first-ever assign's vpn
+	// restart is free here, nothing is connected yet to be disrupted by it.
+	h.assign(t, "alice", "tor")
+	h.assign(t, "carol", "tor")
+
+	// dial is the target ns.dial actually connects to; want is the string
+	// the reached backend reports back. For iface/transparent they're the
+	// same address. For a socks override they must NOT be — the dial target
+	// is never really routed there at all, it's redirected before that ever
+	// happens, so it can be any address; only socks5mock's own report (want)
+	// says where the connection actually landed.
+	clients := []struct {
+		cn, suffix, hostIP, clientIP, dial, want string
+	}{
+		{"alice", "1", "10.90.10.1", "10.90.10.2", "203.0.113.1:443", "127.0.0.1:19050"}, // tor override
+		{"bob", "2", "10.90.11.1", "10.90.11.2", "10.90.2.2:9000", "10.90.2.2:9000"},     // no override -> default
+		{"carol", "3", "10.90.12.1", "10.90.12.2", "203.0.113.2:443", "127.0.0.1:19050"}, // tor override
+		{"dave", "4", "10.90.13.1", "10.90.13.2", "10.90.2.2:9000", "10.90.2.2:9000"},    // no override -> default
+		{"erin", "5", "10.90.14.1", "10.90.14.2", "10.90.2.2:9000", "10.90.2.2:9000"},    // no override -> default
+	}
+
+	// Start every client's process first, none of them waited on yet — this
+	// is the burst: all five race to connect at once.
+	ns := make([]netNS, len(clients))
+	for i, c := range clients {
+		ns[i] = h.startClient(t, c.cn, c.suffix, c.hostIP, c.clientIP)
+	}
+	for _, c := range clients {
+		h.waitConnected(t, c.cn, 15*time.Second)
+	}
+
+	for i, c := range clients {
+		got, err := ns[i].dialRetry(t, c.dial, 5*time.Second)
+		if err != nil {
+			st := run(t, h.env, "status")
+			ovcpLog, _ := os.ReadFile(h.dataDir + "/logs/ovcp.log")
+			nftOut, _ := outer.cmd("nft", "list", "ruleset").CombinedOutput()
+			t.Fatalf("%s dial: %v\n%s\n=== status ===\n%s\n=== ovcp.log ===\n%s\n=== nft ruleset ===\n%s",
+				c.cn, err, got, st.stdout, ovcpLog, nftOut)
+		}
+		if got != fmt.Sprintf("reached %s\n", c.want) {
+			t.Fatalf("%s: got %q, want backend %s", c.cn, got, c.want)
+		}
 	}
 }
 

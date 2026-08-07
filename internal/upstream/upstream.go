@@ -455,11 +455,11 @@ func Apply(cfg Config, vpnSubnet string) error {
 }
 
 // reinstall re-adds every tracked client's nft rule after the rebuild above
-// wiped them — inside Apply's own lock hold, so no Connect/Disconnect/
-// Reassign can land between the wipe and this. Every tracked IP reservation
-// stands regardless of PerCN status; only entries actually in cfg.PerCN get
-// a rule, everyone else's stale handle is cleared to 0 (the rebuild already
-// dropped it).
+// wiped them — inside Apply's own lock hold, so no Establish/Disconnect/
+// Reassign can land between the wipe and this. A tracked entry whose cn is
+// no longer overridden in cfg (override cleared, or its upstream deleted
+// out from under it) is dropped entirely — Establish wouldn't track it
+// again either, and the rebuild already dropped its rule.
 func reinstall(cfg Config, errs *[]error) {
 	for cid, e := range tracked {
 		id, has := cfg.PerCN[e.cn]

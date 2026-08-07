@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -906,6 +907,43 @@ func TestApplyReinstallsTrackedRules(t *testing.T) {
 	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
 	if !strings.Contains(string(out), "10.8.0.42") {
 		t.Fatalf("tracked client rule did not survive reconcile:\n%s", out)
+	}
+}
+
+// TestEstablishRaceAgainstUpstreamDeletion: Establish can be called with a
+// cfg snapshot taken just before a concurrent `upstream del` removes the
+// very upstream it references (Establish's caller loads cfg, then an admin
+// deletes the upstream, then Establish actually runs) — whichever of
+// Establish/Apply wins applyMu first, this must never panic or deadlock,
+// and the very next Apply must fully reconcile away any leftover tracking
+// for a cn the config no longer overrides.
+func TestEstablishRaceAgainstUpstreamDeletion(t *testing.T) {
+	RequireRealNFT(t)
+	stale := Config{
+		Upstreams: []Upstream{{ID: "wan1", Iface: "lo", Table: tableBase}},
+		PerCN:     map[string]string{"alice": "wan1"},
+	}
+	if err := Apply(stale, ""); err != nil {
+		t.Fatalf("Apply(stale): %v", err)
+	}
+	defer Teardown()
+
+	after, found := stale.Without("wan1")
+	if !found {
+		t.Fatal("setup: Without should have found wan1")
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); Establish("1", "alice", "10.8.0.42", stale) }()
+	go func() { defer wg.Done(); Apply(after, "") }()
+	wg.Wait()
+
+	if err := Apply(after, ""); err != nil {
+		t.Fatalf("Apply(after): %v", err)
+	}
+	if _, ok := tracked["1"]; ok {
+		t.Fatal("a deleted upstream's override must not survive reconciliation")
 	}
 }
 
