@@ -15,10 +15,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// socksRelays tracks the live per-upstream listeners, keyed by local relay
-// port. Touched only from Apply (via startSOCKSRelays), which already holds
+// socksRelay is one live relay listener plus the exact Upstream it was
+// started from — compared by value on every sync so an unrelated Apply
+// call, or a repeat of the same one, never touches a relay that hasn't
+// actually changed. Upstream has no slice/map/pointer fields, so == is a
+// real deep comparison, not identity.
+type socksRelay struct {
+	ln net.Listener
+	u  Upstream
+}
+
+// socksRelays tracks the live per-upstream relays, keyed by local relay
+// port. Touched only from Apply (via syncSOCKSRelays), which already holds
 // applyMu for its whole run — no separate lock needed here.
-var socksRelays = map[int]net.Listener{}
+var socksRelays = map[int]socksRelay{}
 
 // socksBackend bundles a SOCKS backend's connection target with its
 // resolved timeouts — one value threaded through the relay chain instead of
@@ -29,15 +39,27 @@ type socksBackend struct {
 	handshakeTimeout time.Duration
 }
 
-// startSOCKSRelays tears down every relay and starts one fresh per
-// SOCKS-kind upstream in cfg — the same tear-down-then-rebuild shape Apply
-// already uses for routes and the nft table.
-func startSOCKSRelays(cfg Config) error {
-	stopSOCKSRelays()
-	var errs []error
+// syncSOCKSRelays reconciles the live relay set with cfg's SOCKS upstreams:
+// stops what's gone or reconfigured, starts what's missing, leaves every
+// unchanged relay untouched — calling this twice with the same cfg is a
+// real no-op, not just one with an equivalent end state.
+func syncSOCKSRelays(cfg Config) error {
+	want := map[int]Upstream{}
 	for _, u := range cfg.Upstreams {
-		if !u.IsSOCKS() {
-			continue
+		if u.IsSOCKS() {
+			want[u.socksPort()] = u
+		}
+	}
+	for port, r := range socksRelays {
+		if want[port] != r.u {
+			r.ln.Close()
+			delete(socksRelays, port)
+		}
+	}
+	var errs []error
+	for port, u := range want {
+		if _, live := socksRelays[port]; live {
+			continue // already running with this exact config
 		}
 		parsed, err := url.Parse(u.SOCKS) // shape already checked by Config.Validate
 		if err != nil {
@@ -56,13 +78,12 @@ func startSOCKSRelays(cfg Config) error {
 		// bound to 127.0.0.1 never receives redirected traffic. A direct,
 		// non-redirected connection to this port is still rejected, by
 		// relayConn (see its own comment), not by the bind address.
-		port := u.socksPort()
 		ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("upstream: %q: socks relay listen: %w", u.ID, err))
 			continue
 		}
-		socksRelays[port] = ln
+		socksRelays[port] = socksRelay{ln: ln, u: u}
 		go relayLoop(ln, backend)
 	}
 	return errors.Join(errs...)
@@ -75,13 +96,6 @@ func resolveTimeout(perUpstream int, def time.Duration) time.Duration {
 		return def
 	}
 	return time.Duration(perUpstream) * time.Second
-}
-
-func stopSOCKSRelays() {
-	for port, ln := range socksRelays {
-		ln.Close()
-		delete(socksRelays, port)
-	}
 }
 
 // relayLoop accepts until ln is closed (by the next Apply/Teardown rebuild),

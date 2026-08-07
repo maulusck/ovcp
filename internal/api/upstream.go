@@ -1,12 +1,10 @@
 package api
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 
-	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/store"
 	"github.com/ovcp/ovcp/internal/upstream"
 )
@@ -108,13 +106,7 @@ func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *st
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	if err := SaveUpstreamConfig(s.Store, cfg); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	warning := s.applyUpstreams(cfg)
-	s.Store.Audit(u.Username, "upstream_add", in.ID)
-	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
+	s.saveAndApplyUpstreams(w, u, cfg, "upstream_add", in.ID)
 }
 
 func (s *Server) handleUpstreamDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -124,12 +116,19 @@ func (s *Server) handleUpstreamDelete(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 404, "upstream not found")
 		return
 	}
+	s.saveAndApplyUpstreams(w, u, cfg, "upstream_del", id)
+}
+
+// saveAndApplyUpstreams persists cfg, re-applies routing/NAT, audits, and
+// writes the standard upstream response — the one tail handleUpstreamAdd,
+// handleUpstreamDelete and handleUpstreamSetDefault all share.
+func (s *Server) saveAndApplyUpstreams(w http.ResponseWriter, u *store.User, cfg upstream.Config, action, detail string) {
 	if err := SaveUpstreamConfig(s.Store, cfg); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}
 	warning := s.applyUpstreams(cfg)
-	s.Store.Audit(u.Username, "upstream_del", id)
+	s.Store.Audit(u.Username, action, detail)
 	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
@@ -205,17 +204,11 @@ func (s *Server) handleUpstreamSetDefault(w http.ResponseWriter, r *http.Request
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	if err := SaveUpstreamConfig(s.Store, cfg); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	warning := s.applyUpstreams(cfg)
 	action := "upstream_default_set"
 	if in.ID == "" {
 		action = "upstream_default_off"
 	}
-	s.Store.Audit(u.Username, action, in.ID)
-	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
+	s.saveAndApplyUpstreams(w, u, cfg, action, in.ID)
 }
 
 // handleUpstreamReconcile is the explicit "situation's stable now" trigger
@@ -226,33 +219,15 @@ func (s *Server) handleUpstreamReconcile(w http.ResponseWriter, r *http.Request,
 	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
-// OnClientConnect wires directly to controller.Client.OnClientConnect in
-// runServe, and only ever fires while management-client-auth is active
-// (UpstreamAuthActive, i.e. PerCN non-empty) — so every client connecting
-// in that state, overridden or not, goes through upstream.Connect for its
-// IP rather than OpenVPN's own --ifconfig-pool. ifconfig-push always
-// overrides pool allocation per client (see ifconfig-push(8)), so having
-// ovcp assign it for every connect here is what actually closes the gap:
-// previously only overridden CNs got a push, leaving everyone else to
-// OpenVPN's pool, which has no idea an address was already handed out from
-// under it.
-func (s *Server) OnClientConnect(cid, kid string, env map[string]string) controller.AuthReply {
-	live, err := s.Mgmt.Status()
-	if err != nil {
-		// Can't verify what's already in use — proceeding could hand this
-		// IP to two clients at once. Deny, don't guess.
-		return controller.AuthReply{Deny: err.Error()}
+// OnClientEstablished wires directly to controller.Client.OnClientEstablished:
+// ovcp never chooses or pushes a client's address, it only reacts once
+// OpenVPN's own ifconfig-pool has already assigned one and ESTABLISHED
+// reports it — installing an nft rule for cn if it's per-CN overridden, a
+// no-op otherwise.
+func (s *Server) OnClientEstablished(cid, cn, ip string, env map[string]string) {
+	if err := upstream.Establish(cid, cn, ip, LoadUpstreamConfig(s.Store)); err != nil {
+		slog.Warn("upstream: establish failed", "cn", cn, "ip", ip, "err", err)
 	}
-	cn := env["common_name"]
-	ip, mask, already, err := upstream.Connect(cid, cn, LoadUpstreamConfig(s.Store), s.LoadConfig().Subnet, live)
-	if err != nil {
-		return controller.AuthReply{Deny: err.Error()}
-	}
-	if already {
-		return controller.AuthReply{} // REAUTH of an already-tracked session — don't re-push
-	}
-	slog.Debug("upstream: ip assigned", "cn", cn, "ip", ip)
-	return controller.AuthReply{Directives: []string{fmt.Sprintf("ifconfig-push %s %s", ip, mask)}}
 }
 
 // OnClientDisconnect wires directly to controller.Client.OnClientDisconnect.
@@ -261,9 +236,23 @@ func (s *Server) OnClientDisconnect(cid string, env map[string]string) {
 }
 
 // RewriteConnectedClientRule updates cn's live rule if they're currently
-// connected — wired to control.go's `upstream-assign` op.
+// connected — wired to control.go's `upstream-assign` op. Looks up cn's
+// live CID+address via Status() (the same source the dashboard's client
+// list already reads) rather than ovcp's own tracked map, so this works
+// instantly even for a client getting its first-ever override, not just
+// one changing an existing one.
 func (s *Server) RewriteConnectedClientRule(cn string) error {
-	return upstream.Reassign(cn, LoadUpstreamConfig(s.Store))
+	live, err := s.Mgmt.Status()
+	if err != nil {
+		return err
+	}
+	cfg := LoadUpstreamConfig(s.Store)
+	for _, c := range live {
+		if c.CN == cn {
+			return upstream.Reassign(c.CID, cn, c.VirtualAddress, cfg)
+		}
+	}
+	return nil // not currently connected; takes effect on their next connect
 }
 
 // OnVPNExit clears every tracked entry on any openvpn exit (Supervisor's

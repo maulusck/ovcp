@@ -27,6 +27,50 @@ func TestEnvSeconds(t *testing.T) {
 	}
 }
 
+// TestSyncSOCKSRelaysIsIdempotent: calling sync twice with the identical
+// config must not touch the listener at all — not just leave an equivalent
+// one in its place. Reconfiguring the same upstream (or removing it) must
+// still close the old one.
+func TestSyncSOCKSRelaysIsIdempotent(t *testing.T) {
+	defer syncSOCKSRelays(Config{}) // cleanup, whatever state the test ends in
+
+	u1 := Upstream{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase}
+	if err := syncSOCKSRelays(Config{Upstreams: []Upstream{u1}}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	port := u1.socksPort()
+	first := socksRelays[port].ln
+	if first == nil {
+		t.Fatal("sync did not start a relay")
+	}
+
+	if err := syncSOCKSRelays(Config{Upstreams: []Upstream{u1}}); err != nil {
+		t.Fatalf("sync (repeat): %v", err)
+	}
+	if socksRelays[port].ln != first {
+		t.Fatal("syncSOCKSRelays must not restart an unchanged relay")
+	}
+
+	u2 := u1
+	u2.SOCKS = "socks5://127.0.0.1:9051" // same port/table, different backend
+	if err := syncSOCKSRelays(Config{Upstreams: []Upstream{u2}}); err != nil {
+		t.Fatalf("sync (reconfigure): %v", err)
+	}
+	if socksRelays[port].ln == first {
+		t.Fatal("syncSOCKSRelays must restart a relay whose config changed")
+	}
+	if err := first.Close(); err == nil {
+		t.Fatal("the old listener should already be closed by sync")
+	}
+
+	if err := syncSOCKSRelays(Config{}); err != nil {
+		t.Fatalf("sync (removed): %v", err)
+	}
+	if _, ok := socksRelays[port]; ok {
+		t.Fatal("syncSOCKSRelays must remove a relay whose upstream is gone")
+	}
+}
+
 func TestResolveTimeout(t *testing.T) {
 	cases := []struct {
 		name        string

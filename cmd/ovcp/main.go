@@ -268,7 +268,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	// Always wired: inert unless management-client-auth is actually in the
 	// running server.conf — a later first PerCN assign then only needs
 	// `vpn restart`, not a full serve restart, to pick it up.
-	mgmt.OnClientConnect = srv.OnClientConnect
+	mgmt.OnClientEstablished = srv.OnClientEstablished
 	mgmt.OnClientDisconnect = srv.OnClientDisconnect
 	sup.OnExit = srv.OnVPNExit
 

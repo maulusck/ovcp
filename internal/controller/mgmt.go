@@ -21,11 +21,14 @@ type Client struct {
 	StatusPath string        // openvpn's periodically-rewritten status file (status-version 3); see Status()
 	Timeout    time.Duration // per-op; default 5s
 
-	// OnClientConnect/OnClientDisconnect, if set, handle each >CLIENT:
-	// CONNECT/DISCONNECT — nil means no-op. Called synchronously, one at a
-	// time (ponytail: fine at VPN rates, not a web server's).
-	OnClientConnect    func(cid, kid string, env map[string]string) AuthReply
-	OnClientDisconnect func(cid string, env map[string]string)
+	// OnClientEstablished/OnClientDisconnect, if set, handle each >CLIENT:
+	// ESTABLISHED/DISCONNECT — nil means no-op. Called synchronously, one at
+	// a time (ponytail: fine at VPN rates, not a web server's). Every
+	// >CLIENT:CONNECT/REAUTH is auto-approved: ovcp never chooses or denies
+	// a client's address, only reacts once OpenVPN's own ifconfig-pool has
+	// already assigned one and ESTABLISHED reports it.
+	OnClientEstablished func(cid, cn, ip string, env map[string]string)
+	OnClientDisconnect  func(cid string, env map[string]string)
 
 	mu      sync.Mutex // serializes exec(): one command's request/response cycle at a time
 	writeMu sync.Mutex // serializes raw writes — exec()'s command vs. the reader's async replies
@@ -38,6 +41,7 @@ func NewClient(socketPath, statusPath string) *Client {
 }
 
 type VPNClient struct {
+	CID            string // status-version 3's Client ID column; same identity >CLIENT:ESTABLISHED/DISCONNECT use
 	CN             string
 	RealAddress    string
 	VirtualAddress string
@@ -47,35 +51,9 @@ type VPNClient struct {
 	Cipher         string
 }
 
-// AuthReply is OnClientConnect's return value: approve (optionally pushing
-// directives like ifconfig-push) or deny with a reason. Not a general
-// directive-injection API — Directives is the one thing it's for.
-type AuthReply struct {
-	Deny       string   // non-empty = deny this connection, this is the reason
-	Directives []string // approve: extra client-connect directives to push
-}
-
-// command renders the mgmt-protocol reply for cid/kid — client-deny,
-// client-auth-nt (plain approve), or client-auth (approve + directives).
-func (a AuthReply) command(cid, kid string) string {
-	if a.Deny != "" {
-		return fmt.Sprintf("client-deny %s %s %q", cid, kid, a.Deny)
-	}
-	if len(a.Directives) == 0 {
-		return fmt.Sprintf("client-auth-nt %s %s", cid, kid)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "client-auth %s %s\n", cid, kid)
-	for _, d := range a.Directives {
-		b.WriteString(d + "\n")
-	}
-	b.WriteString("END")
-	return b.String()
-}
-
 // Connect ensures the connection (and its background reader) is live —
-// call eagerly at startup when OnClientConnect is set, so an early client
-// can't race a connection that would otherwise only start lazily.
+// call eagerly at startup when OnClientEstablished is set, so an early
+// client can't race a connection that would otherwise only start lazily.
 func (c *Client) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -194,8 +172,8 @@ func (c *Client) write(s string) error {
 }
 
 // readLoop is the connection's sole reader for its whole life: >CLIENT:
-// blocks go to the connect/disconnect handlers, everything else is
-// forwarded to resp for whichever exec() call is waiting on it.
+// blocks go to the connect/established/disconnect handlers, everything
+// else is forwarded to resp for whichever exec() call is waiting on it.
 func (c *Client) readLoop(r *bufio.Reader, resp chan<- string) {
 	defer close(resp)
 	for {
@@ -212,6 +190,8 @@ func (c *Client) readLoop(r *bufio.Reader, resp chan<- string) {
 		switch {
 		case strings.HasPrefix(line, ">CLIENT:CONNECT,"), strings.HasPrefix(line, ">CLIENT:REAUTH,"):
 			c.handleConnect(r, line)
+		case strings.HasPrefix(line, ">CLIENT:ESTABLISHED,"):
+			c.handleEstablished(r, line)
 		case strings.HasPrefix(line, ">CLIENT:DISCONNECT,"):
 			c.handleDisconnect(r, line)
 		default:
@@ -245,37 +225,50 @@ func readClientEnv(r *bufio.Reader) (map[string]string, error) {
 	}
 }
 
-// handleConnect replies client-auth-nt (no handler / nil), or whatever
-// OnClientConnect decides — approve with directives, or deny.
+// handleConnect always approves: ovcp never chooses a client's address or
+// denies a connection here — OnClientEstablished reacts once OpenVPN's own
+// ifconfig-pool has already picked one.
 func (c *Client) handleConnect(r *bufio.Reader, header string) {
 	parts := strings.SplitN(header, ",", 3)
 	if len(parts) != 3 {
 		return
 	}
 	cid, kid := parts[1], parts[2]
-	env, err := readClientEnv(r)
-	if err != nil {
+	if _, err := readClientEnv(r); err != nil {
 		return // connection is likely dying; readLoop's next read will notice
 	}
-	reply := AuthReply{}
-	if c.OnClientConnect != nil {
-		reply = c.callConnect(cid, kid, env)
-	}
-	if err := c.write(reply.command(cid, kid) + "\n"); err != nil {
+	if err := c.write(fmt.Sprintf("client-auth-nt %s %s\n", cid, kid)); err != nil {
 		slog.Warn("mgmt client-auth reply failed", "err", err)
 	}
 }
 
-// callConnect recovers a panic in OnClientConnect into a deny — a bug in
-// the handler must cost one client, never crash the whole process.
-func (c *Client) callConnect(cid, kid string, env map[string]string) (reply AuthReply) {
+// handleEstablished reads the CN and the address OpenVPN's own
+// ifconfig-pool already assigned out of ESTABLISHED's env block, and calls
+// OnClientEstablished — the one place ovcp learns a client's address,
+// never by choosing it.
+func (c *Client) handleEstablished(r *bufio.Reader, header string) {
+	_, cid, ok := strings.Cut(header, ",")
+	if !ok {
+		return
+	}
+	env, err := readClientEnv(r)
+	if err != nil {
+		return
+	}
+	if c.OnClientEstablished != nil {
+		c.callEstablished(cid, env["common_name"], env["ifconfig_pool_remote_ip"], env)
+	}
+}
+
+// callEstablished recovers a panic in OnClientEstablished — a bug in the
+// handler must cost one client, never crash the whole process.
+func (c *Client) callEstablished(cid, cn, ip string, env map[string]string) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("mgmt OnClientConnect panicked", "panic", r)
-			reply = AuthReply{Deny: "internal error"}
+			slog.Error("mgmt OnClientEstablished panicked", "panic", r)
 		}
 	}()
-	return c.OnClientConnect(cid, kid, env)
+	c.OnClientEstablished(cid, cn, ip, env)
 }
 
 func (c *Client) handleDisconnect(r *bufio.Reader, header string) {
@@ -402,6 +395,7 @@ func parseStatusFile(r *bufio.Reader) ([]VPNClient, error) {
 				continue
 			}
 			vc := VPNClient{
+				CID:            f[10],
 				CN:             f[1],
 				RealAddress:    f[2],
 				VirtualAddress: f[3],

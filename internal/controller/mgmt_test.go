@@ -70,7 +70,7 @@ func writeStatus(t *testing.T, body string) string {
 const oneClientStatus = "TITLE\tOpenVPN 2.6.12\r\n" +
 	"TIME\t2026-07-05 12:00:00\t1783000000\r\n" +
 	"HEADER\tCLIENT_LIST\t...\r\n" +
-	"CLIENT_LIST\talice\t203.0.113.7:55010\t10.8.0.2\t\t1024\t2048\tSat Jul  5 11:00:00 2026\t1783080000\tUNDEF\t0\t0\tAES-256-GCM\r\n" +
+	"CLIENT_LIST\talice\t203.0.113.7:55010\t10.8.0.2\t\t1024\t2048\tSat Jul  5 11:00:00 2026\t1783080000\tUNDEF\t7\t0\tAES-256-GCM\r\n" +
 	"HEADER\tROUTING_TABLE\t...\r\n" +
 	"ROUTING_TABLE\t10.8.0.2\talice\t203.0.113.7:55010\t...\r\n" +
 	"GLOBAL_STATS\tMax bcast/mcast queue length\t0\r\n" +
@@ -82,7 +82,7 @@ func TestStatusFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cl) != 1 || cl[0].CN != "alice" || cl[0].BytesSent != 2048 ||
+	if len(cl) != 1 || cl[0].CID != "7" || cl[0].CN != "alice" || cl[0].BytesSent != 2048 ||
 		cl[0].VirtualAddress != "10.8.0.2" || cl[0].Cipher != "AES-256-GCM" {
 		t.Fatalf("parsed: %+v", cl)
 	}
@@ -184,7 +184,9 @@ func fakeMgmtNotify(t *testing.T) (sock string, onConn <-chan net.Conn) {
 	return sock, ch
 }
 
-func TestClientConnectDefaultApprove(t *testing.T) {
+// Every >CLIENT:CONNECT is auto-approved, handler or not — ovcp never
+// chooses or denies a client's address here.
+func TestClientConnectAlwaysApproves(t *testing.T) {
 	sock, onConn := fakeMgmtNotify(t)
 	c := NewClient(sock, "")
 	if err := c.Connect(); err != nil {
@@ -196,18 +198,41 @@ func TestClientConnectDefaultApprove(t *testing.T) {
 
 	server.Write([]byte(">CLIENT:CONNECT,5,0\r\n>CLIENT:ENV,common_name=bob\r\n>CLIENT:ENV,END\r\n"))
 	if got := readLine(t, server, r); got != "client-auth-nt 5 0" {
-		t.Fatalf("got %q, want client-auth-nt 5 0 (no handler set)", got)
+		t.Fatalf("got %q, want client-auth-nt 5 0", got)
 	}
 }
 
-func TestClientConnectWithDirectives(t *testing.T) {
+func TestClientEstablishedCallsHandler(t *testing.T) {
 	sock, onConn := fakeMgmtNotify(t)
 	c := NewClient(sock, "")
-	var gotCID, gotEnv = "", map[string]string(nil)
-	c.OnClientConnect = func(cid, kid string, env map[string]string) AuthReply {
-		gotCID, gotEnv = cid, env
-		return AuthReply{Directives: []string{"ifconfig-push 10.8.0.9 255.255.255.0"}}
+	type established struct{ cid, cn, ip string }
+	done := make(chan established, 1)
+	c.OnClientEstablished = func(cid, cn, ip string, env map[string]string) {
+		done <- established{cid, cn, ip}
 	}
+	if err := c.Connect(); err != nil {
+		t.Fatal(err)
+	}
+	server := <-onConn
+	defer server.Close()
+
+	server.Write([]byte(">CLIENT:ESTABLISHED,1\r\n>CLIENT:ENV,common_name=alice\r\n>CLIENT:ENV,ifconfig_pool_remote_ip=10.8.0.9\r\n>CLIENT:ENV,END\r\n"))
+	select {
+	case got := <-done:
+		if got.cid != "1" || got.cn != "alice" || got.ip != "10.8.0.9" {
+			t.Fatalf("got %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnClientEstablished never called")
+	}
+}
+
+// A panicking OnClientEstablished must not kill the reader goroutine —
+// proven by a second, healthy notification landing right after.
+func TestClientEstablishedPanicRecovers(t *testing.T) {
+	sock, onConn := fakeMgmtNotify(t)
+	c := NewClient(sock, "")
+	c.OnClientEstablished = func(cid, cn, ip string, env map[string]string) { panic("boom") }
 	if err := c.Connect(); err != nil {
 		t.Fatal(err)
 	}
@@ -215,64 +240,10 @@ func TestClientConnectWithDirectives(t *testing.T) {
 	defer server.Close()
 	r := bufio.NewReader(server)
 
-	server.Write([]byte(">CLIENT:CONNECT,1,0\r\n>CLIENT:ENV,common_name=alice\r\n>CLIENT:ENV,END\r\n"))
-	if got := readLine(t, server, r); got != "client-auth 1 0" {
-		t.Fatalf("got %q, want client-auth 1 0", got)
-	}
-	if got := readLine(t, server, r); got != "ifconfig-push 10.8.0.9 255.255.255.0" {
-		t.Fatalf("got %q", got)
-	}
-	if got := readLine(t, server, r); got != "END" {
-		t.Fatalf("got %q, want END", got)
-	}
-	if gotCID != "1" || gotEnv["common_name"] != "alice" {
-		t.Fatalf("cid=%q env=%+v", gotCID, gotEnv)
-	}
-}
-
-func TestClientConnectDeny(t *testing.T) {
-	sock, onConn := fakeMgmtNotify(t)
-	c := NewClient(sock, "")
-	c.OnClientConnect = func(cid, kid string, env map[string]string) AuthReply {
-		return AuthReply{Deny: "no free upstream ip"}
-	}
-	if err := c.Connect(); err != nil {
-		t.Fatal(err)
-	}
-	server := <-onConn
-	defer server.Close()
-	r := bufio.NewReader(server)
-
-	server.Write([]byte(">CLIENT:CONNECT,2,0\r\n>CLIENT:ENV,common_name=carol\r\n>CLIENT:ENV,END\r\n"))
-	if got := readLine(t, server, r); got != `client-deny 2 0 "no free upstream ip"` {
-		t.Fatalf("got %q", got)
-	}
-}
-
-// A panicking OnClientConnect must deny that one client, not kill the
-// reader goroutine — proven by a second, healthy connect right after.
-func TestClientConnectPanicRecovers(t *testing.T) {
-	sock, onConn := fakeMgmtNotify(t)
-	c := NewClient(sock, "")
-	c.OnClientConnect = func(cid, kid string, env map[string]string) AuthReply {
-		panic("boom")
-	}
-	if err := c.Connect(); err != nil {
-		t.Fatal(err)
-	}
-	server := <-onConn
-	defer server.Close()
-	r := bufio.NewReader(server)
-
-	server.Write([]byte(">CLIENT:CONNECT,1,0\r\n>CLIENT:ENV,common_name=alice\r\n>CLIENT:ENV,END\r\n"))
-	if got := readLine(t, server, r); got != `client-deny 1 0 "internal error"` {
-		t.Fatalf("got %q, want a deny reply, not a hang", got)
-	}
-
-	c.OnClientConnect = func(cid, kid string, env map[string]string) AuthReply { return AuthReply{} }
+	server.Write([]byte(">CLIENT:ESTABLISHED,1\r\n>CLIENT:ENV,common_name=alice\r\n>CLIENT:ENV,END\r\n"))
 	server.Write([]byte(">CLIENT:CONNECT,2,0\r\n>CLIENT:ENV,common_name=bob\r\n>CLIENT:ENV,END\r\n"))
 	if got := readLine(t, server, r); got != "client-auth-nt 2 0" {
-		t.Fatalf("got %q, want the reader still alive and handling the next connect", got)
+		t.Fatalf("got %q, want the reader still alive after the established-handler panic", got)
 	}
 }
 
@@ -282,7 +253,6 @@ func TestClientDisconnectPanicRecovers(t *testing.T) {
 	sock, onConn := fakeMgmtNotify(t)
 	c := NewClient(sock, "")
 	c.OnClientDisconnect = func(cid string, env map[string]string) { panic("boom") }
-	c.OnClientConnect = func(cid, kid string, env map[string]string) AuthReply { return AuthReply{} }
 	if err := c.Connect(); err != nil {
 		t.Fatal(err)
 	}
@@ -325,9 +295,6 @@ func TestClientDisconnectCallsHandler(t *testing.T) {
 func TestClientConnectDuringKillDoesNotDeadlock(t *testing.T) {
 	sock, onConn := fakeMgmtNotify(t)
 	c := NewClient(sock, "")
-	c.OnClientConnect = func(cid, kid string, env map[string]string) AuthReply {
-		return AuthReply{}
-	}
 	if err := c.Connect(); err != nil {
 		t.Fatal(err)
 	}

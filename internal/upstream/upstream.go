@@ -8,15 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/netip"
 	"net/url"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/ovcp/ovcp/internal/controller"
 )
 
 // Reserved band ovcp exclusively owns — never touches a rule/table outside
@@ -25,6 +22,7 @@ const (
 	tableBase        = 100
 	maxUpstreams     = 64
 	rulePrioBase     = 20000
+	socksPortBase    = 20000 // unrelated to rulePrioBase — same value is coincidence, not a link
 	nftTable         = "ovcp-upstreams"
 	preroutingChain  = "ovcp-prerouting"
 	postroutingChain = "ovcp-postrouting"
@@ -94,7 +92,7 @@ func (u Upstream) IsSOCKS() bool { return u.SOCKS != "" }
 
 // socksPort derives u's local relay port from its Table slot — no second
 // allocator, stable for the same reason Table already is.
-func (u Upstream) socksPort() int { return 20000 + (u.Table - tableBase) }
+func (u Upstream) socksPort() int { return socksPortBase + (u.Table - tableBase) }
 
 // IsUp: Iface-mode needs its interface to exist; socks-mode has no cheap
 // liveness check (that means dialing the backend), so it's reported up
@@ -105,8 +103,9 @@ type Config struct {
 	Upstreams []Upstream
 	Default   string // active Upstream.ID server-wide; "" = off, host's own default route
 
-	// PerCN: CN -> Upstream.ID override, set via Assign. No static tunnel IPs —
-	// the assigned IP is pushed live by internal/api's per-CN connect handler.
+	// PerCN: CN -> Upstream.ID override, set via Assign. No static tunnel
+	// IPs — the address stays whatever OpenVPN's own ifconfig-pool assigns;
+	// Establish only reacts to it, via >CLIENT:ESTABLISHED.
 	PerCN map[string]string
 }
 
@@ -195,8 +194,8 @@ func (c Config) SetDefault(id string) (Config, error) {
 	return c.validated(func(cfg *Config) { cfg.Default = id })
 }
 
-// Find looks up one Upstream by ID — exported for callers outside this
-// package (the per-CN connect handler) that need the same lookup.
+// Find looks up one Upstream by ID — the one lookup Establish, Reassign,
+// reinstall, and nftRuleset's own default-egress line all share.
 func (c Config) Find(id string) (Upstream, bool) {
 	for _, u := range c.Upstreams {
 		if u.ID == id {
@@ -439,7 +438,7 @@ func Apply(cfg Config, vpnSubnet string) error {
 			}
 		}
 	}
-	if err := startSOCKSRelays(cfg); err != nil {
+	if err := syncSOCKSRelays(cfg); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -463,18 +462,24 @@ func Apply(cfg Config, vpnSubnet string) error {
 // dropped it).
 func reinstall(cfg Config, errs *[]error) {
 	for cid, e := range tracked {
-		e.handle = 0
-		if id, has := cfg.PerCN[e.cn]; has {
-			if up, ok := cfg.Find(id); ok {
-				if handle, err := addRule(e.ip, up.Table); err == nil {
-					e.handle = handle
-				} else {
-					*errs = append(*errs, fmt.Errorf("upstream: reinstall %q: %w", e.cn, err))
-				}
-			} else {
-				*errs = append(*errs, fmt.Errorf("upstream: reinstall %q: assigned upstream %q no longer exists", e.cn, id))
-			}
+		id, has := cfg.PerCN[e.cn]
+		if !has {
+			delete(tracked, cid) // no longer overridden; Establish wouldn't track this cn again either
+			continue
 		}
+		up, ok := cfg.Find(id)
+		if !ok {
+			*errs = append(*errs, fmt.Errorf("upstream: reinstall %q: assigned upstream %q no longer exists", e.cn, id))
+			delete(tracked, cid)
+			continue
+		}
+		handle, err := addRule(e.ip, up.Table)
+		if err != nil {
+			*errs = append(*errs, fmt.Errorf("upstream: reinstall %q: %w", e.cn, err))
+			delete(tracked, cid)
+			continue
+		}
+		e.handle = handle
 		tracked[cid] = e
 	}
 }
@@ -494,93 +499,53 @@ func runNFTStdin(args []string, ruleset []byte) error {
 // since an empty Config has nothing to rebuild after.
 func Teardown() error { return Apply(Config{}, "") }
 
-// trackedRule is one live client's ovcp-assigned IP and, if it has a per-CN
-// override, the nft rule installed for it (0 = none). Keyed by CID, not CN
-// — a fast reconnect can't have its handle clobbered by a stale disconnect
-// for the session it replaced.
+// trackedRule is one connected, per-CN-overridden client's nft rule. Keyed
+// by CID, not CN — a fast reconnect can't have its handle clobbered by a
+// stale disconnect for the session it replaced. A plain (non-overridden)
+// client is never tracked at all — there's nothing here for it to need.
 type trackedRule struct {
 	ip     string
 	cn     string
 	handle int
 }
 
-// tracked is every currently-connected client ovcp has assigned an IP to.
-// Guarded by applyMu, the same lock as every nft mutation below: deciding
-// what a client needs and making it so must happen as one step, never two
+// tracked is every connected, currently-overridden client. Guarded by
+// applyMu, the same lock as every nft mutation below: deciding what a
+// client needs and making it so must happen as one step, never two
 // separately-locked halves a concurrent Apply/Reassign could land between.
 var tracked = map[string]trackedRule{}
 
-// findByCN is Reassign's lookup — it only knows the CN, not which CID
-// currently holds it. Caller must hold applyMu.
-func findByCN(cn string) (cid string, e trackedRule, ok bool) {
-	for c, entry := range tracked {
-		if entry.cn == cn {
-			return c, entry, true
-		}
+// Establish installs cn's nft rule for ip — the address OpenVPN's own
+// ifconfig-pool already assigned, reported via >CLIENT:ESTABLISHED. ovcp
+// never chooses a client's address, so there's no allocator here and
+// nothing to collide with OpenVPN's own pool; a plain (non-overridden) cn
+// is not tracked at all. Idempotent against a possible REAUTH re-fire for
+// the same session.
+func Establish(cid, cn, ip string, cfg Config) error {
+	id, overridden := cfg.PerCN[cn]
+	if !overridden {
+		return nil
 	}
-	return "", trackedRule{}, false
-}
-
-// pickFreeIP returns the lowest address in prefix that's neither live nor
-// already tracked — excludes the network address and the server's own
-// (network+1). Caller must hold applyMu.
-func pickFreeIP(prefix netip.Prefix, live []controller.VPNClient) (string, error) {
-	inUse := make(map[string]bool, len(live)+len(tracked))
-	for _, c := range live {
-		inUse[c.VirtualAddress] = true
-	}
-	for _, e := range tracked {
-		inUse[e.ip] = true
-	}
-	size := 1 << (32 - prefix.Bits())
-	ip := prefix.Masked().Addr().Next().Next() // skip network (.0) and server (.1)
-	for i := 2; i < size-1; i++ {              // stop before broadcast
-		if !inUse[ip.String()] {
-			return ip.String(), nil
-		}
-		ip = ip.Next()
-	}
-	return "", fmt.Errorf("upstream: no free ip in %s", prefix)
-}
-
-// Connect is the one place a client gets its IP and, if cn has a per-CN
-// override in cfg, its nft rule — one lock hold covering allocate, decide,
-// mutate and track, so a concurrent Apply/Reassign can never land
-// mid-sequence. already=true means cid is a REAUTH of an already-tracked
-// session: it already has everything it needs, nothing to do.
-func Connect(cid, cn string, cfg Config, subnet string, live []controller.VPNClient) (ip, mask string, already bool, err error) {
 	applyMu.Lock()
 	defer applyMu.Unlock()
-	if _, ok := tracked[cid]; ok {
-		return "", "", true, nil
+	if e, ok := tracked[cid]; ok && e.ip == ip {
+		return nil
 	}
-	var up Upstream
-	if id, overridden := cfg.PerCN[cn]; overridden {
-		var ok bool
-		if up, ok = cfg.Find(id); !ok {
-			return "", "", false, fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
-		}
+	up, ok := cfg.Find(id)
+	if !ok {
+		return fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
 	}
-	prefix, err := netip.ParsePrefix(subnet)
-	if err != nil || !prefix.Addr().Is4() {
-		return "", "", false, fmt.Errorf("upstream: bad subnet %q", subnet)
+	handle, err := addRule(ip, up.Table)
+	if err != nil {
+		return err
 	}
-	if ip, err = pickFreeIP(prefix, live); err != nil {
-		return "", "", false, err
-	}
-	entry := trackedRule{ip: ip, cn: cn}
-	if up.ID != "" {
-		if entry.handle, err = addRule(ip, up.Table); err != nil {
-			return "", "", false, err
-		}
-	}
-	tracked[cid] = entry
-	return ip, net.IP(net.CIDRMask(prefix.Bits(), 32)).String(), false, nil
+	tracked[cid] = trackedRule{ip: ip, cn: cn, handle: handle}
+	return nil
 }
 
-// Disconnect releases cid's IP and, if it had an nft rule, removes it. A
-// failed removal stays tracked (not deleted) so ClearAll retries it on the
-// next vpn exit — a one-shot failure here shouldn't orphan the rule.
+// Disconnect removes cid's nft rule, if it had one. A failed removal stays
+// tracked (not deleted) so ClearAll retries it on the next vpn exit — a
+// one-shot failure here shouldn't orphan the rule.
 func Disconnect(cid string) {
 	applyMu.Lock()
 	defer applyMu.Unlock()
@@ -588,61 +553,56 @@ func Disconnect(cid string) {
 	if !ok {
 		return
 	}
-	if e.handle != 0 {
-		if err := removeRule(e.handle); err != nil {
-			slog.Warn("upstream: remove client rule failed, will retry on next vpn restart", "cn", e.cn, "err", err)
-			return
-		}
+	if err := removeRule(e.handle); err != nil {
+		slog.Warn("upstream: remove client rule failed, will retry on next vpn restart", "cn", e.cn, "err", err)
+		return
 	}
 	delete(tracked, cid)
 }
 
-// Reassign updates cn's live rule to match cfg, if cn is currently
-// connected — a no-op if not, the new mapping takes effect on their next
-// connect. Every connected client is tracked, overridden or not, so this
-// also covers a plain client getting its first-ever override live.
-func Reassign(cn string, cfg Config) error {
+// Reassign updates cid's (cn's current session, from Status()) live rule
+// to match cfg — works whether or not cid was already tracked, so a plain
+// client's first-ever override takes effect immediately too, not just a
+// change to one it already had. A no-op if cn isn't connected at all
+// (caller's Status() lookup found nothing): the new mapping takes effect
+// on their next connect, via Establish.
+func Reassign(cid, cn, ip string, cfg Config) error {
 	applyMu.Lock()
 	defer applyMu.Unlock()
-	cid, old, ok := findByCN(cn)
-	if !ok {
-		return nil
-	}
+	old, wasTracked := tracked[cid]
 	id, has := cfg.PerCN[cn]
 	if !has {
-		if old.handle == 0 {
-			return nil // wasn't overridden to begin with, nothing to clear
+		if !wasTracked {
+			return nil
 		}
 		if err := removeRule(old.handle); err != nil {
 			return err
 		}
-		old.handle = 0
-		tracked[cid] = old
+		delete(tracked, cid)
 		return nil
 	}
 	up, ok := cfg.Find(id)
 	if !ok {
 		return fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
 	}
-	// Add the new rule before removing the old — appended last, its mark
-	// wins regardless, so a failed old-removal never leaves cn unrouted.
-	newHandle, err := addRule(old.ip, up.Table)
+	newHandle, err := addRule(ip, up.Table)
 	if err != nil {
 		return err
 	}
-	oldHandle := old.handle
-	old.handle = newHandle
-	tracked[cid] = old
-	if oldHandle != 0 {
-		if err := removeRule(oldHandle); err != nil {
+	tracked[cid] = trackedRule{ip: ip, cn: cn, handle: newHandle}
+	if wasTracked {
+		// Add the new rule before removing the old — appended last, its
+		// mark wins regardless, so a failed old-removal never leaves cn
+		// unrouted.
+		if err := removeRule(old.handle); err != nil {
 			slog.Warn("upstream: assign left an inert old rule behind", "cn", cn, "err", err)
 		}
 	}
 	return nil
 }
 
-// ClearAll clears every tracked entry and removes its nft rule, if any —
-// call on any openvpn exit (Supervisor's OnExit), including a crash: a
+// ClearAll clears every tracked entry and removes its nft rule — call on
+// any openvpn exit (Supervisor's OnExit), including a crash: a
 // crash-triggered auto-restart relaunches openvpn directly, without an
 // Apply, so the nft table (and every per-client rule in it) survives
 // untouched while every CID that held one is now gone regardless.
@@ -650,11 +610,9 @@ func ClearAll() {
 	applyMu.Lock()
 	defer applyMu.Unlock()
 	for cid, e := range tracked {
-		if e.handle != 0 {
-			if err := removeRule(e.handle); err != nil {
-				slog.Warn("upstream: cleanup on vpn exit failed", "cn", e.cn, "err", err)
-				continue
-			}
+		if err := removeRule(e.handle); err != nil {
+			slog.Warn("upstream: cleanup on vpn exit failed", "cn", e.cn, "err", err)
+			continue
 		}
 		delete(tracked, cid)
 	}

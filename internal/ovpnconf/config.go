@@ -208,7 +208,6 @@ func (c *Config) Render() []byte {
 	}
 	w("management %s unix", c.MgmtSocket)
 	if c.ManagementClientAuth {
-		w("script-security 2")
 		w("management-client-auth")
 		// hibernates admission until connect() sends "hold release" —
 		// closes the race where a client could get admitted before ovcp

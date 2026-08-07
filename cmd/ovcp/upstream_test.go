@@ -2,10 +2,10 @@ package main
 
 // upstream_test.go: local, offline, end-to-end coverage of every upstream
 // mode — the real ovcp binary (serve + CLI) plus real openvpn client(s),
-// real nft, ovcp's real per-CN allocator — with zero real upstreams (no
-// Tor, no second interface, no remote host, no root). Backends are tiny
-// local stand-ins (below); the network is a rootless nested set of Linux
-// network namespaces (below too).
+// real nft, ovcp's real per-CN rule installation reacting to OpenVPN's own
+// ifconfig-pool — with zero real upstreams (no Tor, no second interface,
+// no remote host, no root). Backends are tiny local stand-ins (below); the
+// network is a rootless nested set of Linux network namespaces (below too).
 //
 // Every "does traffic reach the right place" assertion dials the target
 // through the real, currently-connected openvpn client and reads back the
@@ -566,6 +566,39 @@ func TestE2EPerCNOverride(t *testing.T) {
 	status := run(t, h.env, "status")
 	if strings.Count(status.stdout, "alice") == 0 || strings.Count(status.stdout, "bob") == 0 {
 		t.Fatalf("both clients should be connected:\n%s", status.stdout)
+	}
+}
+
+// TestE2EPerCNOverrideNoDefault: no server-wide default at all — only a
+// per-CN override. The overridden client must reach its own upstream,
+// while every other client falls through to the same transparent,
+// host-routed path TestE2ETransparent proves, not to any upstream.
+func TestE2EPerCNOverrideNoDefault(t *testing.T) {
+	outer := requireNetNS(t)
+	h := newE2EHost(t, outer)
+	h.newBackend(t, "n", "sink", "10.90.1.1", "10.90.1.2", 9000)
+	ifaceHost := h.newBackend(t, "i", "sink", "10.90.2.1", "10.90.2.2", 9000)
+	h.upstreamAdd(t, "-id", "wan1", "-iface", ifaceHost)
+
+	alice := h.newClient(t, "alice", "1", "10.90.10.1", "10.90.10.2")
+	bob := h.newClient(t, "bob", "2", "10.90.11.1", "10.90.11.2")
+	h.assign(t, "alice", "wan1")
+	h.waitConnected(t, "alice", 8*time.Second)
+	h.waitConnected(t, "bob", 8*time.Second)
+
+	aliceGot, err := alice.dialRetry(t, "10.90.2.2:9000", 5*time.Second)
+	if err != nil {
+		t.Fatalf("alice dial (expect iface override): %v\n%s", err, aliceGot)
+	}
+	if aliceGot != "reached 10.90.2.2:9000\n" {
+		t.Fatalf("alice: got %q, want the iface-mode backend (per-CN override)", aliceGot)
+	}
+	bobGot, err := bob.dialRetry(t, "10.90.1.2:9000", 5*time.Second)
+	if err != nil {
+		t.Fatalf("bob dial (expect transparent, no default set): %v\n%s", err, bobGot)
+	}
+	if bobGot != "reached 10.90.1.2:9000\n" {
+		t.Fatalf("bob: got %q, want the normal-route backend (no default, no override)", bobGot)
 	}
 }
 

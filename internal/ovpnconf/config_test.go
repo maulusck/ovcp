@@ -96,12 +96,12 @@ func TestRenderExtra(t *testing.T) {
 func TestManagementClientAuth(t *testing.T) {
 	c := valid()
 	if strings.Contains(string(c.Render()), "management-client-auth") {
-		t.Fatal("off by default: must not emit management-client-auth/script-security")
+		t.Fatal("off by default: must not emit management-client-auth")
 	}
 	c.ManagementClientAuth = true
 	out := string(c.Render())
-	if !strings.Contains(out, "script-security 2") || !strings.Contains(out, "management-client-auth") {
-		t.Fatalf("ManagementClientAuth true must emit both lines\n%s", out)
+	if !strings.Contains(out, "management-client-auth") {
+		t.Fatalf("ManagementClientAuth true must emit management-client-auth\n%s", out)
 	}
 	// clients are cert-only; without this, deferred auth's shared user/pass
 	// code path rejects every real client with "Auth Username/Password was

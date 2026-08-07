@@ -3,7 +3,6 @@ package upstream
 import (
 	"bytes"
 	"fmt"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ovcp/ovcp/internal/controller"
 )
 
 func valid() Config {
@@ -379,6 +376,25 @@ func TestNFTRulesetActive(t *testing.T) {
 	}
 }
 
+// TestNFTRulesetPerCNWithNoDefault: a per-CN override with no server-wide
+// default set must skip the blanket subnet-wide mark line entirely (there's
+// no Default to resolve to) while still falling through to the transparent
+// masquerade for mark 0 — a non-overridden client must still reach the
+// internet, just not via any upstream.
+func TestNFTRulesetPerCNWithNoDefault(t *testing.T) {
+	c := Config{
+		Upstreams: []Upstream{{ID: "wan1", Iface: "eth1", Table: tableBase}},
+		PerCN:     map[string]string{"alice": "wan1"},
+	}
+	out := string(nftRuleset(c, "10.8.0.0/24"))
+	if strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark set") {
+		t.Errorf("no Default is set — must not emit a blanket subnet-wide mark rule:\n%s", out)
+	}
+	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark 0 masquerade") {
+		t.Errorf("missing transparent fallback for non-overridden clients:\n%s", out)
+	}
+}
+
 func TestNFTRulesetSOCKSRedirect(t *testing.T) {
 	defer swapIfaceExists(func(string) bool { return true })()
 	c := Config{
@@ -642,107 +658,51 @@ func TestClientRuleRoundTripRealNFT(t *testing.T) {
 	}
 }
 
-func TestPickFreeIP(t *testing.T) {
-	prefix := netip.MustParsePrefix("10.8.0.0/24")
-	ip, err := pickFreeIP(prefix, nil)
-	if err != nil || ip != "10.8.0.2" {
-		t.Fatalf("got %q, %v; want 10.8.0.2 (skip network+server)", ip, err)
-	}
-
-	live := []controller.VPNClient{{VirtualAddress: "10.8.0.2"}}
-	tracked = map[string]trackedRule{"other": {ip: "10.8.0.3"}}
-	defer func() { tracked = map[string]trackedRule{} }()
-	ip, err = pickFreeIP(prefix, live)
-	if err != nil || ip != "10.8.0.4" {
-		t.Fatalf("got %q, %v; want 10.8.0.4 (skip live and tracked)", ip, err)
-	}
-}
-
-func TestPickFreeIPExhausted(t *testing.T) {
-	// /30: only .1 (server) and .2 are usable; .2 is taken, nothing left.
-	live := []controller.VPNClient{{VirtualAddress: "10.8.0.2"}}
-	if _, err := pickFreeIP(netip.MustParsePrefix("10.8.0.0/30"), live); err == nil {
-		t.Fatal("exhausted subnet must error, not loop forever or return a bad address")
-	}
-}
-
-func TestConnectBadSubnet(t *testing.T) {
-	if _, _, _, err := Connect("1", "alice", Config{}, "not-a-cidr", nil); err == nil {
-		t.Fatal("bad subnet must error")
-	}
-}
-
-func TestConnectReauthIsNoOp(t *testing.T) {
-	defer func() { tracked = map[string]trackedRule{} }()
-	tracked["1"] = trackedRule{ip: "10.8.0.9", cn: "alice"}
-	ip, mask, already, err := Connect("1", "alice", Config{}, "10.8.0.0/24", nil)
-	if err != nil || !already || ip != "" || mask != "" {
-		t.Fatalf("got %q, %q, %v, %v; want already=true and no ip/mask", ip, mask, already, err)
-	}
-}
-
-// TestConnectNoOverrideStillGetsIP: this only ever runs while
-// management-client-auth is active (some CN is overridden), and once it
-// does, every connecting client needs an ovcp-assigned IP — not just
-// overridden ones — or they fall back to OpenVPN's own --ifconfig-pool,
-// which doesn't know an override already claimed an address from under it.
-func TestConnectNoOverrideStillGetsIP(t *testing.T) {
+// TestEstablishIgnoresPlainClients: ovcp never chooses or tracks an
+// address for a cn with no override — OpenVPN's own ifconfig-pool already
+// handled it, there's nothing here for ovcp to do.
+func TestEstablishIgnoresPlainClients(t *testing.T) {
 	defer func() { tracked = map[string]trackedRule{} }()
 	cfg := Config{PerCN: map[string]string{"bob": "wan2"}}
-	ip, mask, already, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
-	if err != nil || already || ip == "" || mask == "" {
-		t.Fatalf("got %q, %q, %v, %v; alice has no override but still needs an ip", ip, mask, already, err)
+	if err := Establish("1", "alice", "10.8.0.55", cfg); err != nil {
+		t.Fatalf("Establish: %v", err)
 	}
-	if e := tracked["1"]; e.handle != 0 {
-		t.Fatalf("got handle %d; want 0, alice isn't overridden so needs no nft rule", e.handle)
-	}
-}
-
-// TestConnectNoCollisionAcrossOverrideAndPlain is the regression test for
-// the bug this replaces: a per-CN client and a plain client used to draw
-// from two unrelated allocators (ovcp's push vs OpenVPN's own pool) and
-// could both land on the same address. Now there's one allocator for both.
-func TestConnectNoCollisionAcrossOverrideAndPlain(t *testing.T) {
-	RequireRealNFT(t)
-	cfg := Config{
-		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
-		PerCN:     map[string]string{"alice": "lo-test"},
-	}
-	if err := Apply(cfg, ""); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	defer Teardown()
-
-	aliceIP, _, _, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
-	if err != nil {
-		t.Fatalf("Connect(alice): %v", err)
-	}
-	bobIP, _, _, err := Connect("2", "bob", cfg, "10.8.0.0/24", nil)
-	if err != nil {
-		t.Fatalf("Connect(bob): %v", err)
-	}
-	if aliceIP == bobIP {
-		t.Fatalf("collision: both got %q", aliceIP)
+	if _, ok := tracked["1"]; ok {
+		t.Fatal("a plain (non-overridden) client must not be tracked at all")
 	}
 }
 
-// TestConnectDeniesOnBadOverride: an override pointing at a since-deleted
-// upstream must error before allocating anything, not silently proceed.
-func TestConnectDeniesOnBadOverride(t *testing.T) {
+// TestEstablishReFireIsNoOp: a possible REAUTH re-firing ESTABLISHED for
+// the same session (same cid, same ip) must not re-install the rule.
+func TestEstablishReFireIsNoOp(t *testing.T) {
+	defer func() { tracked = map[string]trackedRule{} }()
+	tracked["1"] = trackedRule{ip: "10.8.0.9", cn: "alice", handle: 42}
+	cfg := Config{PerCN: map[string]string{"alice": "wan2"}}
+	if err := Establish("1", "alice", "10.8.0.9", cfg); err != nil {
+		t.Fatalf("Establish: %v", err)
+	}
+	if tracked["1"].handle != 42 {
+		t.Fatalf("got handle %d, want the original 42 untouched (no re-install)", tracked["1"].handle)
+	}
+}
+
+// TestEstablishDeniesOnBadOverride: an override pointing at a since-deleted
+// upstream must error, not silently proceed or track anything.
+func TestEstablishDeniesOnBadOverride(t *testing.T) {
 	defer func() { tracked = map[string]trackedRule{} }()
 	cfg := Config{PerCN: map[string]string{"alice": "gone"}}
-	if _, _, _, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil); err == nil {
+	if err := Establish("1", "alice", "10.8.0.55", cfg); err == nil {
 		t.Fatal("want an error, assigned upstream no longer exists")
 	}
 	if _, ok := tracked["1"]; ok {
-		t.Fatal("a denied connect must not leave a reservation behind")
+		t.Fatal("a failed establish must not leave a tracked entry behind")
 	}
 }
 
-// TestConnectAndDisconnectRoundTripRealNFT exercises the whole path against
-// real nft: a per-CN override installs the rule on connect, then removes it
-// on disconnect.
-func TestConnectAndDisconnectRoundTripRealNFT(t *testing.T) {
+// TestEstablishAndDisconnectRoundTripRealNFT exercises the whole path
+// against real nft: a per-CN override installs the rule for the address
+// OpenVPN's own pool already assigned, then removes it on disconnect.
+func TestEstablishAndDisconnectRoundTripRealNFT(t *testing.T) {
 	nft := RequireRealNFT(t)
 	cfg := Config{
 		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
@@ -753,13 +713,12 @@ func TestConnectAndDisconnectRoundTripRealNFT(t *testing.T) {
 	}
 	defer Teardown()
 
-	ip, mask, already, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
-	if err != nil || already || ip == "" || mask == "" {
-		t.Fatalf("got %q, %q, %v, %v", ip, mask, already, err)
+	if err := Establish("1", "alice", "10.8.0.42", cfg); err != nil {
+		t.Fatalf("Establish: %v", err)
 	}
 	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
-	if !strings.Contains(string(out), ip) {
-		t.Fatalf("rule not present after connect:\n%s", out)
+	if !strings.Contains(string(out), "10.8.0.42") {
+		t.Fatalf("rule not present after establish:\n%s", out)
 	}
 
 	Disconnect("1")
@@ -767,8 +726,111 @@ func TestConnectAndDisconnectRoundTripRealNFT(t *testing.T) {
 		t.Fatal("disconnect must clear the tracked entry")
 	}
 	out, _ = exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
-	if strings.Contains(string(out), ip) {
+	if strings.Contains(string(out), "10.8.0.42") {
 		t.Fatalf("rule still present after disconnect:\n%s", out)
+	}
+}
+
+// TestReassignInstallsRuleForUntrackedCid: Reassign doesn't require
+// Establish to have tracked cid first — a plain client's first-ever
+// override takes effect immediately, the same as changing an existing one.
+func TestReassignInstallsRuleForUntrackedCid(t *testing.T) {
+	nft := RequireRealNFT(t)
+	cfg := Config{
+		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
+		PerCN:     map[string]string{"alice": "lo-test"},
+	}
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+	defer func() { tracked = map[string]trackedRule{} }()
+
+	if err := Reassign("1", "alice", "10.8.0.42", cfg); err != nil {
+		t.Fatalf("Reassign: %v", err)
+	}
+	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if !strings.Contains(string(out), "10.8.0.42") {
+		t.Fatalf("rule not present after reassign:\n%s", out)
+	}
+	if tracked["1"].ip != "10.8.0.42" {
+		t.Fatalf("got %+v, want it tracked now", tracked["1"])
+	}
+}
+
+// TestReassignClearingUntrackedCidIsNoOp: clearing an override for a cid
+// that was never overridden to begin with must be a harmless no-op.
+func TestReassignClearingUntrackedCidIsNoOp(t *testing.T) {
+	if err := Reassign("1", "alice", "10.8.0.42", Config{}); err != nil {
+		t.Fatalf("Reassign: %v", err)
+	}
+	if _, ok := tracked["1"]; ok {
+		t.Fatal("must not track a cid that has no override and was never tracked")
+	}
+}
+
+// TestReassignReplacesExistingRule: changing an already-overridden client's
+// upstream removes the old rule and installs the new one.
+func TestReassignReplacesExistingRule(t *testing.T) {
+	nft := RequireRealNFT(t)
+	cfg := Config{
+		Upstreams: []Upstream{
+			{ID: "lo-test", Iface: "lo", Table: tableBase},
+			{ID: "lo-test2", Iface: "lo", Table: tableBase + 1},
+		},
+	}
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+	defer func() { tracked = map[string]trackedRule{} }()
+
+	first := cfg
+	first.PerCN = map[string]string{"alice": "lo-test"}
+	if err := Reassign("1", "alice", "10.8.0.42", first); err != nil {
+		t.Fatalf("Reassign(first): %v", err)
+	}
+	oldHandle := tracked["1"].handle
+
+	second := cfg
+	second.PerCN = map[string]string{"alice": "lo-test2"}
+	if err := Reassign("1", "alice", "10.8.0.42", second); err != nil {
+		t.Fatalf("Reassign(second): %v", err)
+	}
+	if tracked["1"].handle == oldHandle {
+		t.Fatal("changing upstream must install a new rule, not reuse the old handle")
+	}
+	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if !strings.Contains(string(out), fmt.Sprintf("mark set 0x%08x", tableBase+1)) {
+		t.Fatalf("rule doesn't reflect the new upstream's table:\n%s", out)
+	}
+}
+
+// TestReassignClearsExistingOverride: clearing an already-overridden
+// client's assignment removes its rule and untracks it.
+func TestReassignClearsExistingOverride(t *testing.T) {
+	nft := RequireRealNFT(t)
+	cfg := Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}
+	if err := Apply(cfg, ""); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	defer Teardown()
+	defer func() { tracked = map[string]trackedRule{} }()
+
+	overridden := cfg
+	overridden.PerCN = map[string]string{"alice": "lo-test"}
+	if err := Reassign("1", "alice", "10.8.0.42", overridden); err != nil {
+		t.Fatalf("Reassign(install): %v", err)
+	}
+	if err := Reassign("1", "alice", "10.8.0.42", cfg); err != nil { // cfg has no override for alice
+		t.Fatalf("Reassign(clear): %v", err)
+	}
+	if _, ok := tracked["1"]; ok {
+		t.Fatal("clearing an override must untrack the client")
+	}
+	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
+	if strings.Contains(string(out), "10.8.0.42") {
+		t.Fatalf("rule still present after clearing override:\n%s", out)
 	}
 }
 
@@ -831,9 +893,8 @@ func TestApplyReinstallsTrackedRules(t *testing.T) {
 	}
 	defer Teardown()
 
-	ip, _, _, err := Connect("1", "alice", cfg, "10.8.0.0/24", nil)
-	if err != nil {
-		t.Fatalf("Connect: %v", err)
+	if err := Establish("1", "alice", "10.8.0.42", cfg); err != nil {
+		t.Fatalf("Establish: %v", err)
 	}
 
 	// Simulates an unrelated admin mutation triggering a routine re-apply of
@@ -843,7 +904,7 @@ func TestApplyReinstallsTrackedRules(t *testing.T) {
 	}
 
 	out, _ := exec.Command(nft, "list", "chain", "inet", nftTable, preroutingChain).CombinedOutput()
-	if !strings.Contains(string(out), ip) {
+	if !strings.Contains(string(out), "10.8.0.42") {
 		t.Fatalf("tracked client rule did not survive reconcile:\n%s", out)
 	}
 }
