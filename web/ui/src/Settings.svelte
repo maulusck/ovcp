@@ -1,6 +1,6 @@
 <script>
-  import { api, apiBlob, downloadBlob, procOp, procDone, flash, autosize } from './api.js'
-  import { expectRecovery, expectDnsRecovery, telegram, pollOnce } from './status.svelte.js'
+  import { api, apiBlob, downloadBlob, procOp, procDone, flash, autosize, sortRows, toggleSort, sortMark } from './api.js'
+  import { expectRecovery, expectDnsRecovery, telegram, upstreams, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { isAdmin, dnsAvailable, upstreamsAvailable } = $props()
   let cfg = $state(null)
@@ -112,10 +112,18 @@
   // Upstreams: policy-routed VPN egress — a list of named entries (add/del/
   // set-default), not a single-blob form like DNS/logs above.
   let upCfg = $state(null)
-  let upErr = $state('')
+  let upErr = $state('') // list card: remove/set-default/reconcile
   let upOk = $state('')
+  let addErr = $state('') // add-upstream card, own pair — same split as Users' form vs. list
+  let addOk = $state('')
   let newID = $state(''), newIface = $state(''), newGateway = $state(''), newSocks = $state(''), newDesc = $state('')
   let newMode = $state('iface') // 'iface' | 'socks' — which fields the add form sends
+  let upSort = $state({ key: null, desc: false })
+  const UP_SORT_GETTERS = { id: (u) => u.ID, iface: (u) => u.Iface, desc: (u) => u.Description }
+  const sortedUpstreams = $derived.by(() => {
+    const rows = upCfg?.Upstreams || []
+    return upSort.key ? sortRows(rows, UP_SORT_GETTERS[upSort.key], upSort.desc) : rows
+  })
 
   async function loadUpstreams() {
     try { upCfg = await api('GET', '/upstreams') } catch (x) { flash(v => upErr = v, x.error) }
@@ -124,7 +132,7 @@
 
   async function addUpstream(e) {
     e.preventDefault()
-    upErr = ''; upOk = ''
+    addErr = ''; addOk = ''
     try {
       const body = newMode === 'socks'
         ? { ID: newID, SOCKS: newSocks, Description: newDesc }
@@ -132,8 +140,8 @@
       upCfg = await api('POST', '/upstreams', body)
       const id = newID
       newID = ''; newIface = ''; newGateway = ''; newSocks = ''; newDesc = ''
-      flash(v => upOk = v, `Added ${id}.`)
-    } catch (x) { flash(v => upErr = v, x.error) }
+      flash(v => addOk = v, `Added ${id}.`)
+    } catch (x) { flash(v => addErr = v, x.error) }
   }
 
   async function delUpstream(id) {
@@ -152,6 +160,18 @@
       upCfg = await api('PUT', '/upstreams/default', { ID: id })
       flash(v => upOk = v, id ? `Default: ${id}.` : "Default: off (host's own default route).")
     } catch (x) { flash(v => upErr = v, x.error); loadUpstreams() }
+  }
+
+  // Re-applies routing/NAT for whatever's already saved — a real mutation
+  // (reprograms nft), so it's this one manual button, not something the
+  // background status poll above should ever trigger on its own.
+  async function reconcileUpstreams() {
+    upErr = ''; upOk = ''
+    try {
+      const r = await api('POST', '/upstreams/reconcile')
+      upCfg = r
+      flash(v => upOk = v, r.warning || 'Reconciled — all upstreams reachable.')
+    } catch (x) { flash(v => upErr = v, x.error) }
   }
 
   // Logs: rotation policy for openvpn.log/ovcp.log/dnsmasq.log.
@@ -386,69 +406,83 @@
 {/if}
 
 {#if upstreamsAvailable}
-  <div class="card">
-    <h2>Upstreams</h2>
-    <p class="muted small">Egress via a named interface or SOCKS proxy (Tor, proxychains, self-hosted) instead of the host's default route; ovcp only steers and NATs — bring the backend up first. Per-client overrides live in the Certificates tab.</p>
-    {#if !upCfg}
-      <p class="muted">Loading…</p>
-    {:else}
-      {#if upCfg.Upstreams?.length}
-        <table>
-          <thead><tr><th>ID</th><th>Interface</th><th>Gateway / SOCKS</th><th>Description</th><th></th></tr></thead>
-          <tbody>
-            {#each upCfg.Upstreams as u}
-              <tr>
-                <td>{u.ID}{u.ID === upCfg.Default ? ' (default)' : ''}</td>
-                <td>{u.Iface || (u.SOCKS ? '(socks)' : '')}</td>
-                <td>{u.SOCKS || u.Gateway || '(onlink)'}</td>
-                <td>{u.Description}</td>
-                <td>{#if isAdmin}<button type="button" class="ghost" onclick={() => delUpstream(u.ID)}>Remove</button>{/if}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-        <label>Active default
-          <select value={upCfg.Default || ''} disabled={!isAdmin} onchange={setDefaultUpstream}>
-            <option value="">off (host's own default route)</option>
-            {#each upCfg.Upstreams as u}<option value={u.ID}>{u.ID}</option>{/each}
+  {#if isAdmin && upCfg}
+    <form class="card" onsubmit={addUpstream}>
+      <h2>Add upstream</h2>
+      <div class="grid">
+        <label>ID
+          <input bind:value={newID} placeholder="wan2" required />
+        </label>
+        <label>Mode
+          <select bind:value={newMode}>
+            <option value="iface">Interface</option>
+            <option value="socks">SOCKS proxy</option>
           </select>
         </label>
-      {:else}
-        <p class="muted small">No upstreams defined yet — clients exit through the host's own default route.</p>
+        {#if newMode === 'iface'}
+          <label>Interface
+            <input bind:value={newIface} placeholder="eth1, wg0" required />
+          </label>
+          <label>Gateway
+            <input bind:value={newGateway} placeholder="empty = onlink" />
+          </label>
+        {:else}
+          <label>SOCKS URL
+            <input bind:value={newSocks} placeholder="socks5://[user:pass@]host:port" required />
+          </label>
+        {/if}
+        <label>Description
+          <input bind:value={newDesc} placeholder="optional" />
+        </label>
+      </div>
+      <Msg type="err" text={addErr} />
+      <Msg type="ok" text={addOk} />
+      <div class="row"><button type="submit">Add upstream</button></div>
+    </form>
+  {/if}
+
+  <div class="card">
+    <h2>Upstreams
+      {#if isAdmin && upCfg?.Upstreams?.length}
+        <button type="button" class="ghost" onclick={reconcileUpstreams}
+          title="Re-check reachability and re-apply routing/NAT for the saved config">Reconcile</button>
       {/if}
-      <Msg type="err" text={upErr} />
-      <Msg type="ok" text={upOk} />
-      {#if isAdmin}
-        <form onsubmit={addUpstream}>
-          <div class="grid">
-            <label>ID
-              <input bind:value={newID} placeholder="wan2" required />
-            </label>
-            <label>Mode
-              <select bind:value={newMode}>
-                <option value="iface">Interface</option>
-                <option value="socks">SOCKS proxy</option>
-              </select>
-            </label>
-            {#if newMode === 'iface'}
-              <label>Interface
-                <input bind:value={newIface} placeholder="eth1, wg0" required />
-              </label>
-              <label>Gateway
-                <input bind:value={newGateway} placeholder="empty = onlink" />
-              </label>
-            {:else}
-              <label>SOCKS URL
-                <input bind:value={newSocks} placeholder="socks5://[user:pass@]host:port" required />
-              </label>
-            {/if}
-            <label>Description
-              <input bind:value={newDesc} placeholder="optional" />
-            </label>
-          </div>
-          <div class="row"><button type="submit">Add upstream</button></div>
-        </form>
-      {/if}
+    </h2>
+    <p class="muted small">Egress via a named interface or SOCKS proxy (Tor, proxychains, self-hosted) instead of the host's default route; ovcp only steers and NATs — bring the backend up first. Per-client overrides live in the Certificates tab.</p>
+    <Msg type="err" text={upErr} />
+    <Msg type="ok" text={upOk} />
+    {#if !upCfg}
+      <p class="muted">Loading…</p>
+    {:else if !upCfg.Upstreams?.length}
+      <p class="muted small">No upstreams defined yet — clients exit through the host's own default route.</p>
+    {:else}
+      <table>
+        <thead><tr>
+          <th><button class="th-sort" onclick={() => toggleSort(upSort, 'id')}>ID{sortMark(upSort, 'id')}</button></th>
+          <th><button class="th-sort" onclick={() => toggleSort(upSort, 'iface')}>Interface{sortMark(upSort, 'iface')}</button></th>
+          <th>Gateway / SOCKS</th>
+          <th><button class="th-sort" onclick={() => toggleSort(upSort, 'desc')}>Description{sortMark(upSort, 'desc')}</button></th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+          {#each sortedUpstreams as u}
+            <tr>
+              <td>{u.ID}{u.ID === upCfg.Default ? ' (default)' : ''}</td>
+              <td>{u.Iface || (u.SOCKS ? '(socks)' : '')}</td>
+              <td>{u.SOCKS || u.Gateway || '(onlink)'}</td>
+              <td>{u.Description}</td>
+              <td>{#if isAdmin}<button type="button" class="ghost" onclick={() => delUpstream(u.ID)}>Remove</button>{/if}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      <label>Active default
+        <select value={upCfg.Default || ''} disabled={!isAdmin} onchange={setDefaultUpstream}>
+          <option value="">off (host's own default route)</option>
+          {#each upCfg.Upstreams as u}<option value={u.ID}>{u.ID}</option>{/each}
+        </select>
+      </label>
+      {#if upstreams.warning}<p class="status-line warn">{upstreams.warning}</p>{/if}
     {/if}
   </div>
 {/if}

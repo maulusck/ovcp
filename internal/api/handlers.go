@@ -17,6 +17,7 @@ import (
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 	"github.com/ovcp/ovcp/internal/telegram"
+	"github.com/ovcp/ovcp/internal/upstream"
 )
 
 // handleHealthz is unauthenticated (probes have no session); a DB ping is
@@ -128,7 +129,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.U
 	out["telegram"] = s.Telegram.Status()
 	out["upstreams_enabled"] = s.UpstreamsEnabled
 	if s.UpstreamsEnabled {
-		out["upstream_default"] = LoadUpstreamConfig(s.Store).Default
+		cfg := LoadUpstreamConfig(s.Store)
+		out["upstream_default"] = cfg.Default
+		// read-only liveness check (iface exists?) — not a reconcile, doesn't
+		// touch nft. Piggybacks the existing status poll instead of a second
+		// poller, same as telegram's own status a few lines up.
+		out["upstream_warning"] = upstream.Warning(cfg.Upstreams)
 	}
 
 	jsonOK(w, out)

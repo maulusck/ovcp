@@ -4,6 +4,7 @@ import { api } from './api.js'
 export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', ovcpUptime: '', reloadLabel: '' }) // ok | down | reloading
 export const dns = $state({ up: false, phase: 'down', uptime: '', reloadLabel: '' }) // ok | down | reloading; dnsmasq is optional — App.svelte overrides to "na" when never installed
 export const telegram = $state({ running: false, tokenSet: false, admin: '', chatLinked: false })
+export const upstreams = $state({ warning: '' }) // live iface-down check, read-only — riding this same poll instead of a second one
 // whole ovcp process reachable at all — distinct from vpn/dns above, which can be
 // legitimately down while ovcp itself answers fine. App.svelte locks the UI on this.
 export const backend = $state({ up: true })
@@ -50,6 +51,7 @@ export async function pollOnce() {
       dns.phase = 'down'
     }
     if (d.telegram) Object.assign(telegram, d.telegram)
+    upstreams.warning = d.upstream_warning || ''
     return d
   } catch (err) {
     // api() throws {status, error} once the server has answered (even with an

@@ -313,9 +313,16 @@
   .serial:hover { color: var(--text); text-decoration: underline dotted; }
   .dl { color: var(--amber); font-size: 12px; font-family: system-ui, sans-serif; }
   .dns-col { text-align: center; }
-  .dns-cell { display: inline-flex; align-items: center; gap: 4px; }
+  /* height:100% + flex (not inline-flex): the td's own vertical-align was
+     centering this on font/line-box metrics, not the cell's actual box —
+     fine for text, not for a row this much taller than a checkbox, which
+     is what put it near the top with a lopsided gap below. Filling the
+     cell and centering within that instead sidesteps vertical-align entirely. */
+  .dns-cell { display: flex; align-items: center; justify-content: center; gap: 4px; height: 100%; }
   .dns-cell input { margin: 0; } /* browser UA default offsets checkboxes right of th text */
-  .dns-live { background: none; border: 0; padding: 0; display: inline-flex; cursor: copy; }
+  /* align-items: the dot has an explicit height, so flex's default
+     stretch degrades to flex-start (top-aligned) without this. */
+  .dns-live { background: none; border: 0; padding: 0; display: inline-flex; align-items: center; cursor: copy; }
   /* narrow, same "small inline control" size as .poll-pick's selects — a
      full-width <select> per row would blow the column out on mobile. */
   .up-col select { width: auto; max-width: 120px; padding: 3px 6px; font-size: 12px; }
