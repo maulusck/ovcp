@@ -129,6 +129,25 @@ export function autofocus(node) {
   node.focus()
 }
 
+// use:autosize={value} grows a textarea to fit its content, 2-10 lines, then
+// scrolls — CSS field-sizing:content isn't reliably supported yet. Pass the
+// bound value as the action's argument so `update` also re-fires when it
+// changes programmatically (an async config load), not just on keystrokes.
+export function autosize(node) {
+  function resize() {
+    node.style.height = 'auto'
+    const cs = getComputedStyle(node)
+    const lh = parseFloat(cs.lineHeight) || 16
+    const box = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) +
+      parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+    const clamped = Math.min(Math.max(node.scrollHeight, lh * 2 + box), lh * 10 + box)
+    node.style.height = clamped + 'px'
+  }
+  node.addEventListener('input', resize)
+  resize()
+  return { update: resize, destroy: () => node.removeEventListener('input', resize) }
+}
+
 // flash sets a message state then clears it after ms — the one place every
 // err/ok line's auto-dismiss timing lives, paired with <Msg> for the fade.
 export const FLASH_MS = 5000

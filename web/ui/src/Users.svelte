@@ -3,10 +3,13 @@
   import Msg from './Msg.svelte'
   let { isAdmin, me, minLen, minClasses } = $props()
   let users = $state([])
-  let err = $state('')
+  let err = $state('') // row actions (table below) — Msg lives in that card, not this form's
   let ok = $state('')
+  let formErr = $state('')
+  let formOk = $state('')
   let form = $state({ username: '', password: '', role: 'operator' })
   let enrolled = $state(null) // {username, secret, url, qr}
+  let qrDialog = $state() // bind:this — imperative .showModal()/.close(), never read reactively
 
   const STATUS_KEY = 'ovcp_users_status'
   let statusFilter = $state(localStorage.getItem(STATUS_KEY) || 'all')
@@ -38,19 +41,20 @@
 
   async function addUser(e) {
     e.preventDefault()
-    err = ''; ok = ''
+    formErr = ''; formOk = ''
     try {
       await api('POST', '/users', { Username: form.username, Password: form.password, Role: form.role })
-      flash(v => ok = v, `Added ${form.username}.`)
+      flash(v => formOk = v, `Added ${form.username}.`)
       form = { username: '', password: '', role: 'operator' }
       refresh()
-    } catch (x) { flash(v => err = v, x.error) }
+    } catch (x) { flash(v => formErr = v, x.error) }
   }
 
   async function toggleDisabled(u) {
     err = ''; ok = ''
     try {
       await api('PATCH', `/users/${u.Username}`, { Disabled: !u.Disabled })
+      flash(v => ok = v, `${u.Disabled ? 'Enabled' : 'Disabled'} ${u.Username}.`)
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
   }
@@ -115,21 +119,31 @@
         </select>
       </label>
     </div>
+    <Msg type="err" text={formErr} />
+    <Msg type="ok" text={formOk} />
     <p class="muted small">Password: min {minLen} chars, {minClasses} of upper/lower/digit/symbol.</p>
     <button type="submit">Add user</button>
   </form>
 
-  <Msg type="err" text={err} />
-  <Msg type="ok" text={ok} />
-
   {#if enrolled}
     <div class="card">
-      <h2>2FA enrollment — {enrolled.username}</h2>
+      <h2>2FA enrollment — {enrolled.username}
+        <button type="button" class="ghost" onclick={() => (enrolled = null)}>Done</button>
+      </h2>
       <p class="muted small">Scan with an authenticator app, or enter the secret manually. This QR is shown once.</p>
-      <img class="qr" src={enrolled.qr} alt="TOTP QR code" width="160" height="160" />
-      <p class="mono">secret: <code>{enrolled.secret}</code></p>
-      <button type="button" class="ghost" onclick={() => (enrolled = null)}>Done</button>
+      <button type="button" class="qr-btn" onclick={() => qrDialog.showModal()} title="Click to enlarge">
+        <img class="qr" src={enrolled.qr} alt="TOTP QR code — click to enlarge" width="96" height="96" />
+      </button>
+      <p class="mono">secret: <code>{enrolled.secret}</code> · <a class="totp-link" href={enrolled.url}>open in authenticator app</a></p>
     </div>
+
+    <!-- native <dialog>: ESC-to-close and backdrop dismiss are enough, no Close
+         button needed — a click landing on the dialog element itself (not its
+         children) means it hit the backdrop area. -->
+    <dialog class="card qr-dialog" bind:this={qrDialog}
+      onclick={(e) => e.target === qrDialog && qrDialog.close()}>
+      <img class="qr" src={enrolled.qr} alt="TOTP QR code" width="240" height="240" />
+    </dialog>
   {/if}
 
   <div class="card">
@@ -156,6 +170,8 @@
         </select>
       </label>
     </div>
+    <Msg type="err" text={err} />
+    <Msg type="ok" text={ok} />
     {#if users.length === 0}
       <p class="muted">No users yet.</p>
     {:else if filtered.length === 0}
@@ -203,4 +219,12 @@
 
 <style>
   .qr { background: #fff; padding: 8px; border-radius: 4px; }
+  /* same hover-reveal as .cn-link/.dl app-wide — amber, no underline until hover */
+  .totp-link { color: var(--amber); text-decoration: none; }
+  .totp-link:hover { text-decoration: underline dotted; }
+  .qr-btn { background: none; border: 0; padding: 0; cursor: zoom-in; display: inline-block; }
+  /* dialog:modal's UA default is margin:auto (dead-center); pin it near the
+     top instead, still horizontally centered — no Close button to align with. */
+  .qr-dialog { text-align: center; margin: 8vh auto auto; }
+  .qr-dialog::backdrop { background: rgba(0, 0, 0, .55); } /* same dim as .reconnect-overlay */
 </style>

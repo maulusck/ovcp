@@ -14,6 +14,9 @@
   let search = $state({ open: false, query: '' })
   let err = $state('')
   let scope = $state('') // '' = Global
+  let sampleIntervalSec = $state(60) // overwritten by /stats/config below; 60 is only the pre-load default
+  api('GET', '/stats/config').then(c => (sampleIntervalSec = c.SampleIntervalSec)).catch(() => {})
+  const sampleLabel = $derived(`sampled every ${fmtUptime(sampleIntervalSec)}`)
 
   let sort = $state({ key: null, desc: false })
   const SORT_GETTERS = {
@@ -73,8 +76,8 @@
   const dropsLast24h = $derived(
     sessions.filter(s => Date.now() - new Date(s.DisconnectedAt).getTime() < 86400000).length)
 
-  // equal-spaced sparkline: samples are one/minute so gaps (VPN down) just
-  // compress visually rather than needing real time-axis math.
+  // equal-spaced sparkline: samples are one per sampleIntervalSec so gaps (VPN down)
+  // just compress visually rather than needing real time-axis math.
   function points(vals, h = 30) {
     if (vals.length < 2) return ''
     const max = Math.max(...vals, 1)
@@ -84,7 +87,6 @@
 </script>
 
 <div class="stats-head">
-  <Msg type="err" text={err} />
   <label class="poll-pick">Scope
     <select bind:value={scope}>
       <option value="">Global</option>
@@ -109,8 +111,9 @@
 <div class="stats-grid">
   <div class="card">
     <h2>Connected clients</h2>
+    <Msg type="err" text={err} />
     {#if globalSamples.length < 2}
-      <p class="muted">Not enough history yet — sampled every minute.</p>
+      <p class="muted">Not enough history yet — {sampleLabel}.</p>
     {:else}
       <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
         <polyline points={points(globalSamples.map(s => s.Clients))} />
@@ -122,7 +125,7 @@
   <div class="card">
     <h2>Rate{#if scope} · {scope}{/if}</h2>
     {#if scopeSamples.length < 2}
-      <p class="muted">Not enough history yet — sampled every minute.</p>
+      <p class="muted">Not enough history yet — {sampleLabel}.</p>
     {:else}
       <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
         <polyline class="recv" points={points(scopeSamples.map(s => s.BytesRecvRate))} />
@@ -138,7 +141,7 @@
   <div class="card">
     <h2>Volume{#if scope} · {scope}{/if}</h2>
     {#if scopeSamples.length < 2}
-      <p class="muted">Not enough history yet — sampled every minute.</p>
+      <p class="muted">Not enough history yet — {sampleLabel}.</p>
     {:else}
       <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
         <polyline class="recv" points={points(scopeSamples.map(s => s.BytesRecv))} />

@@ -2,16 +2,18 @@
   import { tick } from 'svelte'
   import {
     api, apiBlob, downloadBlob, copyToClipboard, sortRows, matchesQuery,
-    toggleSort, sortMark, toggleSearch, autofocus, flash, fmtDate,
+    toggleSort, sortMark, toggleSearch, autofocus, autosize, flash, fmtDate,
   } from './api.js'
   import { vpn } from './status.svelte.js'
   import Msg from './Msg.svelte'
-  let { canOperate, isAdmin, focusCN = $bindable('') } = $props()
+  let { canOperate, isAdmin, upstreamsAvailable, focusCN = $bindable('') } = $props()
   let certs = $state([])
   let err = $state('')
   let ok = $state('')
   let form = $state({ cn: '', remote: '', passphrase: '', days: 365, keypass: '', splitTunnel: false, customOpts: '' })
   let redirectGW = $state(false)
+  let upCfg = $state(null)
+  $effect(() => { if (upstreamsAvailable) api('GET', '/upstreams').then(c => (upCfg = c)).catch(() => {}) })
 
   const STATUS_KEY = 'ovcp_certs_status'
   let statusFilter = $state(localStorage.getItem(STATUS_KEY) || 'all')
@@ -111,6 +113,18 @@
     } catch (x) { flash(v => err = v, x.error) }
   }
 
+  // id === '' clears the override (Clear: true) — back to the tab-wide default.
+  // Warning (first-ever per-CN override needs `vpn restart`) comes straight from
+  // the API, same RestartWarning Settings' Upstreams card would show for add/del.
+  async function setUpstream(cn, id) {
+    err = ''; ok = ''
+    try {
+      const r = await api('PUT', '/upstreams/assign', { CN: cn, ID: id, Clear: !id })
+      if (upCfg) upCfg.PerCN = r.PerCN
+      flash(v => ok = v, r.warning || `Upstream for ${cn}: ${id || 'default'}.`)
+    } catch (x) { flash(v => err = v, x.error) }
+  }
+
   // c.Status is the API's classification (store.Cert.Status(), the one
   // place the expiry threshold lives) — this only turns it into display text.
   function status(c) {
@@ -172,7 +186,7 @@
         </label>
       {/if}
       <label class="wide">Custom options
-        <textarea bind:value={form.customOpts} rows="2" placeholder="e.g. block-outside-dns"></textarea>
+        <textarea bind:value={form.customOpts} use:autosize={form.customOpts} rows="2" placeholder="e.g. block-outside-dns"></textarea>
       </label>
     </div>
     <Msg type="err" text={willRenew ? `${form.cn} already exists — this revokes it and issues a replacement.` : ''} />
@@ -223,6 +237,7 @@
         <th class="dns-col" title="Resolve via internal DNS while connected">
           <button class="th-sort" onclick={() => toggleSort(sort, 'dns')}>DNS{sortMark(sort, 'dns')}</button>
         </th>
+        {#if upstreamsAvailable}<th class="up-col" title="Egress override for this client">Upstream</th>{/if}
         {#if canOperate}<th></th>{/if}
       </tr></thead>
       <tbody>
@@ -265,6 +280,17 @@
                 </span>
               {/if}
             </td>
+            {#if upstreamsAvailable}
+              <td class="up-col">
+                {#if !c.Revoked && c.Kind !== 'server'}
+                  <select value={upCfg?.PerCN?.[c.CN] || ''} disabled={!isAdmin}
+                    onchange={(e) => setUpstream(c.CN, e.target.value)}>
+                    <option value="">default{upCfg?.Default ? ` (${upCfg.Default})` : ''}</option>
+                    {#each upCfg?.Upstreams || [] as u}<option value={u.ID}>{u.ID}</option>{/each}
+                  </select>
+                {/if}
+              </td>
+            {/if}
             {#if canOperate}
               <!-- plain td, same as Download beside it: this cell only ever holds
                    one button (or none, revoked) — .actions' flex/wrap exists for
@@ -290,6 +316,9 @@
   .dns-cell { display: inline-flex; align-items: center; gap: 4px; }
   .dns-cell input { margin: 0; } /* browser UA default offsets checkboxes right of th text */
   .dns-live { background: none; border: 0; padding: 0; display: inline-flex; cursor: copy; }
+  /* narrow, same "small inline control" size as .poll-pick's selects — a
+     full-width <select> per row would blow the column out on mobile. */
+  .up-col select { width: auto; max-width: 120px; padding: 3px 6px; font-size: 12px; }
   :global(tr.flash) { animation: flash 1.5s ease-out; }
   @keyframes flash { 0% { background: var(--amber); } 100% { background: transparent; } }
 </style>

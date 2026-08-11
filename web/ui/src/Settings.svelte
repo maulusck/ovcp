@@ -1,5 +1,5 @@
 <script>
-  import { api, apiBlob, downloadBlob, procOp, procDone, flash } from './api.js'
+  import { api, apiBlob, downloadBlob, procOp, procDone, flash, autosize } from './api.js'
   import { expectRecovery, expectDnsRecovery, telegram, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
   let { isAdmin, dnsAvailable, upstreamsAvailable } = $props()
@@ -94,7 +94,7 @@
     dnsErr = ''; dnsOk = ''; dnsPreview = null
     try {
       await api('PUT', '/dns/custom', { Content: dnsRecords })
-      flash(v => dnsOk = v, 'Saved.')
+      flash(v => dnsOk = v, 'Saved. Use Restart to apply configuration changes.')
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }
 
@@ -130,8 +130,9 @@
         ? { ID: newID, SOCKS: newSocks, Description: newDesc }
         : { ID: newID, Iface: newIface, Gateway: newGateway, Description: newDesc }
       upCfg = await api('POST', '/upstreams', body)
+      const id = newID
       newID = ''; newIface = ''; newGateway = ''; newSocks = ''; newDesc = ''
-      flash(v => upOk = v, 'Added.')
+      flash(v => upOk = v, `Added ${id}.`)
     } catch (x) { flash(v => upErr = v, x.error) }
   }
 
@@ -140,7 +141,7 @@
     upErr = ''; upOk = ''
     try {
       upCfg = await api('DELETE', '/upstreams/' + encodeURIComponent(id))
-      flash(v => upOk = v, 'Removed.')
+      flash(v => upOk = v, `Removed ${id}.`)
     } catch (x) { flash(v => upErr = v, x.error) }
   }
 
@@ -307,7 +308,7 @@
           {/if}
         </div>
         <label class="wide">Custom options
-          <textarea bind:value={cfg.Extra} rows="2" placeholder="e.g. client-to-client" disabled={!isAdmin}></textarea>
+          <textarea bind:value={cfg.Extra} use:autosize={cfg.Extra} rows="2" placeholder="e.g. client-to-client" disabled={!isAdmin}></textarea>
         </label>
       </div>
       <Msg type="err" text={dnsLeakWarning} />
@@ -354,7 +355,7 @@
           Block internet DNS (answer only local names; restart to apply)
         </label>
         <label class="wide">Custom records
-          <textarea bind:value={dnsRecords} rows="6" placeholder="10.8.0.50 pihole" disabled={!isAdmin}></textarea>
+          <textarea bind:value={dnsRecords} use:autosize={dnsRecords} rows="2" placeholder="10.8.0.50 pihole" disabled={!isAdmin}></textarea>
         </label>
       </div>
       <Msg type="err" text={dnsLeakWarning} />
@@ -387,7 +388,7 @@
 {#if upstreamsAvailable}
   <div class="card">
     <h2>Upstreams</h2>
-    <p class="muted small">Route connected clients' traffic out a chosen interface or SOCKS proxy (Tor, proxychains, self-hosted) instead of the host's own default route. ovcp only steers and NATs/relays — bring the interface or SOCKS backend itself up first.</p>
+    <p class="muted small">Egress via a named interface or SOCKS proxy (Tor, proxychains, self-hosted) instead of the host's default route; ovcp only steers and NATs — bring the backend up first. Per-client overrides live in the Certificates tab.</p>
     {#if !upCfg}
       <p class="muted">Loading…</p>
     {:else}

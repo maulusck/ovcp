@@ -220,6 +220,9 @@
 {/snippet}
 
 <div class="logs-head">
+  <!-- stays in the toolbar, not a panel card: panels reorder/collapse (openIds is
+       MRU) and any one of them can be hidden, the toolbar is the only thing
+       guaranteed to stay on screen for a page-wide refresh error. -->
   <Msg type="err" text={err} />
   <label class="poll-pick" title={isAdmin ? 'Verbose logging for troubleshooting' : 'Admin only'}>
     Debug logging

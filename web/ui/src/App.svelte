@@ -93,7 +93,7 @@
       login = { username: '', password: '', totp: '' }; step = 'creds'
     } catch (x) {
       if (x.error === 'totp required') { step = 'totp'; return }
-      flash(v => err = v, 'sign-in failed')
+      flash(v => err = v, 'Sign-in failed.')
       step = 'creds'
       login = { ...login, password: '', totp: '' }
     }
@@ -237,7 +237,7 @@
     {:else if tab === 'stats'}
       <Stats />
     {:else if tab === 'certs'}
-      <Certs {canOperate} {isAdmin} bind:focusCN />
+      <Certs {canOperate} {isAdmin} upstreamsAvailable={!!user.upstreamsEnabled} bind:focusCN />
     {:else if tab === 'settings'}
       <Settings {isAdmin} dnsAvailable={!!user.dnsmasqVersion} upstreamsAvailable={!!user.upstreamsEnabled} />
     {:else if tab === 'users'}
@@ -435,10 +435,12 @@
   /* groups 2+ .check labels onto their own full row instead of letting them
      fall into the field flow; combine with .wide for the row-span. */
   :global(.check-row) { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+  /* use:autosize (api.js) owns the actual height, 2-10 lines; resize:none
+     since a manual drag would just get overwritten by the next keystroke. */
   :global(.wide textarea) {
-    width: 100%; font-family: var(--mono); font-size: 13px; resize: vertical;
+    width: 100%; font-family: var(--mono); font-size: 13px; resize: none;
     background: var(--ink); color: var(--text); border: 1px solid var(--line);
-    border-radius: 4px; padding: 7px 10px; min-height: 2.4em;
+    border-radius: 4px; padding: 7px 10px; overflow-y: auto;
   }
   :global(.row) { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
   :global(.small) { font-size: 12px; margin: 4px 0; }
@@ -464,6 +466,10 @@
   .brand-link { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
   .brand strong { letter-spacing: .12em; }
 
+  /* fixed width: "up"/"down"/"reconnecting" are different lengths, and this pill sits
+     right before nav — letting it reflow shoved the whole tab list left/right on every
+     status change. 12ch fits "reconnecting", the longest state word. */
+  .pill-text { display: inline-block; min-width: 12ch; text-align: center; }
   .pill {
     display: inline-flex; align-items: center; gap: 7px;
     font-family: var(--mono); font-size: 11px; color: var(--dim);
