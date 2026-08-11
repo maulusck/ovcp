@@ -35,9 +35,23 @@ documented in \fBBUILD.md\fR; internal design in \fBARCHITECTURE.md\fR.
 .BR openvpn (8)
 on \fBPATH\fR \(en ovcp starts, stops, and controls it but never bundles
 it. Linux with \fI/dev/net/tun\fR; root or \fBCAP_NET_ADMIN\fR for openvpn
-to bring the tunnel up (see \fBPRIVILEGES\fR). \fBnft\fR(8) on \fBPATH\fR is
+to bring the tunnel up (see \fBPRIVILEGES\fR).
+.BR dnsmasq (8)
+on \fBPATH\fR is optional, for the
+.B dns
+feature (internal DNS: resolve the server and connected clients by
+hostname over the tunnel) \(en ovcp starts and supervises it the same way
+as openvpn, but never installs it. \fBnft\fR(8) on \fBPATH\fR is also
 optional, for the \fBupstream\fR feature (policy\-routed VPN egress) \(en
-ovcp programs routing/NAT itself, but never installs nftables.
+ovcp programs routing/NAT itself, but never installs nftables. Neither
+missing dependency blocks
+.B ovcp
+itself from running \(en the feature that needs it is just unavailable
+until it's on \fBPATH\fR (see
+.B dns status
+/
+.B upstream status
+in \fBCOMMANDS\fR).
 .PP
 Building ovcp itself \(en compiler and toolchain requirements,
 cross\-compiling, packaging, and the container image \(en is documented in
@@ -526,9 +540,9 @@ errors the same as any CN with no active cert.
 .TQ
 .B upstream set\-default (\fB\-id\fR \fINAME\fR | \fB\-clear\fR)
 .TQ
-.B upstream assign \fB\-cn\fR \fINAME\fR (\fB\-id\fR \fIID\fR | \fB\-clear\fR)
+.B upstream assign \fB\-cn\fR \fINAME\fR (\fB\-id\fR \fIID\fR | \fB\-clear\fR) [\fB\-ctrl\fR \fIPATH\fR]
 .TQ
-.B upstream reconcile
+.B upstream reconcile [\fB\-ctrl\fR \fIPATH\fR]
 .TQ
 .B upstream status
 Route VPN client traffic out an admin\-chosen egress instead of the box's
@@ -1481,6 +1495,8 @@ file needs a label either \(en both are opened by ovcp itself, never
 by the confined child.
 .SH SEE ALSO
 .BR openvpn (8),
+.BR dnsmasq (8),
+.BR nft (8),
 .BR systemctl (1)
 .SH AUTHOR
 Written by Maulusck.

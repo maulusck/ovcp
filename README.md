@@ -6,84 +6,105 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
 
-One [OpenVPN](https://openvpn.net/) server, one static binary, one data
-directory. No `easy-rsa`, no compose stack, no separate PKI toolchain
-bolted on after the fact. `ovcp` owns the CA, the server config, and the
-openvpn process itself, the same way on bare metal, under systemd, or in
-a container. A CLI for scripts, a web UI for humans; neither is the
-second-class citizen.
+**OVCP runs an OpenVPN server end to end** — CA, server config, client
+issuance, the `openvpn` process itself. One static binary. No `easy-rsa`.
+No shell scripts hacked around `openssl`. No compose stack. No separate
+database. `ovcp` owns the CA, the config, the worker process — bare
+metal, systemd, container, no difference.
+
+Beyond certs: internal DNS, policy-routed egress, per-client traffic
+stats, operational notifications. Same binary. All optional. Zero extra
+installs. CLI and web UI both do the full job — neither is a
+stripped-down stand-in for the other.
 
 ## Features
 
-- **Native PKI** — issue, revoke, renew. No `easy-rsa`, no shell scripts
-  wrapping `openssl`. CA private key encrypted at rest, passphrase never
-  persisted.
-- **One binary** — the web UI is embedded in it. No separate frontend to
-  deploy, no reverse proxy required.
-- **Full CLI** — every UI action has a CLI equivalent, not a subset.
-  `-json` switches every command to machine-readable output, same fields
-  either way. Shell completion for bash/zsh/fish.
-- **Client export** — a complete, ready-to-import `.ovpn` profile on
-  stdout, optionally key-encrypted, from the CLI or the UI.
-- **Internal DNS** (optional) — dnsmasq resolves the server and each
-  connected client by hostname over the tunnel, plus custom hosts-file
-  entries. Switch it to answer only local names, no upstream forwarding.
-- **Upstreams** (optional) — pick which egress connected clients exit
-  through instead of the box's own default route, switchable ad hoc with no
-  restart: an interface (a second NIC, a WireGuard peer, anything else
-  already up on the host — ovcp only steers and NATs, the admin brings the
-  connection up) or a SOCKS5 backend (Tor, proxychains, self-hosted —
-  relayed through a small in-process proxy, auth in the URL).
-- **Live stats & audit log** — per-client traffic history, a top-like
-  `stats -follow`, and an audit trail of every admin action.
-- **Telegram bot** (optional) — notifications for revokes, user changes,
-  CA rotation, and cert expiry, plus a narrow Start/Stop/Restart/Reconnect
-  menu gated to one linked chat. Off by default; nothing else depends on it.
-- **Encrypted backup/restore** — one command, one encrypted archive:
-  everything needed to restore the server, nothing that needs the
-  original host.
+### Core
+
+Always on. No external tool required.
+
+- **Native PKI** — issue, revoke, renew. No `easy-rsa`, no hand-rolled
+  `openssl` wrappers. CA private key encrypted at rest. Passphrase never
+  touches disk.
+- **One binary** — web UI embedded. No separate frontend, no reverse
+  proxy.
+- **Full CLI** — every UI action has a CLI twin, not a crippled subset.
+  `-json` flips any command to machine output, same fields either way.
+  Completion for bash/zsh/fish.
+- **Client export** — ready-to-import `.ovpn` on stdout, optionally
+  key-encrypted, split-tunnel or full-tunnel, custom OpenVPN directives
+  per client. Same output, CLI or UI.
+- **Live stats & audit log** — per-client traffic history, a top(1)-style
+  `stats -follow`, an audit trail of every admin action.
+- **Log management** — rotation for `openvpn.log`/`ovcp.log`/
+  `dnsmasq.log`, retention configurable. Copytruncate against each
+  worker's already-open handle. No restart.
 - **Access control** — role-based (admin/operator/readonly), optional
-  TOTP 2FA with QR-code enrollment, rate-limited logins, CSRF-protected
+  TOTP 2FA with QR enrollment, rate-limited logins, CSRF-protected
   HTTPS-only sessions.
-- **Packaging** — systemd unit, `.deb`/`.rpm`/`.apk`/Arch/Void packages
-  (amd64, ARM, RISC-V; glibc or musl), a multi-arch container image, and a
-  SELinux policy. All included, none bolted on later.
+- **Encrypted backup/restore** — one command, one encrypted archive.
+  Everything needed to rebuild the server. Nothing tied to the original
+  host.
+- **Packaging** — systemd unit, `.deb`/`.rpm`/`.apk`/Arch/Void
+  (amd64, ARM, RISC-V; glibc or musl), multi-arch container image,
+  SELinux policy. Shipped. Not bolted on after the fact.
+
+### Optional modules
+
+Gated on a tool being on `PATH`, or explicit opt-in. Core doesn't care
+whether they're there or not.
+
+- **Internal DNS** (needs [`dnsmasq`](https://thekelleys.org.uk/dnsmasq/doc.html))
+  — resolve the server and every connected client by hostname over the
+  tunnel, plus custom hosts-file entries. Restrict it to local names
+  only, no upstream forwarding.
+- **Upstreams** (needs [`nftables`](https://wiki.nftables.org/)) — pick
+  the egress connected clients exit through instead of the box's own
+  default route, switchable live in the common case: a local interface (a
+  second NIC, a WireGuard peer — anything already up on the host, `ovcp`
+  only steers and NATs) or a SOCKS5 backend (Tor, proxychains,
+  self-hosted, relayed through a small in-process proxy). Per-client
+  overrides on top of a server-wide default, kill-switched: a dead egress
+  fails traffic closed, never leaks it out the host's own route.
+- **Telegram bot** (needs a bot token) — notifications for revokes, user
+  changes, CA rotation, cert expiry, plus a narrow Start/Stop/Restart/
+  Reconnect menu gated to one linked chat. Off unless configured. Nothing
+  else depends on it.
 
 ## Requirements
 
-Linux with `/dev/net/tun`, and [`openvpn`](https://openvpn.net/) on `PATH`.
-OVCP runs as root — it owns the PKI and starts openvpn itself as a
-supervised child process. [`dnsmasq`](https://thekelleys.org.uk/dnsmasq/doc.html)
-on `PATH` is optional, for internal DNS — ovcp starts it itself when found.
-`nftables` on `PATH` is optional too, for policy-routed VPN egress (see
-**Upstreams** below) — ovcp programs the rules itself, never installs it.
+Linux with `/dev/net/tun`, [`openvpn`](https://openvpn.net/) on `PATH`.
+OVCP runs as root — owns the PKI, starts openvpn itself as a supervised
+child process. [`dnsmasq`](https://thekelleys.org.uk/dnsmasq/doc.html)
+and [`nftables`](https://wiki.nftables.org/) are optional, gating DNS and
+Upstreams above — `ovcp` starts/programs each itself when found, never
+installs either.
 
-This is sufficient to run ovcp. Building it from source has its own
+That's what it takes to run ovcp. Building from source has its own
 toolchain requirements — see [`docs/BUILD.md`](docs/BUILD.md).
 
 ## Install
 
-OVCP ships in three equivalent forms; choose based on your host:
+Ships three ways. Pick one.
 
-- **Distro package** — `.deb`, `.rpm`, `.apk`, or Arch/Void — installs the
-  binary, man page, shell completions, and a service file for your init
-  system in one step.
+- **Distro package** — `.deb`, `.rpm`, `.apk`, or Arch/Void — binary, man
+  page, shell completions, service file, one step. `openvpn` pulls in as
+  a hard dependency; `dnsmasq`/`nftables` are suggested, not forced.
 - **Container image** — one image, OpenVPN included, nothing else to
   install.
-- **Static binary** — drop `ovcp` on `PATH`; nothing else required at
+- **Static binary** — drop `ovcp` on `PATH`. Nothing else required at
   runtime beyond `openvpn` itself.
 
-No tagged release exists yet, so none of these are published as
-ready-to-download artifacts — build from source; see
+No tagged release yet. Nothing prebuilt. Build from source — see
 [`docs/BUILD.md`](docs/BUILD.md) for your architecture and libc.
 
 ## Quick start
 
-The examples below assume `ovcp` is on `PATH` — a distro package puts it
-there; a from-source build needs `sudo make install` first, or run
-`bin/ovcp` directly from the checkout (see [`docs/BUILD.md`](docs/BUILD.md)).
+Examples assume `ovcp` is on `PATH` — a distro package puts it there; a
+from-source build needs `sudo make install` first, or run `bin/ovcp`
+straight from the checkout (see [`docs/BUILD.md`](docs/BUILD.md)).
 
-Setup is two commands: `init` once, then `serve`.
+Two commands: `init` once, `serve` forever after.
 
 ```sh
 export OVCP_DATA=$PWD/data   # or run as root against /var/lib/ovcp — see below
@@ -97,17 +118,16 @@ ovcp serve
 # → https://127.0.0.1:8443 (self-signed cert on first run)
 ```
 
-`init` is idempotent — safe to re-run any time, it only fills in what's
-missing. If `serve` refuses with `not initialized, missing: ...`, that's
-the fix.
+`init` is idempotent. Re-run it whenever; it only fills gaps. `serve`
+refusing with `not initialized, missing: ...` means run `init` first.
 
-Issue a client and hand them a ready-to-import profile:
+Issue a client, get a ready-to-import profile:
 
 ```sh
 ovcp certificate issue -cn alice -export -remote vpn.example.com > alice.ovpn
 ```
 
-**Production**, via an installed package:
+**Production**, installed package:
 
 ```sh
 sudo ovcp init -server-cn vpn.example.com
@@ -123,20 +143,19 @@ podman run -d --cap-add=NET_ADMIN --device /dev/net/tun \
   -v ovcp:/var/lib/ovcp ovcp
 ```
 
-Every client showing the same `RealAddress`? See `man ovcp`'s
-**DEPLOYMENT** → **container** section.
+Identical `RealAddress` on every client: `man ovcp`, **DEPLOYMENT** →
+**container**.
 
 ## CLI
 
-`ovcp <command>` covers certs, users, backups, live status, and stats —
-run `ovcp -h` for the full command table, or `man ovcp` for every flag,
-the security/privilege model, environment variables, and deployment
-recipes. Every command is scriptable: `ovcp -json <command>` (flag comes
-*before* the command, like `-data`/`-debug`) swaps its human text for JSON
-on stdout — same fields, both directions, including errors
-(`{"error": "..."}`, same shape the REST API uses). `stats -follow` and
-`completion` are the only two exceptions, both because there's no single
-result to encode.
+`ovcp <command>` covers certs, users, backups, live status, stats — `ovcp
+-h` for the full command table, `man ovcp` for every flag, the security/
+privilege model, environment variables, deployment recipes. Every command
+scriptable: `ovcp -json <command>` (flag goes *before* the command, like
+`-data`/`-debug`) swaps human text for JSON on stdout — same fields, both
+directions, errors included (`{"error": "..."}`, same shape the REST API
+uses). `stats -follow` and `completion` are the only exceptions — no
+single result to encode.
 
 ```sh
 ovcp -json certificate list | jq -r '.[] | select(.status == "expired") | .cn'
@@ -146,19 +165,19 @@ ovcp -json certificate list | jq -r '.[] | select(.status == "expired") | .cn'
 
 Four documents, four altitudes, nothing duplicated between them:
 
-- **This README** — what OVCP is, why it exists, and the shortest path to
-  a running server.
+- **This README** — what OVCP is, why it exists, shortest path to a
+  running server.
 - **[`man ovcp`](docs/ovcp.8)** — the complete runtime reference: every
   command and flag, the security and privilege model, every environment
-  variable, every file ovcp reads or writes, and deployment recipes for
-  systemd, containers, and SELinux. The same page renders into the web
-  UI's **Docs** tab at build time — no terminal needed to read it, one
-  source either way. From a checkout, before installing anything:
-  `make man`.
-- **[`docs/BUILD.md`](docs/BUILD.md)** — building the binary, cross-compiling
-  for another arch/libc, the container image, and distro/Void packages.
+  variable, every file ovcp reads or writes, deployment recipes for
+  systemd, containers, SELinux. Same page renders into the web UI's
+  **Docs** tab at build time — no terminal needed, one source either way.
+  From a checkout, before installing anything: `make man`.
+- **[`docs/BUILD.md`](docs/BUILD.md)** — building the binary,
+  cross-compiling for another arch/libc, the container image,
+  distro/Void packages.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — internal design:
-  source layout, the process and IPC model, and the rationale behind
+  source layout, the process and IPC model, the rationale behind
   decisions that affect more than one package.
 
 ## License

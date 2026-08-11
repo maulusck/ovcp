@@ -18,7 +18,7 @@ codebase.
 | `internal/backup` | Encrypted export/import of the CA, CRL, tls-crypt key, TOTP key, server config, and database. |
 | `internal/controller` | OpenVPN process supervision (fork/exec, reap, restart backoff), the control-socket server, and the management-socket client used to query and drive a running OpenVPN process. |
 | `internal/ovpnconf` | Validated `server.conf` generation from stored configuration. |
-| `internal/upstream` | Policy-routed VPN egress: renders and applies the routing-table/nftables rules that steer client traffic out an admin-chosen interface, or redirects it to an in-process relay that speaks SOCKS5 to an admin-chosen backend (Tor, proxychains, self-hosted). |
+| `internal/upstream` | Policy-routed VPN egress: renders and applies the routing-table/nftables rules that steer client traffic out an admin-chosen interface, or redirects it to an in-process relay that speaks SOCKS5 to an admin-chosen backend (Tor, proxychains, self-hosted). Also holds per-CN overrides: one client's egress can differ from the server-wide default, installed reactively off OpenVPN's own `>CLIENT:ESTABLISHED` management-socket event (see `internal/controller/mgmt.go`) rather than through any address allocation of ovcp's own. |
 | `internal/auth` | Password hashing (argon2id), sessions, TOTP, login rate-limiting, RBAC. |
 | `internal/telegram` | Optional notification bot: long-poller, narrow command surface, expiry sweep. |
 | `internal/api` | REST/JSON handlers, the embedded web UI, HTTPS, CSRF, and the session/RBAC middleware chain. |
@@ -50,7 +50,8 @@ different purpose:
   for as long as the OpenVPN worker runs.
 - The **control socket** (`OVCP_CTRL_SOCK`) is ovcp's own protocol,
   root-only, used by a separate `ovcp` invocation (`vpn`, `dns`,
-  `telegram`, `debug`, `stats -follow`) to reach a running `serve`. Only
+  `telegram`, `debug`, `upstream`, `stats -follow`) to reach a running
+  `serve`. Only
   `kill` and the connected-client list (`clients`, used by the top-level
   `ovcp status` and by `stats -follow`) actually proxy through to the
   management-socket connection above. Everything else answers from
@@ -58,10 +59,16 @@ different purpose:
   their own `Supervisor` (see Supervisor design, below); `vpn reconnect`
   sends `SIGUSR1` straight to the openvpn child, also without touching
   mgmt; `telegram start|stop|restart|status` drives its own `Poller`;
-  `debug on`/`off` flips an in-process log-level variable. Nothing dials
-  the management socket except `serve` itself. `dns block-internet` is
-  not a control-socket op at all — it reads/writes a stored setting
-  directly and works without `serve` running.
+  `debug on`/`off` flips an in-process log-level variable;
+  `upstream-assign` rewrites one connected client's live nft rule
+  (`upstream assign`'s CLI twin to the REST handler, both funneling
+  through `api.ApplyAssign` — see `internal/api/upstream.go`);
+  `upstream-reapply` re-applies the persisted upstream config (`upstream
+  reconcile`, and automatically on `vpn start`/`restart` — see Supervisor
+  design, below). Nothing dials the management socket except `serve`
+  itself. `dns block-internet` is not a control-socket op at all — it
+  reads/writes a stored setting directly and works without `serve`
+  running.
 
 Exact defaults, flags, and environment variables for both sockets are
 documented in `man ovcp`, `ENVIRONMENT`.
@@ -109,6 +116,16 @@ recomputed fresh on every (re)start (`Supervisor.PreStart`) from the
 persisted server config's subnet, not baked in once, so a subnet change
 or OpenVPN restart never leaves it listening on a stale address
 (`--bind-dynamic` also tolerates the address not existing yet).
+
+`internal/upstream`'s nftables rules mark traffic by the VPN subnet
+configured in `server.conf` — a value that only ever changes at OpenVPN
+`start`/`restart` (it never hot-reloads), never at config-save time. The
+control socket's dispatcher (`internal/controller/control.go`) reflects
+this exactly: a successful `vpn start`/`restart` triggers the same
+upstream re-apply `upstream reconcile` uses, so nft's notion of the
+subnet can never drift from what the running process actually has;
+`vpn stop`/`reconnect` deliberately do not, since neither changes what
+OpenVPN considers its subnet to be.
 
 ## Privilege model
 

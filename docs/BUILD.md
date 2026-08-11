@@ -258,6 +258,14 @@ above; for `TARGET=host` it falls back to `go env GOARCH`, so a package
 built natively on an arm64 host is labeled `arm64`, not a hardcoded
 default.
 
+The manifest declares `openvpn` as a hard package dependency (`.deb`/
+`.rpm` pull it in automatically) and `dnsmasq`/`nftables` as suggested,
+not required — both are optional at runtime (internal DNS, policy-routed
+egress; see `man ovcp`, `REQUIREMENTS`), so the package manager offers
+them without forcing the install. `apk`/Arch packages have no `Suggests:`
+equivalent and drop the field entirely; install those two manually if you
+want the features they gate.
+
 Install a built package:
 
 ```sh
