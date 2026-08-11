@@ -1096,7 +1096,7 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 // upstreamsReady dies with a clear error if nftables isn't usable — same
 // "fails cleanly without it" treatment dns commands get without dnsmasq.
 func upstreamsReady() {
-	if _, path, _ := controller.NftablesVersion(); path == "" || os.Getenv("OVCP_UPSTREAMS_ENABLED") == "false" {
+	if _, path, _ := controller.NftablesVersion(); !upstream.Enabled(path) {
 		die(fmt.Errorf("upstreams disabled: nftables not found on PATH, or OVCP_UPSTREAMS_ENABLED=false"))
 	}
 }
@@ -1119,16 +1119,13 @@ func warnUpstream(w string) {
 	}
 }
 
-// regenManagementClientAuthCLI rewrites server.conf's management-client-auth
-// flag — same computation api.Server.regenManagementClientAuth does from the
-// REST side, needed here since a running serve won't see a config-only change.
-func regenManagementClientAuthCLI(ctx *cliContext, s *store.Store, active bool) {
-	raw, _ := s.GetSetting("vpn_config")
-	cfg := ovpnconf.Load(raw)
-	cfg.ManagementClientAuth = active
-	enc, _ := json.Marshal(cfg)
-	die(s.SetSetting("vpn_config", string(enc)))
-	die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
+// saveAndApplyUpstreamsCLI mirrors api.saveAndApplyUpstreams for the CLI's
+// three plain mutators (add/del/set-default): persist, reapply (warning
+// printed here), audit — the one tail all three share.
+func saveAndApplyUpstreamsCLI(s *store.Store, cfg upstream.Config, action, detail string) {
+	die(api.SaveUpstreamConfig(s, cfg))
+	warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
+	s.Audit("cli", action, detail)
 }
 
 type upstreamStatusOut struct {
@@ -1179,9 +1176,9 @@ func cmdUpstreamStatus(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		ver, path, ok := controller.NftablesVersion()
+		ver, path, _ := controller.NftablesVersion()
 		out := upstreamStatusOut{
-			Enabled:    ok && os.Getenv("OVCP_UPSTREAMS_ENABLED") != "false",
+			Enabled:    upstream.Enabled(path),
 			NftVersion: ver, NftPath: path, Default: api.LoadUpstreamConfig(s).Default,
 		}
 		output(out, func(o upstreamStatusOut) {
@@ -1269,9 +1266,7 @@ func cmdUpstreamAdd(afs *flag.FlagSet) func(ctx *cliContext) {
 			Description: *desc,
 		})
 		die(err)
-		die(api.SaveUpstreamConfig(s, cfg))
-		warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
-		s.Audit("cli", "upstream_add", *id)
+		saveAndApplyUpstreamsCLI(s, cfg, "upstream_add", *id)
 		output(msg("added: %s (table %d)", *id, added.Table), printMsg)
 	}
 }
@@ -1289,9 +1284,7 @@ func cmdUpstreamDel(dfs *flag.FlagSet) func(ctx *cliContext) {
 		if !found {
 			die(fmt.Errorf("upstream %q not found", *id))
 		}
-		die(api.SaveUpstreamConfig(s, cfg))
-		warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
-		s.Audit("cli", "upstream_del", *id)
+		saveAndApplyUpstreamsCLI(s, cfg, "upstream_del", *id)
 		output(msg("deleted: %s", *id), printMsg)
 	}
 }
@@ -1308,13 +1301,11 @@ func cmdUpstreamSetDefault(sfs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		cfg, err := api.LoadUpstreamConfig(s).SetDefault(*id)
 		die(err)
-		die(api.SaveUpstreamConfig(s, cfg))
-		warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
 		action := "upstream_default_set"
 		if *id == "" {
 			action = "upstream_default_off"
 		}
-		s.Audit("cli", action, *id)
+		saveAndApplyUpstreamsCLI(s, cfg, action, *id)
 		text := "default: " + *id
 		if *id == "" {
 			text = "default: off (host's own default route)"
@@ -1341,16 +1332,9 @@ func cmdUpstreamAssign(afs *flag.FlagSet) func(ctx *cliContext) {
 		before := api.UpstreamAuthActive(s)
 		cfg, err := api.LoadUpstreamConfig(s).Assign(*cn, *id, *clear)
 		die(err)
-		die(api.SaveUpstreamConfig(s, cfg))
-		if after := api.UpstreamAuthActive(s); before != after {
-			regenManagementClientAuthCLI(ctx, s, after)
-			if after {
-				// management-client-auth is a config-file directive:
-				// the already-running openvpn won't pick it up until
-				// restarted, so per-CN routing stays inactive until then.
-				warnUpstream("run `ovcp vpn restart` to activate per-CN routing")
-			}
-		}
+		warning, err := api.ApplyAssign(s, dataPaths(ctx.dataDir).ServerConf, true, before, cfg)
+		die(err)
+		warnUpstream(warning)
 		action := "upstream_assign"
 		if *clear {
 			action = "upstream_unassign"

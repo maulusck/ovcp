@@ -208,7 +208,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	dnsVersion, dnsPath, _ := controller.DnsmasqVersion() // same advisory-only treatment
 	dnsGid := dnsGID(dnsRunAsGroup())
 	nftVersion, nftPath, _ := controller.NftablesVersion()
-	upstreamsEnabled := nftPath != "" && os.Getenv("OVCP_UPSTREAMS_ENABLED") != "false"
+	upstreamsEnabled := upstream.Enabled(nftPath)
 	dnsSup := newDNSSupervisor(pp, dnsPath, s)
 	mgmt := controller.NewClient(sock, statusPath(sock))
 	tg := telegram.New(s, p, sup, dnsSup, mgmt)
@@ -261,8 +261,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	fillPaths(&cfg, dataDir, sock)
 	perCNActive := upstreamsEnabled && api.UpstreamAuthActive(s)
 	cfg.ManagementClientAuth = perCNActive
-	raw, _ := json.Marshal(cfg)
-	die(s.SetSetting("vpn_config", string(raw)))
+	die(srv.SaveConfig(cfg))
 	die(cfg.WriteAtomic(srv.ConfigPath))
 	srv.ReconcileUpstreams() // same path every other upstream-mutating op uses; no-ops if disabled
 	// Always wired: inert unless management-client-auth is actually in the

@@ -413,7 +413,7 @@ func (s *Server) handleVPNConfigPut(w http.ResponseWriter, r *http.Request, u *s
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	if err := s.saveConfig(in); err != nil {
+	if err := s.SaveConfig(in); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}

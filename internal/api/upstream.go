@@ -11,6 +11,12 @@ import (
 
 const upstreamConfigKey = "upstream_config"
 
+// RestartWarning is shown when a CN's first-ever per-CN override flips
+// ManagementClientAuth on: a config-file-only OpenVPN directive, verified
+// (internal/controller/supervisor.go: Restart re-execs, Reconnect's SIGUSR1
+// doesn't reread server.conf) to need a real restart, not just reconnect.
+const RestartWarning = "run `ovcp vpn restart` to activate per-CN routing"
+
 // DefaultUpstreamConfig seeds one SOCKS upstream from OVCP_UPSTREAM_SOCKS,
 // same shape as DefaultDNSConfig/DefaultStatsConfig, validated the same way
 // `upstream add` is. Invalid: logged and ignored, never fatal.
@@ -132,16 +138,31 @@ func (s *Server) saveAndApplyUpstreams(w http.ResponseWriter, u *store.User, cfg
 	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
 }
 
-// regenManagementClientAuth rewrites server.conf's management-client-auth
-// flag to match active — the same computation main.go does at startup,
-// redone here since PerCN can flip empty<->non-empty mid-session.
-func (s *Server) regenManagementClientAuth(active bool) error {
-	cfg := s.LoadConfig()
-	cfg.ManagementClientAuth = active
-	if err := s.saveConfig(cfg); err != nil {
-		return err
+// ApplyAssign persists an already-computed assign (cfg, from
+// Config.Assign) and flips ManagementClientAuth if that changed PerCN
+// empty<->non-empty, reporting RestartWarning if so — the save+flip tail
+// handleUpstreamAssign and cmdUpstreamAssign share, same shape as
+// saveAndApplyUpstreams/saveAndApplyUpstreamsCLI for add/del/set-default.
+// before is the caller's own pre-mutation UpstreamAuthActive snapshot;
+// enabled gates the flip the same way s.UpstreamsEnabled does for the REST
+// handler — the CLI, which already refuses to get here when upstreams are
+// disabled (upstreamsReady), always passes true. The mutation call itself
+// (Config.Assign) stays with each caller, same reason it does for
+// add/del/set-default: its error is a 400/die, distinct from this
+// function's save/persist failures.
+func ApplyAssign(s *store.Store, confPath string, enabled, before bool, cfg upstream.Config) (warning string, err error) {
+	if err := SaveUpstreamConfig(s, cfg); err != nil {
+		return "", err
 	}
-	return cfg.WriteAtomic(s.ConfigPath)
+	if after := enabled && UpstreamAuthActive(s); before != after {
+		if err := SetManagementClientAuth(s, confPath, after); err != nil {
+			return "", err
+		}
+		if after {
+			warning = RestartWarning
+		}
+	}
+	return warning, nil
 }
 
 // handleUpstreamAssign sets or clears a CN's per-upstream override, rewrites
@@ -162,22 +183,10 @@ func (s *Server) handleUpstreamAssign(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	if err := SaveUpstreamConfig(s.Store, cfg); err != nil {
+	warning, err := ApplyAssign(s.Store, s.ConfigPath, s.UpstreamsEnabled, before, cfg)
+	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return
-	}
-	var warning string
-	if after := s.UpstreamsEnabled && UpstreamAuthActive(s.Store); before != after {
-		if err := s.regenManagementClientAuth(after); err != nil {
-			jsonErr(w, 500, err.Error())
-			return
-		}
-		if after {
-			// management-client-auth is a config-file directive: the
-			// already-running openvpn process won't pick it up until
-			// restarted, so per-CN routing stays inactive until then.
-			warning = "run `ovcp vpn restart` to activate per-CN routing"
-		}
 	}
 	if err := s.RewriteConnectedClientRule(in.CN); err != nil {
 		jsonErr(w, opStatus(err), err.Error())

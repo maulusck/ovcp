@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/store"
 	"github.com/ovcp/ovcp/internal/upstream"
 )
@@ -53,6 +54,123 @@ func TestUpstreamApplyResultJSONIsFlat(t *testing.T) {
 	}
 	if m["Default"] != "wan2" || m["warning"] != "some warning" {
 		t.Fatalf("got %s, want Default and warning both at top level", data)
+	}
+}
+
+// testAssignFixture returns a fresh store + a server.conf path in a real
+// (writable) temp dir — ApplyAssign's SetManagementClientAuth call needs
+// both: the store for vpn_config, the path for WriteAtomic.
+func testAssignFixture(t *testing.T) (*store.Store, string) {
+	t.Helper()
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s, filepath.Join(dir, "server.conf")
+}
+
+// TestApplyAssignFirstActivationWarns: assigning the very first per-CN
+// override flips ManagementClientAuth empty->non-empty, which — per
+// internal/controller/supervisor.go's Restart/Reconnect split — needs a
+// real `vpn restart` to take effect, so ApplyAssign must both persist the
+// flag and report RestartWarning.
+func TestApplyAssignFirstActivationWarns(t *testing.T) {
+	s, confPath := testAssignFixture(t)
+	cfg, err := upstream.Config{Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}}}.Assign("alice", "wan1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning, err := ApplyAssign(s, confPath, true, false /* before */, cfg)
+	if err != nil {
+		t.Fatalf("ApplyAssign: %v", err)
+	}
+	if warning != RestartWarning {
+		t.Fatalf("warning = %q, want RestartWarning", warning)
+	}
+	if !UpstreamAuthActive(s) {
+		t.Fatal("PerCN was persisted but UpstreamAuthActive reports false")
+	}
+	raw, _ := s.GetSetting("vpn_config")
+	if !ovpnconf.Load(raw).ManagementClientAuth {
+		t.Fatal("vpn_config was not flipped to ManagementClientAuth=true")
+	}
+	if _, err := os.Stat(confPath); err != nil {
+		t.Fatalf("server.conf was not written: %v", err)
+	}
+}
+
+// TestApplyAssignNoWarningWhenAlreadyActive: a second CN assigned while
+// per-CN routing is already active is a live-only change — before==after,
+// so no restart is needed and none should be claimed.
+func TestApplyAssignNoWarningWhenAlreadyActive(t *testing.T) {
+	s, confPath := testAssignFixture(t)
+	cfg, err := upstream.Config{
+		Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}},
+		PerCN:     map[string]string{"bob": "wan1"},
+	}.Assign("alice", "wan1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning, err := ApplyAssign(s, confPath, true, true /* before: bob already active */, cfg)
+	if err != nil {
+		t.Fatalf("ApplyAssign: %v", err)
+	}
+	if warning != "" {
+		t.Fatalf("warning = %q, want none — auth was already active", warning)
+	}
+}
+
+// TestApplyAssignClearingLastOverrideFlipsOffSilently: clearing the only
+// remaining override flips ManagementClientAuth back off. No restart
+// warning either way — turning it off doesn't need one, only turning it on
+// does (see RestartWarning's own doc comment).
+func TestApplyAssignClearingLastOverrideFlipsOffSilently(t *testing.T) {
+	s, confPath := testAssignFixture(t)
+	cfg, err := upstream.Config{
+		Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}},
+		PerCN:     map[string]string{"alice": "wan1"},
+	}.Assign("alice", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning, err := ApplyAssign(s, confPath, true, true /* before: alice was the only override */, cfg)
+	if err != nil {
+		t.Fatalf("ApplyAssign: %v", err)
+	}
+	if warning != "" {
+		t.Fatalf("warning = %q, want none", warning)
+	}
+	if UpstreamAuthActive(s) {
+		t.Fatal("PerCN is now empty but UpstreamAuthActive still reports true")
+	}
+	raw, _ := s.GetSetting("vpn_config")
+	if ovpnconf.Load(raw).ManagementClientAuth {
+		t.Fatal("vpn_config was not flipped back to ManagementClientAuth=false")
+	}
+}
+
+// TestApplyAssignDisabledNeverFlips: enabled=false (upstreams turned off
+// entirely) must never touch ManagementClientAuth, even though the
+// persisted PerCN would otherwise call for it — matches
+// s.UpstreamsEnabled's REST-side gating exactly (enabled=false is what the
+// disabled case passes).
+func TestApplyAssignDisabledNeverFlips(t *testing.T) {
+	s, confPath := testAssignFixture(t)
+	cfg, err := upstream.Config{Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}}}.Assign("alice", "wan1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning, err := ApplyAssign(s, confPath, false /* enabled */, false, cfg)
+	if err != nil {
+		t.Fatalf("ApplyAssign: %v", err)
+	}
+	if warning != "" {
+		t.Fatalf("warning = %q, want none — upstreams disabled", warning)
+	}
+	if _, err := os.Stat(confPath); err == nil {
+		t.Fatal("server.conf must not be written when upstreams are disabled")
 	}
 }
 

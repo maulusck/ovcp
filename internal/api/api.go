@@ -244,7 +244,28 @@ func (s *Server) LoadConfig() ovpnconf.Config {
 	return ovpnconf.Load(raw)
 }
 
-func (s *Server) saveConfig(cfg ovpnconf.Config) error {
+// SaveConfig persists cfg to the settings store (not server.conf itself —
+// pair with cfg.WriteAtomic for that). Exported so callers outside this
+// package (e.g. cmd/ovcp's boot sequence) reuse it instead of re-marshaling.
+func (s *Server) SaveConfig(cfg ovpnconf.Config) error {
 	raw, _ := json.Marshal(cfg)
 	return s.Store.SetSetting("vpn_config", string(raw))
+}
+
+// SetManagementClientAuth rewrites vpn_config's ManagementClientAuth flag
+// and server.conf to match. vpn-config's own mutation — called by
+// whichever feature needs the toggle (today: upstream's per-CN
+// activation) instead of each caller reimplementing load/save/WriteAtomic.
+func SetManagementClientAuth(s *store.Store, confPath string, active bool) error {
+	raw, _ := s.GetSetting("vpn_config")
+	cfg := ovpnconf.Load(raw)
+	cfg.ManagementClientAuth = active
+	enc, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if err := s.SetSetting("vpn_config", string(enc)); err != nil {
+		return err
+	}
+	return cfg.WriteAtomic(confPath)
 }

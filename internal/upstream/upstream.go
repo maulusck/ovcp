@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -34,6 +35,15 @@ var (
 	ipBin  = "ip"
 	nftBin = "nft"
 )
+
+// Enabled reports whether the upstream feature can actually be used: a
+// firewall backend was found (nft today — backendPath is whatever the
+// caller detected, "" means none) and OVCP_UPSTREAMS_ENABLED hasn't
+// explicitly turned it off. Backend-agnostic on purpose: a future non-nft
+// backend only has to supply its own detected path, not a new gate.
+func Enabled(backendPath string) bool {
+	return backendPath != "" && os.Getenv("OVCP_UPSTREAMS_ENABLED") != "false"
+}
 
 // ifaceExists reports whether name is a live interface right now — a
 // package var like ipBin/nftBin, so tests can override it instead of
@@ -473,14 +483,10 @@ func reinstall(cfg Config, errs *[]error) {
 			delete(tracked, cid)
 			continue
 		}
-		handle, err := addRule(e.ip, up.Table)
-		if err != nil {
+		if err := addTracked(cid, e.cn, e.ip, up); err != nil {
 			*errs = append(*errs, fmt.Errorf("upstream: reinstall %q: %w", e.cn, err))
 			delete(tracked, cid)
-			continue
 		}
-		e.handle = handle
-		tracked[cid] = e
 	}
 }
 
@@ -515,6 +521,54 @@ type trackedRule struct {
 // separately-locked halves a concurrent Apply/Reassign could land between.
 var tracked = map[string]trackedRule{}
 
+// addTracked adds cid's nft rule for ip via up and records it. Pure add,
+// no removal of anything old — reinstall depends on this: after Apply's
+// rebuild, nft's handle counter resets, so removing a "stale" handle here
+// could delete an unrelated, freshly-added rule instead (the exact bug
+// reinstallTrackedRules was written to fix). Shared by Establish
+// (brand-new session, nothing to remove) and reinstall (rebuild already
+// wiped every old rule). Caller must hold applyMu.
+func addTracked(cid, cn, ip string, up Upstream) error {
+	handle, err := addRule(ip, up.Table)
+	if err != nil {
+		return err
+	}
+	tracked[cid] = trackedRule{ip: ip, cn: cn, handle: handle}
+	return nil
+}
+
+// installRule adds cid's new rule and replaces any previous one it had,
+// add-before-remove so a failed removal never leaves cn unrouted. Only
+// safe against a live, not-just-rebuilt table (old handles are still
+// real) — Reassign, never reinstall. Caller must hold applyMu.
+func installRule(cid, cn, ip string, up Upstream) error {
+	old, hadOld := tracked[cid]
+	if err := addTracked(cid, cn, ip, up); err != nil {
+		return err
+	}
+	if hadOld {
+		if err := removeRule(old.handle); err != nil {
+			slog.Warn("upstream: assign left an inert old rule behind", "cn", cn, "err", err)
+		}
+	}
+	return nil
+}
+
+// uninstallRule removes cid's tracked rule, if it has one; a no-op
+// otherwise. A failed removal stays tracked (caller decides whether to
+// warn or propagate) so cleanup can retry later. Caller must hold applyMu.
+func uninstallRule(cid string) error {
+	e, ok := tracked[cid]
+	if !ok {
+		return nil
+	}
+	if err := removeRule(e.handle); err != nil {
+		return err
+	}
+	delete(tracked, cid)
+	return nil
+}
+
 // Establish installs cn's nft rule for ip — the address OpenVPN's own
 // ifconfig-pool already assigned, reported via >CLIENT:ESTABLISHED. ovcp
 // never chooses a client's address, so there's no allocator here and
@@ -534,12 +588,7 @@ func Establish(cid, cn, ip string, cfg Config) error {
 	if !ok {
 		return fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
 	}
-	handle, err := addRule(ip, up.Table)
-	if err != nil {
-		return err
-	}
-	tracked[cid] = trackedRule{ip: ip, cn: cn, handle: handle}
-	return nil
+	return addTracked(cid, cn, ip, up)
 }
 
 // Disconnect removes cid's nft rule, if it had one. A failed removal stays
@@ -548,15 +597,10 @@ func Establish(cid, cn, ip string, cfg Config) error {
 func Disconnect(cid string) {
 	applyMu.Lock()
 	defer applyMu.Unlock()
-	e, ok := tracked[cid]
-	if !ok {
-		return
+	cn := tracked[cid].cn
+	if err := uninstallRule(cid); err != nil {
+		slog.Warn("upstream: remove client rule failed, will retry on next vpn restart", "cn", cn, "err", err)
 	}
-	if err := removeRule(e.handle); err != nil {
-		slog.Warn("upstream: remove client rule failed, will retry on next vpn restart", "cn", e.cn, "err", err)
-		return
-	}
-	delete(tracked, cid)
 }
 
 // Reassign updates cid's (cn's current session, from Status()) live rule
@@ -568,36 +612,15 @@ func Disconnect(cid string) {
 func Reassign(cid, cn, ip string, cfg Config) error {
 	applyMu.Lock()
 	defer applyMu.Unlock()
-	old, wasTracked := tracked[cid]
 	id, has := cfg.PerCN[cn]
 	if !has {
-		if !wasTracked {
-			return nil
-		}
-		if err := removeRule(old.handle); err != nil {
-			return err
-		}
-		delete(tracked, cid)
-		return nil
+		return uninstallRule(cid)
 	}
 	up, ok := cfg.Find(id)
 	if !ok {
 		return fmt.Errorf("upstream: assigned upstream %q no longer exists", id)
 	}
-	newHandle, err := addRule(ip, up.Table)
-	if err != nil {
-		return err
-	}
-	tracked[cid] = trackedRule{ip: ip, cn: cn, handle: newHandle}
-	if wasTracked {
-		// Add the new rule before removing the old — appended last, its
-		// mark wins regardless, so a failed old-removal never leaves cn
-		// unrouted.
-		if err := removeRule(old.handle); err != nil {
-			slog.Warn("upstream: assign left an inert old rule behind", "cn", cn, "err", err)
-		}
-	}
-	return nil
+	return installRule(cid, cn, ip, up)
 }
 
 // ClearAll clears every tracked entry and removes its nft rule — call on
@@ -609,11 +632,9 @@ func ClearAll() {
 	applyMu.Lock()
 	defer applyMu.Unlock()
 	for cid, e := range tracked {
-		if err := removeRule(e.handle); err != nil {
+		if err := uninstallRule(cid); err != nil {
 			slog.Warn("upstream: cleanup on vpn exit failed", "cn", e.cn, "err", err)
-			continue
 		}
-		delete(tracked, cid)
 	}
 }
 
