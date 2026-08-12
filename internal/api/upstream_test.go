@@ -78,11 +78,11 @@ func testAssignFixture(t *testing.T) (*store.Store, string) {
 // flag and report RestartWarning.
 func TestApplyAssignFirstActivationWarns(t *testing.T) {
 	s, confPath := testAssignFixture(t)
-	cfg, err := upstream.Config{Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}}}.Assign("alice", "wan1", false)
+	cfg, err := upstream.Config{Upstreams: []upstream.Upstream{{ID: "wan1", SOCKS: "socks5://127.0.0.1:1", Table: 100}}}.Assign("alice", "wan1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, true, false /* before */, cfg)
+	warning, err := ApplyAssign(s, confPath, true, false /* before */, cfg, "wan1")
 	if err != nil {
 		t.Fatalf("ApplyAssign: %v", err)
 	}
@@ -107,13 +107,13 @@ func TestApplyAssignFirstActivationWarns(t *testing.T) {
 func TestApplyAssignNoWarningWhenAlreadyActive(t *testing.T) {
 	s, confPath := testAssignFixture(t)
 	cfg, err := upstream.Config{
-		Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}},
+		Upstreams: []upstream.Upstream{{ID: "wan1", SOCKS: "socks5://127.0.0.1:1", Table: 100}},
 		PerCN:     map[string]string{"bob": "wan1"},
 	}.Assign("alice", "wan1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, true, true /* before: bob already active */, cfg)
+	warning, err := ApplyAssign(s, confPath, true, true /* before: bob already active */, cfg, "wan1")
 	if err != nil {
 		t.Fatalf("ApplyAssign: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestApplyAssignClearingLastOverrideFlipsOffSilently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, true, true /* before: alice was the only override */, cfg)
+	warning, err := ApplyAssign(s, confPath, true, true /* before: alice was the only override */, cfg, "" /* clearing, no target */)
 	if err != nil {
 		t.Fatalf("ApplyAssign: %v", err)
 	}
@@ -151,6 +151,35 @@ func TestApplyAssignClearingLastOverrideFlipsOffSilently(t *testing.T) {
 	}
 }
 
+// TestApplyAssignWarnsOnDownTarget: assigning a CN to an upstream whose
+// iface doesn't exist must warn, same wording applyUpstreams already uses
+// for add/del/set-default — assign is the one mutator that doesn't route
+// through applyUpstreams, so it has to compute this itself.
+func TestApplyAssignWarnsOnDownTarget(t *testing.T) {
+	s, confPath := testAssignFixture(t)
+	cfg, err := upstream.Config{
+		Upstreams: []upstream.Upstream{{ID: "wan1", SOCKS: "socks5://127.0.0.1:1", Table: 100}},
+	}.Assign("alice", "wan1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wan1 is up (SOCKS), so RestartWarning is the only signal so far —
+	// swap in a second, iface-mode upstream that's actually down and assign
+	// bob to it, PerCN already non-empty so no RestartWarning muddies this.
+	cfg.Upstreams = append(cfg.Upstreams, upstream.Upstream{ID: "wan2", Iface: "ovcp-ghost0", Table: 101})
+	cfg, err = cfg.Assign("bob", "wan2", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning, err := ApplyAssign(s, confPath, true, true /* before: wan1 already active */, cfg, "wan2")
+	if err != nil {
+		t.Fatalf("ApplyAssign: %v", err)
+	}
+	if warning != "unreachable (iface down): wan2" {
+		t.Fatalf("warning = %q, want the down-target warning", warning)
+	}
+}
+
 // TestApplyAssignDisabledNeverFlips: enabled=false (upstreams turned off
 // entirely) must never touch ManagementClientAuth, even though the
 // persisted PerCN would otherwise call for it — matches
@@ -162,12 +191,12 @@ func TestApplyAssignDisabledNeverFlips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, false /* enabled */, false, cfg)
+	warning, err := ApplyAssign(s, confPath, false /* enabled */, false, cfg, "wan1")
 	if err != nil {
 		t.Fatalf("ApplyAssign: %v", err)
 	}
 	if warning != "" {
-		t.Fatalf("warning = %q, want none — upstreams disabled", warning)
+		t.Fatalf("warning = %q, want none — upstreams disabled, even though wan1 (eth1) is down", warning)
 	}
 	if _, err := os.Stat(confPath); err == nil {
 		t.Fatal("server.conf must not be written when upstreams are disabled")

@@ -1332,7 +1332,7 @@ func cmdUpstreamAssign(afs *flag.FlagSet) func(ctx *cliContext) {
 		before := api.UpstreamAuthActive(s)
 		cfg, err := api.LoadUpstreamConfig(s).Assign(*cn, *id, *clear)
 		die(err)
-		warning, err := api.ApplyAssign(s, dataPaths(ctx.dataDir).ServerConf, true, before, cfg)
+		warning, err := api.ApplyAssign(s, dataPaths(ctx.dataDir).ServerConf, true, before, cfg, *id)
 		die(err)
 		warnUpstream(warning)
 		action := "upstream_assign"

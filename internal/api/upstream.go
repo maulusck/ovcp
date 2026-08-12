@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/ovcp/ovcp/internal/store"
 	"github.com/ovcp/ovcp/internal/upstream"
@@ -149,20 +150,29 @@ func (s *Server) saveAndApplyUpstreams(w http.ResponseWriter, u *store.User, cfg
 // disabled (upstreamsReady), always passes true. The mutation call itself
 // (Config.Assign) stays with each caller, same reason it does for
 // add/del/set-default: its error is a 400/die, distinct from this
-// function's save/persist failures.
-func ApplyAssign(s *store.Store, confPath string, enabled, before bool, cfg upstream.Config) (warning string, err error) {
+// function's save/persist failures. id is the just-assigned upstream, ""
+// when clearing — unlike add/del/set-default, assign never routes through
+// applyUpstreams, so this is the one place that warns the target is down
+// (cfg.Find("") on a clear is always a miss, so no warning fires then).
+// enabled also gates this warning, same as applyUpstreams gates its own:
+// disabled means no warnings at all, not just no auth flip.
+func ApplyAssign(s *store.Store, confPath string, enabled, before bool, cfg upstream.Config, id string) (warning string, err error) {
 	if err := SaveUpstreamConfig(s, cfg); err != nil {
 		return "", err
 	}
+	var warnings []string
 	if after := enabled && UpstreamAuthActive(s); before != after {
 		if err := SetManagementClientAuth(s, confPath, after); err != nil {
 			return "", err
 		}
 		if after {
-			warning = RestartWarning
+			warnings = append(warnings, RestartWarning)
 		}
 	}
-	return warning, nil
+	if u, ok := cfg.Find(id); enabled && ok && !u.IsUp() {
+		warnings = append(warnings, upstream.Warning([]upstream.Upstream{u}))
+	}
+	return strings.Join(warnings, "; "), nil
 }
 
 // handleUpstreamAssign sets or clears a CN's per-upstream override, rewrites
@@ -183,7 +193,7 @@ func (s *Server) handleUpstreamAssign(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	warning, err := ApplyAssign(s.Store, s.ConfigPath, s.UpstreamsEnabled, before, cfg)
+	warning, err := ApplyAssign(s.Store, s.ConfigPath, s.UpstreamsEnabled, before, cfg, in.ID)
 	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return
