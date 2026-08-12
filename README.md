@@ -1,21 +1,26 @@
 <h1 style="display:flex; align-items:center; gap:10px; margin:0">
-  <img src="web/ui/public/favicon.svg" width="34" height="34" alt="">
+  <img src="web/ui/public/favicon.svg" width="34" height="34" alt="OVCP logo">
   OVCP — OpenVPN Control Plane
 </h1>
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
 
-**OVCP runs an OpenVPN server end to end** — CA, server config, client
-issuance, the `openvpn` process itself. One static binary. No `easy-rsa`.
-No shell scripts hacked around `openssl`. No compose stack. No separate
-database. `ovcp` owns the CA, the config, the worker process — bare
-metal, systemd, container, no difference.
+**OVCP runs an OpenVPN server end to end** — its own certificate authority
+(no `easy-rsa`), server config, client cert issuance, the `openvpn`
+process itself, one static Go binary. No shell scripts hacked around
+`openssl`. No compose stack. No separate database. Self-hosted: `ovcp`
+owns the CA, the config, the worker process — bare metal, systemd,
+container, no difference.
 
-Beyond certs: internal DNS, policy-routed egress, per-client traffic
-stats, operational notifications. Same binary. All optional. Zero extra
-installs. CLI and web UI both do the full job — neither is a
-stripped-down stand-in for the other.
+Beyond PKI: internal DNS, policy-routed egress, per-client traffic stats,
+operational notifications. Same binary. All optional. Zero extra installs.
+CLI and web UI both do the full job — neither is a stripped-down stand-in
+for the other.
+
+[Features](#features) · [Requirements](#requirements) ·
+[Install](#install) · [Quick start](#quick-start) · [CLI](#cli) ·
+[Documentation](#documentation) · [License](#license)
 
 ## Features
 
