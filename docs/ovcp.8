@@ -1479,6 +1479,28 @@ tunneled in (or have local shell access). Add \fBlocal <public\-ip>\fR via
 \fB\-extra\fR too if openvpn itself should also stop listening on other
 interfaces. See \fBDEPLOYMENT\fR's container section for the equivalent
 port\-mapping form of this same split.
+.PP
+\fBBaseline routing\fR: a client reaching the internet over the box's own
+default route \(en not through \fBupstream\fR (see \fBupstream\fR in
+\fBCOMMANDS\fR) \(en needs two host\-level settings ovcp neither sets nor
+requires at install. Own them yourself:
+.RS
+.nf
+sysctl \-w net.ipv4.ip_forward=1
+iptables \-t nat \-A POSTROUTING \-o eth0 \-j MASQUERADE
+.fi
+.RE
+.B status
+and
+.B vpn start
+check both and print one
+.B warning:
+line if either looks off \(en advisory, never fatal. The NAT half is
+best\-effort: it can confirm a rule via the standard iptables
+.B nat
+table, but a host doing NAT through native nftables, firewalld, or a
+router upstream of this box reads as unverifiable, not broken \(en it
+under\-warns before it cries wolf.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

@@ -846,6 +846,7 @@ type statusOut struct {
 	CertsTotal    int                        `json:"certsTotal"`
 	CertsExpiring int                        `json:"certsExpiring"`
 	Telegram      *controller.TelegramStatus `json:"telegram,omitempty"` // nil: serve unreachable, couldn't ask
+	RoutingWarn   string                     `json:"routingWarning,omitempty"`
 }
 
 // fmtUptime renders a Go duration string ("3h2m1s"), or "" for the zero
@@ -906,6 +907,9 @@ func printStatusText(st statusOut) {
 	default:
 		fmt.Println(red("Telegram: stopped"))
 	}
+	if st.RoutingWarn != "" {
+		fmt.Println("warning:", st.RoutingWarn)
+	}
 }
 
 func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -956,6 +960,7 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 				st.Telegram = &tg
 			}
 		}
+		st.RoutingWarn = controller.RoutingPrereqsWarning()
 
 		output(st, printStatusText)
 	}
@@ -1554,6 +1559,11 @@ func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 			opDispatch("vpn config", vpnConfigOps, configOpDesc, vpnConfigBodies)(ctx, rest)
 		default:
 			runProcOp(ctx, "vpn", op, rest, "")
+			if op == "start" {
+				if w := controller.RoutingPrereqsWarning(); w != "" {
+					fmt.Fprintln(os.Stderr, "warning:", w)
+				}
+			}
 		}
 	}
 }

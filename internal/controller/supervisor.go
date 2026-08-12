@@ -51,6 +51,55 @@ func DnsmasqVersion() (version, path string, ok bool) { return binVersion("dnsma
 // NftablesVersion gates the Upstreams tab/CLI; advisory only.
 func NftablesVersion() (version, path string, ok bool) { return binVersion("nft", 1) }
 
+// ipForwardPath: package var like ipBin/nftBin in internal/upstream, so
+// tests can point it at a fixture instead of the real /proc.
+var ipForwardPath = "/proc/sys/net/ipv4/ip_forward"
+
+// ipForwardEnabled reads the live kernel setting directly — the one thing
+// that's ever authoritative for it, no sysctl binary needed.
+func ipForwardEnabled() bool {
+	b, err := os.ReadFile(ipForwardPath)
+	return err == nil && strings.TrimSpace(string(b)) == "1"
+}
+
+// natConfigured heuristically checks the standard iptables nat table for a
+// MASQUERADE/SNAT rule — the setup path most OpenVPN guides document.
+// checked=false (verdict ignored by the caller) whenever it can't be sure:
+// no iptables on PATH, or the command itself failed (e.g. no permission) —
+// an nftables-only/firewalld-only host reads the same as "can't tell", not
+// "missing", so this never contradicts a setup it simply didn't recognize.
+func natConfigured() (found, checked bool) {
+	p, err := exec.LookPath("iptables")
+	if err != nil {
+		return false, false
+	}
+	out, err := exec.Command(p, "-t", "nat", "-S", "POSTROUTING").Output()
+	if err != nil {
+		return false, false
+	}
+	up := strings.ToUpper(string(out))
+	return strings.Contains(up, "MASQUERADE") || strings.Contains(up, "SNAT"), true
+}
+
+// RoutingPrereqsWarning flags baseline host routing ovcp needs to let VPN
+// clients reach the internet via the box's own default route, but never
+// manages itself (unlike the upstream feature's own reserved nftables
+// band) — outside ovcp's scope, so this is advisory, not a precondition.
+// "" means clean, including "couldn't verify NAT" — see natConfigured.
+func RoutingPrereqsWarning() string {
+	var missing []string
+	if !ipForwardEnabled() {
+		missing = append(missing, "IPv4 forwarding is off (sysctl -w net.ipv4.ip_forward=1)")
+	}
+	if found, checked := natConfigured(); checked && !found {
+		missing = append(missing, "no outbound NAT/masquerade rule found in iptables' nat table")
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return "baseline routing: " + strings.Join(missing, "; ")
+}
+
 // Supervisor runs one worker (openvpn or dnsmasq) as a foreground child (Pdeathsig ties its life to ours, surviving the worker's own setuid drop); no SIGHUP — Restart always re-reads fresh instead.
 type Supervisor struct {
 	Name     string          // "openvpn" | "dnsmasq" — log lines and the not-found error only

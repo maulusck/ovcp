@@ -306,6 +306,97 @@ func TestDnsmasqVersionNotFound(t *testing.T) {
 	}
 }
 
+// swapIPForwardPath points ipForwardEnabled at a fixture file instead of
+// the real /proc, restoring the original on cleanup.
+func swapIPForwardPath(t *testing.T, content string) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "ip_forward")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := ipForwardPath
+	ipForwardPath = p
+	t.Cleanup(func() { ipForwardPath = prev })
+}
+
+// stubIptables puts a fake "iptables" script on PATH that echoes output for
+// `-t nat -S POSTROUTING`, so natConfigured never needs real root/netns state.
+func stubIptables(t *testing.T, output string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncat <<'EOF'\n" + output + "\nEOF\n"
+	if err := os.WriteFile(filepath.Join(dir, "iptables"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestIPForwardEnabled(t *testing.T) {
+	swapIPForwardPath(t, "1\n")
+	if !ipForwardEnabled() {
+		t.Fatal("want true for ip_forward=1")
+	}
+}
+
+func TestIPForwardDisabled(t *testing.T) {
+	swapIPForwardPath(t, "0\n")
+	if ipForwardEnabled() {
+		t.Fatal("want false for ip_forward=0")
+	}
+}
+
+func TestNatConfiguredFound(t *testing.T) {
+	stubIptables(t, "-P POSTROUTING ACCEPT\n-A POSTROUTING -o eth0 -j MASQUERADE")
+	found, checked := natConfigured()
+	if !checked || !found {
+		t.Fatalf("found=%v checked=%v, want true true", found, checked)
+	}
+}
+
+func TestNatConfiguredNotFound(t *testing.T) {
+	stubIptables(t, "-P POSTROUTING ACCEPT")
+	found, checked := natConfigured()
+	if !checked || found {
+		t.Fatalf("found=%v checked=%v, want false true", found, checked)
+	}
+}
+
+func TestNatConfiguredNoIptablesOnPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, checked := natConfigured(); checked {
+		t.Fatal("want checked=false with no iptables on PATH")
+	}
+}
+
+func TestRoutingPrereqsWarningClean(t *testing.T) {
+	swapIPForwardPath(t, "1\n")
+	stubIptables(t, "-A POSTROUTING -o eth0 -j MASQUERADE")
+	if w := RoutingPrereqsWarning(); w != "" {
+		t.Fatalf("warning = %q, want none", w)
+	}
+}
+
+func TestRoutingPrereqsWarningBothMissing(t *testing.T) {
+	swapIPForwardPath(t, "0\n")
+	stubIptables(t, "-P POSTROUTING ACCEPT")
+	w := RoutingPrereqsWarning()
+	if !strings.Contains(w, "IPv4 forwarding is off") || !strings.Contains(w, "no outbound NAT") {
+		t.Fatalf("warning = %q, want both forwarding and NAT flagged", w)
+	}
+}
+
+// TestRoutingPrereqsWarningNatUnchecked: no iptables on PATH must never
+// claim NAT is missing — only that forwarding is off, the one thing it
+// could actually verify.
+func TestRoutingPrereqsWarningNatUnchecked(t *testing.T) {
+	swapIPForwardPath(t, "0\n")
+	t.Setenv("PATH", t.TempDir())
+	w := RoutingPrereqsWarning()
+	if !strings.Contains(w, "IPv4 forwarding is off") || strings.Contains(w, "NAT") {
+		t.Fatalf("warning = %q, want forwarding flagged, NAT left unmentioned", w)
+	}
+}
+
 // TestLogLines: every line gets ovcp's own RFC3339 prefix, including an
 // unterminated final line — neither worker can be trusted to timestamp its
 // own output (dnsmasq's stderr mode doesn't; openvpn's own format doesn't

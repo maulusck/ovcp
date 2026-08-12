@@ -127,13 +127,23 @@ subnet can never drift from what the running process actually has;
 `vpn stop`/`reconnect` deliberately do not, since neither changes what
 OpenVPN considers its subnet to be.
 
+`RoutingPrereqsWarning` (`internal/controller`) checks two host settings
+ovcp never manages: IPv4 forwarding, and an outbound NAT/masquerade rule
+for the default route. Both are needed for a plain client (no `upstream`
+override) to reach the internet at all — orthogonal to `internal/upstream`'s
+own reserved nftables band, which only covers overridden egress. `status`/
+`vpn start` surface a miss as one advisory `warning:` line. The NAT half is
+a heuristic — it greps iptables' `nat` table specifically — so a host
+routing NAT through native nftables, firewalld, or a router upstream of
+this box reads as unverifiable, not broken: it under-warns before it cries
+wolf.
+
 ## Privilege model
 
 `ovcp` runs as a single root-owned process; the admin UI, the REST API, and
 PKI operations all execute in the same process and the same privilege
 level. Splitting this — a root supervisor plus a non-root HTTP worker
-talking over IPC — is unresolved: no design pass has been done, and it
-sits on the TODO list.
+talking over IPC — is unresolved: no design pass has been done yet.
 
 Current leaning against it: reaching the admin UI at all already requires
 defeating the VPN's own authentication, CSRF protection, RBAC, and
