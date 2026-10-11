@@ -150,6 +150,10 @@ func main() {
 	flag.Usage = func() { fmt.Fprintln(os.Stderr, helpText()) }
 	dataDir, noColorFlag, jsonOutFlag, debugFlag := globalFlags(flag.CommandLine)
 	flag.Parse()
+	// dnsmasq chdir()s before reading --hostsdir: paths handed on must be absolute.
+	if abs, err := filepath.Abs(*dataDir); err == nil {
+		*dataDir = abs
+	}
 	noColor = noColor || *noColorFlag
 	jsonOut = jsonOut || *jsonOutFlag
 	if *debugFlag {
