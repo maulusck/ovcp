@@ -360,9 +360,10 @@ machine. Client private keys
 were never stored here to begin with (no escrow); nothing to back up there
 either.
 .TP
-.B backup restore [\fB\-force\fR] \fIFILE\fR
-Decrypt and extract a backup into \fB\-data\fR (must be an uninitialized
-directory, or pass \fB\-force\fR to overwrite one). \fICLI\-only\fR: restoring is an offline
+.B backup restore [\fB\-force\fR] < \fIARCHIVE\fR
+Decrypt and extract the archive read from stdin into \fB\-data\fR (must be
+an uninitialized directory, or pass \fB\-force\fR to overwrite one):
+\fBovcp backup restore < ovcp.bak\fR. Refuses a terminal stdin. \fICLI\-only\fR: restoring is an offline
 disaster\-recovery operation on a data directory, not exposed over HTTP. Follow with \fBcertificate renew\fR (the archive has
 no server cert) and \fBovcp vpn start\fR.
 .TP
@@ -776,8 +777,10 @@ clean, scriptable round trip:
 OVCP_JSON=1 OVCP_CA_PASSPHRASE=\(dq...\(dq ovcp certificate issue \-cn alice
 .fi
 .RE
-No env var and no terminal (stdin not a tty) fails fast with a JSON
-\fB{"error": "..."}\fR instead of hanging on a prompt nobody can answer.
+Prompts are read from the controlling terminal, never stdin, so stdin and
+stdout stay free for data (\fBbackup create\fR/\fBrestore\fR). No env var and
+no controlling terminal fails fast with \fB{"error": "..."}\fR instead of
+hanging on a prompt nobody can answer.
 Per\-command JSON shapes:
 .TP
 .B init

@@ -197,7 +197,7 @@ var (
 	}
 	backupOps    = []string{"create", "restore"}
 	backupOpDesc = map[string]string{
-		"create": "encrypted archive of CA, config, database", "restore": "extract an archive into -data",
+		"create": "encrypted archive of CA, config, database, to stdout", "restore": "extract the archive on stdin into -data",
 	}
 	debugOps       = []string{"on", "off"}
 	debugOpDesc    = map[string]string{"on": "verbose logging, no restart", "off": "back to normal logging"}
@@ -1898,15 +1898,11 @@ func cmdBackupCreate(_ *flag.FlagSet) func(ctx *cliContext) {
 func cmdBackupRestore(rfs *flag.FlagSet) func(ctx *cliContext) {
 	force := rfs.Bool("force", false, "overwrite an already-initialized data directory")
 	return func(ctx *cliContext) {
-		file := rfs.Arg(0)
-		if file == "" {
-			die(fmt.Errorf("usage: ovcp backup restore [-force] FILE"))
+		if rfs.NArg() > 0 || term.IsTerminal(int(os.Stdin.Fd())) {
+			die(fmt.Errorf("usage: ovcp backup restore [-force] < ARCHIVE"))
 		}
 		pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", false)
-		f, err := os.Open(file)
-		die(err)
-		defer f.Close()
-		die(backup.Restore(ctx.dataDir, f, pass, *force))
+		die(backup.Restore(ctx.dataDir, os.Stdin, pass, *force))
 		output(msg("restored CA, CRL, tls-crypt key, config, and database into %s; "+
 			"next: OVCP_SERVER_CN=<host> ovcp certificate renew, then ovcp vpn start", ctx.dataDir),
 			func(o outcome) {
@@ -2278,10 +2274,16 @@ func cmdCompletion(fs *flag.FlagSet) func(ctx *cliContext) {
 func readSecret(label, env string, confirm bool) []byte {
 	v := []byte(os.Getenv(env))
 	if len(v) == 0 {
+		// the controlling terminal, not stdin: stdin and stdout stay free for data
 		prompt := func(p string) []byte {
-			fmt.Fprint(os.Stderr, p+": ")
-			b, err := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(os.Stderr)
+			tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+			if err != nil {
+				die(fmt.Errorf("%s: no terminal to prompt on; set %s", label, env))
+			}
+			defer tty.Close()
+			fmt.Fprint(tty, p+": ")
+			b, err := term.ReadPassword(int(tty.Fd()))
+			fmt.Fprintln(tty)
 			die(err)
 			return b
 		}

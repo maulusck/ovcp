@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -49,8 +50,17 @@ type result struct {
 
 func run(t *testing.T, env []string, args ...string) result {
 	t.Helper()
+	return runIn(t, env, nil, args...)
+}
+
+// runIn is run with stdin. Every invocation gets its own session, so the
+// binary never has a controlling terminal to prompt on.
+func runIn(t *testing.T, env []string, stdin []byte, args ...string) result {
+	t.Helper()
 	cmd := exec.Command(binPath, args...)
 	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdin = bytes.NewReader(stdin)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -980,12 +990,13 @@ func TestBackupRestore(t *testing.T) {
 
 	dstDir := t.TempDir()
 	wrongPass := []string{"OVCP_DATA=" + dstDir, "OVCP_BACKUP_PASSPHRASE=wrong"}
-	if r := run(t, wrongPass, "backup", "restore", backupFile); r.code == 0 {
+	archive, _ := os.ReadFile(backupFile)
+	if r := runIn(t, wrongPass, archive, "backup", "restore"); r.code == 0 {
 		t.Fatalf("restore with wrong passphrase should fail: %+v", r)
 	}
 
 	restore := []string{"OVCP_DATA=" + dstDir, "OVCP_BACKUP_PASSPHRASE=backup-pass-123"}
-	if r := run(t, restore, "backup", "restore", backupFile); r.code != 0 {
+	if r := runIn(t, restore, archive, "backup", "restore"); r.code != 0 {
 		t.Fatalf("backup restore: %+v", r)
 	}
 	if _, err := os.Stat(filepath.Join(dstDir, "pki", "server.crt")); err == nil {
@@ -1001,16 +1012,16 @@ func TestBackupRestore(t *testing.T) {
 		t.Fatalf("restored db should still have alice: %+v", r)
 	}
 
-	// dstDir is now initialized: restore must refuse without -force, and
-	// -force only works before the positional FILE arg (flag.Parse stops at the first non-flag arg).
-	if r := run(t, restore, "backup", "restore", backupFile); r.code == 0 {
+	// dstDir is now initialized: restore must refuse without -force; the
+	// archive comes only from stdin, so a stray argument is refused too.
+	if r := runIn(t, restore, archive, "backup", "restore"); r.code == 0 {
 		t.Fatalf("restore over an initialized dir without -force should fail: %+v", r)
 	}
-	if r := run(t, restore, "backup", "restore", backupFile, "-force"); r.code == 0 {
-		t.Fatalf("-force after FILE is silently ignored by flag.Parse; this must still fail: %+v", r)
+	if r := runIn(t, restore, archive, "backup", "restore", "-force", backupFile); r.code == 0 {
+		t.Fatalf("a file argument must be refused (stdin only): %+v", r)
 	}
-	if r := run(t, restore, "backup", "restore", "-force", backupFile); r.code != 0 {
-		t.Fatalf("-force before FILE should overwrite: %+v", r)
+	if r := runIn(t, restore, archive, "backup", "restore", "-force"); r.code != 0 {
+		t.Fatalf("-force should overwrite: %+v", r)
 	}
 }
 
@@ -1609,5 +1620,30 @@ func TestBackupCreateRefusesTerminal(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "refusing to write the archive to a terminal") {
 		t.Fatalf("want refusal on a terminal, got err=%v\n%s", err, out)
+	}
+}
+
+// TestRestorePromptsOnTTY: the archive arrives on stdin while the passphrase
+// is typed on the controlling terminal, never read from stdin.
+func TestRestorePromptsOnTTY(t *testing.T) {
+	if _, err := exec.LookPath("script"); err != nil {
+		t.Skip("script(1) unavailable for a pty")
+	}
+	src := baseEnv(t)
+	if r := run(t, src, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	r := run(t, withEnv(src, "OVCP_BACKUP_PASSPHRASE=backup-pass-123"), "backup", "create")
+	archive := filepath.Join(t.TempDir(), "a.ovcpbak")
+	if r.code != 0 || os.WriteFile(archive, []byte(r.stdout), 0o600) != nil {
+		t.Fatalf("backup create: %+v", r)
+	}
+	dst := t.TempDir()
+	cmd := exec.Command("script", "-qec", binPath+" backup restore < "+archive, "/dev/null")
+	cmd.Env = append(os.Environ(), "OVCP_DATA="+dst)
+	cmd.Stdin = strings.NewReader("backup-pass-123\n")
+	out, err := cmd.CombinedOutput()
+	if _, statErr := os.Stat(filepath.Join(dst, "pki", "ca.crt")); err != nil || statErr != nil {
+		t.Fatalf("restore with the passphrase typed on the terminal failed: %v\n%s", err, out)
 	}
 }
