@@ -136,6 +136,10 @@ func TestDomainSearchPush(t *testing.T) {
 	if strings.Contains(out, "DOMAIN") {
 		t.Fatalf("bare shortname CN must not push DOMAIN/DOMAIN-SEARCH\n%s", out)
 	}
+	c.ServerCN = "10.254.254.2"
+	if out = string(c.Render()); strings.Contains(out, "DOMAIN") {
+		t.Fatalf("an IP-address CN has no domain to push\n%s", out)
+	}
 
 	// PushInternalDNS off: pushing the domain would leak internal hostnames
 	// to a resolver clients were never told to use for DNS.

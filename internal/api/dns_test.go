@@ -86,6 +86,15 @@ func TestCertsHostsContentBareShortname(t *testing.T) {
 	}
 }
 
+func TestCertsHostsContentIPServerCN(t *testing.T) {
+	live := []controller.VPNClient{{CN: "vm3", VirtualAddress: "10.8.0.3"}}
+	certs := []store.Cert{{CN: "vm3", Kind: "client", IncludeDNS: true}}
+	out := string(CertsHostsContent(certs, live, "10.254.254.2", net.ParseIP("10.8.0.1")))
+	if want := "10.8.0.3 vm3\n"; strings.Count(out, "\n") != 2 || !strings.HasSuffix(out, want) {
+		t.Fatalf("an IP-address server CN adds no server line and no domain\n%s", out)
+	}
+}
+
 func TestCertsHostsContentNoServer(t *testing.T) {
 	out := string(CertsHostsContent(nil, nil, "", nil))
 	if strings.Contains(out, "\n10.8.0.1") || strings.Count(out, "\n") != 1 {

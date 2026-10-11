@@ -294,7 +294,11 @@ dnsmasq resolver \(en its VPN\-side tun IP, e.g. \fI10.8.0.1\fR \(en to
 clients first, ahead of anything in \fB\-dns\fR. That ordering is what lets
 internal cert\-hostnames (see \fBrecord\fR below, \fIcerts.hosts\fR /
 \fIcustom.hosts\fR) resolve at all: without it, a client only ever asks
-whatever DNS it already had, and never learns those names exist. It
+whatever DNS it already had, and never learns those names exist. When the
+server CN is a hostname (\fIvpn.example.com\fR), its parent domain
+(\fIexample.com\fR) is pushed as the search domain and also names each
+client in \fIcerts.hosts\fR (\fIalice.example.com\fR); an IP\-address CN
+adds neither. It
 interacts directly with \fBdns config set \-block\-internet\fR below: that
 setting makes dnsmasq itself refuse to forward upstream, but it's no
 protection at all for a client that was never told to use dnsmasq as its

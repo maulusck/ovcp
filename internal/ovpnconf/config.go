@@ -220,12 +220,9 @@ func (c *Config) Render() []byte {
 	// Gated on PushInternalDNS: without it a client's search suffix would still
 	// gain our domain, leaking internal hostnames to its own resolver. Both
 	// DOMAIN+DOMAIN-SEARCH pushed: no single option covers every client.
-	if c.PushInternalDNS {
-		if i := strings.Index(c.ServerCN, "."); i >= 0 {
-			domain := c.ServerCN[i+1:]
-			w(`push "dhcp-option DOMAIN %s"`, domain)
-			w(`push "dhcp-option DOMAIN-SEARCH %s"`, domain)
-		}
+	if domain := Domain(c.ServerCN); c.PushInternalDNS && domain != "" {
+		w(`push "dhcp-option DOMAIN %s"`, domain)
+		w(`push "dhcp-option DOMAIN-SEARCH %s"`, domain)
 	}
 	for _, r := range c.Routes {
 		rip, rnet, _ := net.ParseCIDR(r)
@@ -239,6 +236,16 @@ func (c *Config) Render() []byte {
 		w("%s", extra)
 	}
 	return []byte(b.String())
+}
+
+// Domain returns a hostname CN's parent domain ("vpn.example.com" →
+// "example.com"); a single label or an IP address has none.
+func Domain(cn string) string {
+	if net.ParseIP(cn) != nil {
+		return ""
+	}
+	_, domain, _ := strings.Cut(cn, ".")
+	return domain
 }
 
 // Diff compares two rendered configs, returning changed lines ("-" old-only,
