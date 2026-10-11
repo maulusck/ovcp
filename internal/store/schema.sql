@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS certs (
   revoked_at  INTEGER,                   -- NULL = valid
   include_dns INTEGER NOT NULL DEFAULT 1 -- Records tab: CN gets a certs.hosts line while connected
 );
+-- at most one active client cert per CN, and one active server cert (any CN)
+CREATE UNIQUE INDEX IF NOT EXISTS certs_one_active_client ON certs(cn) WHERE kind = 'client' AND revoked_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS certs_one_active_server ON certs(kind) WHERE kind = 'server' AND revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS users (
   id         INTEGER PRIMARY KEY,

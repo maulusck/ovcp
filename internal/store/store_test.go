@@ -107,6 +107,15 @@ func TestAddCertDuplicateCN(t *testing.T) {
 	if err := s.AddCert(client("s3")); err != nil {
 		t.Fatalf("reissue after revoke should succeed: %v", err)
 	}
+	srv := func(serial, cn string) Cert {
+		return Cert{Serial: serial, CN: cn, Kind: "server", CertPEM: []byte("PEM"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}
+	}
+	if err := s.AddCert(srv("v1", "a.example")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddCert(srv("v2", "b.example")); !errors.Is(err, ErrDuplicateCN) {
+		t.Fatalf("a second active server cert, any CN, must be refused: %v", err)
+	}
 }
 
 func TestReplaceCert(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 
 	"github.com/ovcp/ovcp/internal/pki"
 )
@@ -168,53 +168,26 @@ func (s *Store) BackupTo(path string) error {
 // --- certs ---
 
 // ErrDuplicateCN: one active (non-revoked) cert per CN+kind — client or
-// server. Renewal (ReplaceCert) revokes the outgoing one first; the exact
-// recovery instruction differs per caller, so callers wrap this themselves.
+// server — enforced by schema.sql's unique indexes. Renewal (ReplaceCert)
+// revokes the outgoing one first; callers wrap this with their own recovery hint.
 var ErrDuplicateCN = errors.New("an active cert already exists for this CN")
 
-// activeCertSerial returns the non-revoked cert's serial for cn+kind, or ""
-// if there isn't one.
-func (s *Store) activeCertSerial(cn, kind string) (string, error) {
-	var serial string
-	err := s.db.QueryRow(
-		`SELECT serial FROM certs WHERE cn = ? AND kind = ? AND revoked_at IS NULL LIMIT 1`, cn, kind).Scan(&serial)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return serial, err
-}
+// activeCert selects the active cert a (kind, cn) pair names: clients are
+// keyed by CN, the server by kind alone (there is only ever one, so a new
+// CN renames it). Args: kind, cn. Mirrors schema.sql's unique indexes.
+const activeCert = `kind = ? AND (kind = 'server' OR cn = ?) AND revoked_at IS NULL`
 
-// activeServerCertSerial returns the active server cert's serial, regardless
-// of CN — unlike client certs, a server isn't CN-keyed: there's only ever
-// one, so renewing it and renaming it (a new -cn) are the same lookup.
-func (s *Store) activeServerCertSerial() (string, error) {
-	var serial string
-	err := s.db.QueryRow(
-		`SELECT serial FROM certs WHERE kind = 'server' AND revoked_at IS NULL LIMIT 1`).Scan(&serial)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return serial, err
-}
-
-// ErrNoActiveCert: renewal needs something active to replace — client certs
-// are keyed by (CN, kind) so a renew must target the exact one that already
-// exists; the server cert has no such ambiguity (there's only ever one).
+// ErrNoActiveCert: renewal needs something active to replace.
 var ErrNoActiveCert = errors.New("no active cert found for this cn+kind")
 
 // RequireActiveCert is ReplaceCert's precondition — fail fast before signing
-// anything, instead of ReplaceCert falling back to a plain issue. cn is
-// ignored for kind "server" (see activeServerCertSerial).
+// anything, instead of ReplaceCert falling back to a plain issue.
 func (s *Store) RequireActiveCert(cn, kind string) error {
-	lookup := func() (string, error) { return s.activeCertSerial(cn, kind) }
-	if kind == "server" {
-		lookup = s.activeServerCertSerial
-	}
-	serial, err := lookup()
-	if err != nil {
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM certs WHERE `+activeCert, kind, cn).Scan(&n); err != nil {
 		return err
 	}
-	if serial == "" {
+	if n == 0 {
 		return fmt.Errorf("store: %s (%s): %w", cn, kind, ErrNoActiveCert)
 	}
 	return nil
@@ -228,18 +201,25 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// AddCert is the one funnel every issue path uses, so the active-CN check lives here, once.
-// ponytail: check-then-insert race needs two concurrent issues of the same new CN — not this tool's load.
-func (s *Store) AddCert(c Cert) error {
-	if prev, err := s.activeCertSerial(c.CN, c.Kind); err != nil {
-		return err
-	} else if prev != "" {
-		return fmt.Errorf("store: %s: %w", c.CN, ErrDuplicateCN)
+const insertCert = `INSERT INTO certs(serial, cn, kind, cert_pem, issued_at, not_after, include_dns) VALUES (?,?,?,?,?,?,?)`
+
+func certArgs(c Cert) []any {
+	return []any{c.Serial, c.CN, c.Kind, c.CertPEM, c.IssuedAt.Unix(), c.NotAfter.Unix(), boolInt(c.IncludeDNS)}
+}
+
+// dupCN reports a violation of schema.sql's one-active-cert indexes as ErrDuplicateCN.
+func dupCN(cn string, err error) error {
+	var se sqlite3.Error
+	if errors.As(err, &se) && se.ExtendedCode == sqlite3.ErrConstraintUnique {
+		return fmt.Errorf("store: %s: %w", cn, ErrDuplicateCN)
 	}
-	_, err := s.db.Exec(
-		`INSERT INTO certs(serial, cn, kind, cert_pem, issued_at, not_after, include_dns) VALUES (?,?,?,?,?,?,?)`,
-		c.Serial, c.CN, c.Kind, c.CertPEM, c.IssuedAt.Unix(), c.NotAfter.Unix(), boolInt(c.IncludeDNS))
 	return err
+}
+
+// AddCert is the one funnel every issue path uses.
+func (s *Store) AddCert(c Cert) error {
+	_, err := s.db.Exec(insertCert, certArgs(c)...)
+	return dupCN(c.CN, err)
 }
 
 // SetCertDNS toggles whether serial's CN gets a certs.hosts line, mirroring
@@ -249,24 +229,21 @@ func (s *Store) SetCertDNS(serial string, include bool) error {
 	return s.mustAffect(res, err, "store: no such cert")
 }
 
-// ReplaceCert retires the outgoing active cert, if any, then adds c — one
-// call for client or server renewal. Client match is CN+kind; server match
-// is kind alone (see activeServerCertSerial), so a differing c.CN there renames.
+// ReplaceCert retires the outgoing active cert, if any, and adds c in one
+// transaction — for client or server renewal (see activeCert).
 func (s *Store) ReplaceCert(c Cert) error {
-	lookup := func() (string, error) { return s.activeCertSerial(c.CN, c.Kind) }
-	if c.Kind == "server" {
-		lookup = s.activeServerCertSerial
-	}
-	prev, err := lookup()
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	if prev != "" {
-		if err := s.Revoke(prev, time.Now()); err != nil {
-			return err
-		}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE certs SET revoked_at = ? WHERE `+activeCert, time.Now().Unix(), c.Kind, c.CN); err != nil {
+		return err
 	}
-	return s.AddCert(c)
+	if _, err := tx.Exec(insertCert, certArgs(c)...); err != nil {
+		return dupCN(c.CN, err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetCert(serial string) (*Cert, error) {
