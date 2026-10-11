@@ -273,7 +273,9 @@ of whatever is currently persisted (or the built\-in/env\-seeded defaults,
 see \fBinit\fR and \fBOVCP_OPENVPN_PROTO\fR and friends below, if nothing
 has been saved yet). \fB\-dns\fR and \fB\-routes\fR take a comma\-separated
 list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
-appending to it. \\fB\\-extra\\fR takes the same three forms as\n\\fBcertificate issue \\-export\\fR's \\fB\\-custom\\-opts\\fR; a bare \\fB\\-\\fR\nopens the current directives. \fB\-redirect\-gw\fR and
+appending to it. \fB\-extra\fR takes the same three forms as
+\fBcertificate issue \-export\fR's \fB\-custom\-opts\fR; a bare \fB\-\fR
+opens the current directives. \fB\-redirect\-gw\fR and
 \fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
 or \fB1\fR/\fB0\fR, case\-insensitive \(en the same boolean vocabulary as
 \fBdns config set \-block\-internet\fR below. Rejects an invalid combination
@@ -324,7 +326,7 @@ saved until the same flags are run through \fBvpn config set\fR instead \(en
 Re\-encrypt the CA private key under a new passphrase (prompts for the
 current one, then the new one twice). The CA keypair and certificate are
 unchanged \(en issued certificates stay valid, nothing needs reissuing.
-\\fICLI\\-only\\fR, so the new passphrase never crosses HTTP.
+\fICLI\-only\fR, so the new passphrase never crosses HTTP.
 .TP
 .B ca renew [\fB\-years\fR \fIN\fR]
 Reissue the CA certificate itself in place: a fresh serial and extended
@@ -333,7 +335,9 @@ from \fBca rotate\fR (passphrase only) \(en this is what to run if the CA
 certificate's own expiry, not its passphrase, is the problem. Every
 already\-issued client/server cert stays valid: verification only checks
 the CA's signing key, never which CA certificate happens to be on disk, so
-nothing needs reissuing. \\fICLI\\-only\\fR, like \\fBca rotate\\fR: a mistake or a hijacked admin session\non the CA affects every certificate, so CA operations require shell access.\nThe web UI shows the CA status (Dashboard) only.
+nothing needs reissuing. \fICLI\-only\fR, like \fBca rotate\fR: a mistake or a hijacked admin session
+on the CA affects every certificate, so CA operations require shell access.
+The web UI shows the CA status (Dashboard) only.
 Takes effect on the next
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload the CA certificate either.
@@ -358,7 +362,8 @@ either.
 .TP
 .B backup restore [\fB\-force\fR] \fIFILE\fR
 Decrypt and extract a backup into \fB\-data\fR (must be an uninitialized
-directory, or pass \fB\-force\fR to overwrite one). \\fICLI\\-only\\fR: restoring is an offline\ndisaster\\-recovery operation on a data directory, not exposed over HTTP. Follow with \fBcertificate renew\fR (the archive has
+directory, or pass \fB\-force\fR to overwrite one). \fICLI\-only\fR: restoring is an offline
+disaster\-recovery operation on a data directory, not exposed over HTTP. Follow with \fBcertificate renew\fR (the archive has
 no server cert) and \fBovcp vpn start\fR.
 .TP
 .B status [\fB\-ctrl\fR \fIPATH\fR]
@@ -463,7 +468,8 @@ on) only until the first save \(en see \fBvpn config set\fR above for the
 same seed\-once\-then\-persisted pattern.
 .B dns config get
 prints the current value; \fB\-block\-internet\fR on \fBdns config set\fR
-takes the same boolean values as \\fBvpn config set \\-redirect\\-gw\\fR;\nomitting it makes \fBset\fR a no\-op. See
+takes the same boolean values as \fBvpn config set \-redirect\-gw\fR;
+omitting it makes \fBset\fR a no\-op. See
 \fBPush internal DNS\fR under \fBvpn config set\fR above for how this
 interacts with that setting:
 turning this on without also pushing the internal resolver, or combining
@@ -482,7 +488,7 @@ prints every certificate (not just currently-connected ones) with its DNS
 include/exclude status, same filters/sort/coloring as \fBcertificate
 list\fR, plus \fIcustom.hosts\fR' raw content.
 .B edit
-opens the custom entries in \\fB$EDITOR\\fR (see \\fB\\-custom\\-opts\\fR).
+opens the custom entries in \fB$EDITOR\fR (see \fB\-custom\-opts\fR).
 .B include
 and
 .B exclude
