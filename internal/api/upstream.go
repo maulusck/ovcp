@@ -60,7 +60,7 @@ func (s *Server) applyUpstreams(cfg upstream.Config) string {
 	if !s.UpstreamsEnabled {
 		return ""
 	}
-	if err := upstream.Apply(cfg, s.LoadConfig().Subnet); err != nil {
+	if err := upstream.Apply(cfg); err != nil {
 		slog.Warn("upstream apply", "err", err)
 	} else {
 		slog.Debug("upstream: applied", "upstreams", len(cfg.Upstreams), "default", cfg.Default)

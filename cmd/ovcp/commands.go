@@ -1084,10 +1084,9 @@ func upstreamsReady() {
 // applyUpstreamsCLI relays through a running serve at sock (preserves its
 // live tracker); direct-applies as a fallback when serve isn't running.
 // Never fails — caller prints the returned warning.
-func applyUpstreamsCLI(s *store.Store, cfg upstream.Config, sock string) string {
+func applyUpstreamsCLI(cfg upstream.Config, sock string) string {
 	if err := controller.UpstreamReapply(sock); err != nil {
-		raw, _ := s.GetSetting("vpn_config")
-		upstream.Apply(cfg, ovpnconf.Load(raw).Subnet) // best-effort; warning below covers the result either way
+		upstream.Apply(cfg) // best-effort; warning below covers the result either way
 	}
 	return upstream.Warning(cfg.Upstreams)
 }
@@ -1104,7 +1103,7 @@ func warnUpstream(w string) {
 // printed here), audit — the one tail all three share.
 func saveAndApplyUpstreamsCLI(s *store.Store, cfg upstream.Config, action, detail string) {
 	die(api.SaveUpstreamConfig(s, cfg))
-	warnUpstream(applyUpstreamsCLI(s, cfg, ctrlSock()))
+	warnUpstream(applyUpstreamsCLI(cfg, ctrlSock()))
 	s.Audit("cli", action, detail)
 }
 
@@ -1340,7 +1339,7 @@ func cmdUpstreamReconcile(rfs *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		cfg := api.LoadUpstreamConfig(s)
-		warnUpstream(applyUpstreamsCLI(s, cfg, *ctrl))
+		warnUpstream(applyUpstreamsCLI(cfg, *ctrl))
 		s.Audit("cli", "upstream_reconcile", "")
 		output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
 			inUse := make(map[string]bool, len(r.PerCN)+1)

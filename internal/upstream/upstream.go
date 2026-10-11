@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/ovcp/ovcp/internal/ovpnconf"
 )
 
 // Reserved band ovcp exclusively owns — never touches a rule/table outside
@@ -373,19 +375,19 @@ func routeArgs(u Upstream) [][]string {
 	}
 }
 
-// nftRuleset: prerouting marks vpnSubnet even for a down upstream (the
-// kill-switch needs the mark); postrouting masquerades each upstream out
-// its Iface, skipping a down one (nft rejects one bad oif for the whole ruleset).
-func nftRuleset(cfg Config, vpnSubnet string) []byte {
+// nftRuleset: VPN traffic is whatever arrives on the tunnel interface,
+// never a source address another host could forge. Prerouting marks it even
+// for a down upstream (the kill-switch needs the mark); postrouting
+// masquerades each upstream out its Iface, skipping a down one (nft rejects
+// one bad oif for the whole ruleset).
+func nftRuleset(cfg Config) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {\n", nftTable)
 	// Chain names match their own hook (idiomatic nft), ovcp-prefixed like the
 	// table itself — "mark" alone is an nft keyword and fails as a bare name.
 	fmt.Fprintf(&b, "\tchain %s {\n\t\ttype filter hook prerouting priority mangle; policy accept;\n", preroutingChain)
-	if vpnSubnet != "" {
-		if u, ok := cfg.Find(cfg.Resolve("")); ok {
-			fmt.Fprintf(&b, "\t\tip saddr %s meta mark set %d\n", vpnSubnet, u.Table)
-		}
+	if u, ok := cfg.Find(cfg.Resolve("")); ok {
+		fmt.Fprintf(&b, "\t\tiifname %q meta mark set %d\n", ovpnconf.TunDev, u.Table)
 	}
 	// SOCKS-mode marks never reach postrouting/masquerade: redirect rewrites
 	// the destination in prerouting, dstnat priority runs right after this
@@ -408,9 +410,7 @@ func nftRuleset(cfg Config, vpnSubnet string) []byte {
 	// set above) still needs NAT to leave via the host's own default route
 	// — ovcp's own table, not a hand-maintained one, so it survives an
 	// `nft flush ruleset` + `ovcp serve` restart like everything else here.
-	if vpnSubnet != "" {
-		fmt.Fprintf(&b, "\t\tip saddr %s meta mark 0 masquerade\n", vpnSubnet)
-	}
+	fmt.Fprintf(&b, "\t\tiifname %q meta mark 0 masquerade\n", ovpnconf.TunDev)
 	b.WriteString("\t}\n}\n")
 	return []byte(b.String())
 }
@@ -426,16 +426,13 @@ func run(bin string, args ...string) error {
 // Apply tears down and rebuilds ovcp's reserved band fresh from cfg. One
 // upstream's route failure never skips its own kill-switch fallback or the
 // nft mark table below — skipping either would fail open, not closed.
-func Apply(cfg Config, vpnSubnet string) error {
+func Apply(cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
 	applyMu.Lock()
 	defer applyMu.Unlock()
-	for _, args := range teardownArgs() {
-		run(ipBin, args...) // best-effort, see doc comment
-	}
-	run(nftBin, "delete", "table", "inet", nftTable) // best-effort: may not exist yet
+	clearBand()
 
 	var errs []error
 	for _, u := range cfg.Upstreams {
@@ -452,7 +449,7 @@ func Apply(cfg Config, vpnSubnet string) error {
 		errs = append(errs, err)
 	}
 
-	ruleset := nftRuleset(cfg, vpnSubnet)
+	ruleset := nftRuleset(cfg)
 	if err := runNFTStdin([]string{"-c", "-f", "-"}, ruleset); err != nil {
 		return errors.Join(append(errs, fmt.Errorf("upstream: nft ruleset check: %w", err))...)
 	}
@@ -501,9 +498,22 @@ func runNFTStdin(args []string, ruleset []byte) error {
 	return nil
 }
 
-// Teardown clears ovcp's whole band — same path Apply(Config{}, "") takes,
-// since an empty Config has nothing to rebuild after.
-func Teardown() error { return Apply(Config{}, "") }
+// clearBand removes ovcp's routes, rules and nft table, best-effort (any of
+// them may not exist). Caller must hold applyMu.
+func clearBand() {
+	for _, args := range teardownArgs() {
+		run(ipBin, args...)
+	}
+	run(nftBin, "delete", "table", "inet", nftTable)
+}
+
+// Teardown removes ovcp's whole band and stops every SOCKS relay.
+func Teardown() error {
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	clearBand()
+	return syncSOCKSRelays(Config{})
+}
 
 // trackedRule is one connected, per-CN-overridden client's nft rule. Keyed
 // by CID, not CN — a fast reconnect can't have its handle clobbered by a
@@ -645,7 +655,7 @@ func addRule(ip string, table int) (handle int, err error) {
 		return 0, fmt.Errorf("upstream: bad client ip %q", ip)
 	}
 	out, err := exec.Command(nftBin, "-a", "-e", "add", "rule", "inet", nftTable, preroutingChain,
-		"ip", "saddr", ip, "meta", "mark", "set", strconv.Itoa(table)).CombinedOutput()
+		"iifname", ovpnconf.TunDev, "ip", "saddr", ip, "meta", "mark", "set", strconv.Itoa(table)).CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("upstream: add client rule: %w: %s", err, bytes.TrimSpace(out))
 	}

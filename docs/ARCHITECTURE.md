@@ -88,10 +88,12 @@ are recomputed on every start (`Supervisor.PreStart`) from the persisted
 subnet, and `--bind-dynamic` tolerates the listen address not existing
 yet, so it never listens on a stale address.
 
-`internal/upstream` marks traffic by the VPN subnet, which changes only
-when OpenVPN starts or restarts. A successful `vpn start` or `restart`
-therefore re-applies the upstream rules, as `upstream reconcile` does;
-`stop` and `reconnect` do not, since neither changes the subnet.
+`internal/upstream` identifies VPN traffic by the tunnel interface it
+arrives on (`ovpnconf.TunDev`), never by a source address another host
+could forge. A successful `vpn start` or `restart` re-applies the upstream
+rules, as `upstream reconcile` does, and with per-client routing
+reattaches the management connection openvpn holds new clients for;
+`stop` and `reconnect` do neither.
 
 `RoutingPrereqsWarning` (`internal/controller`) checks two host settings
 ovcp does not manage: IPv4 forwarding and an outbound NAT rule for the

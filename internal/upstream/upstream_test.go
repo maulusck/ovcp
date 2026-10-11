@@ -254,7 +254,7 @@ func TestNFTRulesetOff(t *testing.T) {
 	defer swapIfaceExists(func(string) bool { return true })()
 	c := valid()
 	c.Default = "" // off: no mark rule, subnet keeps the host's own default route
-	out := string(nftRuleset(c, "10.8.0.0/24"))
+	out := string(nftRuleset(c))
 	if strings.Contains(out, "meta mark set") {
 		t.Errorf("Default off must not emit a mark rule:\n%s", out)
 	}
@@ -265,7 +265,7 @@ func TestNFTRulesetOff(t *testing.T) {
 	// out whatever the host's own routing picks — this is what used to be a
 	// hand-maintained "baseline-nat" table outside ovcp entirely, lost on
 	// every `nft flush ruleset`. Folded into ovcp's own reconciled table.
-	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark 0 masquerade") {
+	if !strings.Contains(out, `iifname "ovcp0" meta mark 0 masquerade`) {
 		t.Errorf("transparent mode must masquerade unmarked traffic via the host's own default route:\n%s", out)
 	}
 }
@@ -289,7 +289,7 @@ func TestNFTRulesetSkipsMissingIface(t *testing.T) {
 		},
 		Default: "ghost",
 	}
-	out := string(nftRuleset(c, "10.8.0.0/24"))
+	out := string(nftRuleset(c))
 	if !strings.Contains(out, "meta mark set 101") {
 		t.Errorf("missing-iface upstream must still be marked (kill-switch depends on it):\n%s", out)
 	}
@@ -329,7 +329,7 @@ func TestNFTRulesetValidatesAgainstRealNFT(t *testing.T) {
 		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
 		Default:   "lo-test",
 	}
-	ruleset := nftRuleset(c, "10.8.0.0/24")
+	ruleset := nftRuleset(c)
 	cmd := exec.Command(nft, "-c", "-f", "-")
 	cmd.Stdin = bytes.NewReader(ruleset)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -349,7 +349,7 @@ func TestNFTRulesetValidatesWithMissingIface(t *testing.T) {
 		},
 		Default: "ghost",
 	}
-	ruleset := nftRuleset(c, "10.8.0.0/24")
+	ruleset := nftRuleset(c)
 	cmd := exec.Command(nft, "-c", "-f", "-")
 	cmd.Stdin = bytes.NewReader(ruleset)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -362,7 +362,7 @@ func TestNFTRulesetValidatesWithMissingIface(t *testing.T) {
 // must itself be valid nft syntax, not just string-matched.
 func TestNFTRulesetValidatesTransparentMode(t *testing.T) {
 	nft := RequireRealNFT(t)
-	ruleset := nftRuleset(Config{}, "10.8.0.0/24")
+	ruleset := nftRuleset(Config{})
 	cmd := exec.Command(nft, "-c", "-f", "-")
 	cmd.Stdin = bytes.NewReader(ruleset)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -371,14 +371,17 @@ func TestNFTRulesetValidatesTransparentMode(t *testing.T) {
 }
 
 func TestNFTRulesetActive(t *testing.T) {
-	out := string(nftRuleset(valid(), "10.8.0.0/24"))
-	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark set 100") {
+	out := string(nftRuleset(valid()))
+	if !strings.Contains(out, `iifname "ovcp0" meta mark set 100`) {
 		t.Errorf("missing mark rule for active default:\n%s", out)
+	}
+	if strings.Contains(out, "ip saddr") {
+		t.Fatalf("no base rule may trust a source address, another host can forge it:\n%s", out)
 	}
 }
 
 // TestNFTRulesetPerCNWithNoDefault: a per-CN override with no server-wide
-// default set must skip the blanket subnet-wide mark line entirely (there's
+// default set must skip the blanket tunnel-wide mark line entirely (there's
 // no Default to resolve to) while still falling through to the transparent
 // masquerade for mark 0 — a non-overridden client must still reach the
 // internet, just not via any upstream.
@@ -387,11 +390,11 @@ func TestNFTRulesetPerCNWithNoDefault(t *testing.T) {
 		Upstreams: []Upstream{{ID: "wan1", Iface: "eth1", Table: tableBase}},
 		PerCN:     map[string]string{"alice": "wan1"},
 	}
-	out := string(nftRuleset(c, "10.8.0.0/24"))
-	if strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark set") {
-		t.Errorf("no Default is set — must not emit a blanket subnet-wide mark rule:\n%s", out)
+	out := string(nftRuleset(c))
+	if strings.Contains(out, "meta mark set") {
+		t.Errorf("no Default is set — must not emit a blanket tunnel-wide mark rule:\n%s", out)
 	}
-	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark 0 masquerade") {
+	if !strings.Contains(out, `iifname "ovcp0" meta mark 0 masquerade`) {
 		t.Errorf("missing transparent fallback for non-overridden clients:\n%s", out)
 	}
 }
@@ -405,7 +408,7 @@ func TestNFTRulesetSOCKSRedirect(t *testing.T) {
 		},
 		Default: "tor",
 	}
-	out := string(nftRuleset(c, "10.8.0.0/24"))
+	out := string(nftRuleset(c))
 	if !strings.Contains(out, "meta mark 100 meta l4proto tcp redirect to :20000") {
 		t.Errorf("missing socks redirect rule:\n%s", out)
 	}
@@ -415,7 +418,7 @@ func TestNFTRulesetSOCKSRedirect(t *testing.T) {
 	if !strings.Contains(out, `oif "eth1" masquerade`) {
 		t.Errorf("iface-kind upstream masquerade must be unaffected:\n%s", out)
 	}
-	if !strings.Contains(out, "ip saddr 10.8.0.0/24 meta mark set 100") {
+	if !strings.Contains(out, `iifname "ovcp0" meta mark set 100`) {
 		t.Errorf("missing mark rule for socks default:\n%s", out)
 	}
 }
@@ -428,7 +431,7 @@ func TestNFTRulesetValidatesSOCKSAgainstRealNFT(t *testing.T) {
 		Upstreams: []Upstream{{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase}},
 		Default:   "tor",
 	}
-	ruleset := nftRuleset(c, "10.8.0.0/24")
+	ruleset := nftRuleset(c)
 	cmd := exec.Command(nft, "-c", "-f", "-")
 	cmd.Stdin = bytes.NewReader(ruleset)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -457,7 +460,7 @@ func TestApplySkipsRouteCommandsForSOCKS(t *testing.T) {
 		Upstreams: []Upstream{{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase}},
 		Default:   "tor",
 	}
-	if err := Apply(cfg, "10.8.0.0/24"); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -494,7 +497,7 @@ func TestApplyInvokesFakeTools(t *testing.T) {
 	ipBin, nftBin = fake("ip"), fake("nft")
 	defer func() { ipBin, nftBin = origIP, origNFT }()
 
-	if err := Apply(valid(), "10.8.0.0/24"); err != nil {
+	if err := Apply(valid()); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	out, err := os.ReadFile(log)
@@ -535,7 +538,7 @@ func TestApplyContinuesAfterOneUpstreamFails(t *testing.T) {
 	ipBin, nftBin = ipPath, nftPath
 	defer func() { ipBin, nftBin = origIP, origNFT }()
 
-	err := Apply(valid(), "10.8.0.0/24")
+	err := Apply(valid())
 	if err == nil {
 		t.Fatal("expected an error surfacing the eth1 failure, got nil")
 	}
@@ -577,7 +580,7 @@ func TestApplyWaitsWhileBusy(t *testing.T) {
 	}()
 
 	done := make(chan error, 1)
-	go func() { done <- Apply(Config{}, "") }()
+	go func() { done <- Apply(Config{}) }()
 
 	select {
 	case <-done:
@@ -636,7 +639,7 @@ func TestAddRuleFakeNFT(t *testing.T) {
 func TestClientRuleRoundTripRealNFT(t *testing.T) {
 	nft := RequireRealNFT(t)
 	cfg := Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}
-	if err := Apply(cfg, ""); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -695,7 +698,7 @@ func TestEstablishAndDisconnectRoundTripRealNFT(t *testing.T) {
 		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
 		PerCN:     map[string]string{"alice": "lo-test"},
 	}
-	if err := Apply(cfg, ""); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -727,7 +730,7 @@ func TestReassignInstallsRuleForUntrackedCid(t *testing.T) {
 		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
 		PerCN:     map[string]string{"alice": "lo-test"},
 	}
-	if err := Apply(cfg, ""); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -766,7 +769,7 @@ func TestReassignReplacesExistingRule(t *testing.T) {
 			{ID: "lo-test2", Iface: "lo", Table: tableBase + 1},
 		},
 	}
-	if err := Apply(cfg, ""); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -798,7 +801,7 @@ func TestReassignReplacesExistingRule(t *testing.T) {
 func TestReassignClearsExistingOverride(t *testing.T) {
 	nft := RequireRealNFT(t)
 	cfg := Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}
-	if err := Apply(cfg, ""); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -825,7 +828,7 @@ func TestReassignClearsExistingOverride(t *testing.T) {
 // the entry tracked, not silently orphan it — ClearAll is the retry.
 func TestDisconnectKeepsTrackingOnFailure(t *testing.T) {
 	RequireRealNFT(t)
-	if err := Apply(Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}, ""); err != nil {
+	if err := Apply(Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -844,7 +847,7 @@ func TestDisconnectKeepsTrackingOnFailure(t *testing.T) {
 // otherwise silently inherit stale marking from.
 func TestClearAllRemovesRules(t *testing.T) {
 	nft := RequireRealNFT(t)
-	if err := Apply(Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}, ""); err != nil {
+	if err := Apply(Config{Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}}}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -875,7 +878,7 @@ func TestApplyReinstallsTrackedRules(t *testing.T) {
 		Upstreams: []Upstream{{ID: "lo-test", Iface: "lo", Table: tableBase}},
 		PerCN:     map[string]string{"alice": "lo-test"},
 	}
-	if err := Apply(cfg, ""); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	defer Teardown()
@@ -886,7 +889,7 @@ func TestApplyReinstallsTrackedRules(t *testing.T) {
 
 	// Simulates an unrelated admin mutation triggering a routine re-apply of
 	// the same base config while alice is connected.
-	if err := Apply(cfg, ""); err != nil {
+	if err := Apply(cfg); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
 
@@ -909,7 +912,7 @@ func TestEstablishRaceAgainstUpstreamDeletion(t *testing.T) {
 		Upstreams: []Upstream{{ID: "wan1", Iface: "lo", Table: tableBase}},
 		PerCN:     map[string]string{"alice": "wan1"},
 	}
-	if err := Apply(stale, ""); err != nil {
+	if err := Apply(stale); err != nil {
 		t.Fatalf("Apply(stale): %v", err)
 	}
 	defer Teardown()
@@ -922,10 +925,10 @@ func TestEstablishRaceAgainstUpstreamDeletion(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); Establish("1", "alice", "10.8.0.42", stale) }()
-	go func() { defer wg.Done(); Apply(after, "") }()
+	go func() { defer wg.Done(); Apply(after) }()
 	wg.Wait()
 
-	if err := Apply(after, ""); err != nil {
+	if err := Apply(after); err != nil {
 		t.Fatalf("Apply(after): %v", err)
 	}
 	if _, ok := tracked["1"]; ok {

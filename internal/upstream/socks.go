@@ -74,7 +74,7 @@ func syncSOCKSRelays(cfg Config) error {
 			handshakeTimeout: resolveTimeout(u.HandshakeTimeout, handshakeTimeout),
 		}
 		// 0.0.0.0, not 127.0.0.1: nft's redirect always targets the packet's
-		// own inbound interface address (tun0), never loopback — a listener
+		// own inbound interface address (the tunnel), never loopback — a listener
 		// bound to 127.0.0.1 never receives redirected traffic. A direct,
 		// non-redirected connection to this port is still rejected, by
 		// relayConn (see its own comment), not by the bind address.
