@@ -346,6 +346,9 @@ go test ./... -skip TestE2E               # everything else
 On Debian, `ip`, `nft` and `openvpn` live in `/usr/sbin`; prefix the
 commands with `PATH=/usr/sbin:$PATH`.
 
+Live acceptance on real machines, this host plus an Alpine client VM:
+`scripts/vm-acceptance.sh` (usage in its header).
+
 ## CI / the release pipeline
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) runs on
