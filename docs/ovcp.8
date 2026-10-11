@@ -154,9 +154,9 @@ actionable error if
 .B ovcp init
 has not been run.
 .TP
-.B certificate issue \fB\-cn\fR \fINAME\fR [\fB\-renew\fR] [\fB\-days\fR \fIN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR]
+.B certificate issue \fB\-cn\fR \fINAME\fR [\fB\-renew\fR] [\fB\-days\fR \fIN\fR] [\fB\-key\-pass\fR \fIPW\fR]
 .TQ
-.B certificate issue \fB\-cn\fR \fINAME\fR \fB\-export\fR [\fB\-renew\fR] [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-out\fR \fIPREFIX\fR] [\fB\-key\-pass\fR \fIPW\fR] [\fB\-split\-tunnel\fR] [\fB\-custom\-opts\fR \fIOPTS\fR|\fB\-\fR]
+.B certificate issue \fB\-cn\fR \fINAME\fR \fB\-export\fR [\fB\-renew\fR] [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-key\-pass\fR \fIPW\fR] [\fB\-split\-tunnel\fR] [\fB\-custom\-opts\fR \fIOPTS\fR|\fB\-\fR]
 \fBcert\fR is accepted everywhere as a shorthand for \fBcertificate\fR
 (\fBovcp cert list\fR, \fBovcp cert issue ...\fR); the rest of this page
 spells it out in full. Client\-only \(en a server has exactly one cert,
@@ -172,9 +172,10 @@ part of the same call \(en explicit rather than auto\-detected, so a
 typo'd CN fails fast instead of silently replacing a live client's cert.
 \fB\-export\fR switches the output from raw cert+key to a complete inline
 \fI.ovpn\fR profile (CA, cert, key, tls\-crypt); combine both to renew a
-client and hand back a fresh profile in one call. Private keys are printed
-(or written with \fB\-out\fR) exactly once and never stored; if lost,
-\fB\-renew\fR. Certificates (public) are kept and can be re\-downloaded
+client and hand back a fresh profile in one call. Output goes to stdout
+only; private keys are printed exactly once and never stored (if lost,
+\fB\-renew\fR). Save key\-bearing output with a private umask, e.g.
+\fB(umask 077; ovcp certificate issue \-cn alice \-export > alice.ovpn)\fR. Certificates (public) are kept and can be re\-downloaded
 anytime with \fBcertificate list\fR / the web UI. With \fB\-key\-pass\fR
 the private key is AES\-256 encrypted; OpenVPN prompts for the password on
 connect. \fB\-days\fR must be positive. \fB\-cn\fR is capped at 64 bytes
@@ -236,8 +237,7 @@ on its next handshake (\fBcrl\-verify\fR is always configured).
 .B certificate renew [\fB\-cn\fR \fINAME\fR] [\fB\-days\fR \fIN\fR]
 Server\-only \(en a server has exactly one cert, at the fixed paths
 .B serve
-reads directly, so there is no bundle/\fB\-out\fR concept like client
-certs have (see \fBcertificate issue\fR above). Reissues it in place \(en
+reads directly, so nothing is printed (see \fBcertificate issue\fR above). Reissues it in place \(en
 fresh keypair and serial, same paths \(en effective on the next
 .B ovcp vpn restart
 (openvpn does not hot\-reload its certificate). Omit \fB\-cn\fR to keep
@@ -348,10 +348,12 @@ can't be revoked, so never that). Kept out of \fBcertificate list\fR on
 purpose \(en the CA lives on its own path, CLI/admin\-only, never mixed
 into the client/server certs surface.
 .TP
-.B backup create [\fB\-out\fR \fIFILE\fR]
+.B backup create
 Write an encrypted archive (argon2id + AES\-256\-GCM, prompts twice for a
 backup passphrase) of the CA, CRL, tls\-crypt key, TOTP key,
-\fIserver.conf\fR, and database. Also available from the web UI (Settings, admin role).
+\fIserver.conf\fR, and database to stdout: \fBovcp backup create >
+ovcp.bak\fR. Refuses a terminal stdout and \fB\-json\fR (the archive is
+the output). Also available from the web UI (Settings, admin role).
 Excludes the openvpn server certificate and private key:
 OpenVPN clients trust the CA chain and a CN match, never a pinned server
 cert, so a restore just issues a fresh one (\fBcertificate renew\fR)
@@ -746,11 +748,10 @@ Print the command list (\fBCOMMANDS\fR above, condensed) and exit.
 subset \(en from aligned human text to JSON on stdout. It changes only the
 wire format: the same fields are computed either way, so nothing in text is
 missing from JSON or vice versa, and the two modes are otherwise
-interchangeable in scripts and by hand. Two exceptions, both because there
-is no single result to encode: \fBstats \-follow\fR (a live redrawing view,
-rejects \fB\-json\fR outright) and \fBcompletion\fR (a shell script, also
-rejected \(en piping it through JSON would break \fBeval "$(ovcp completion
-bash)"\fR, its whole point). \fBserve\fR is the other special case: it never
+interchangeable in scripts and by hand. Three commands reject \fB\-json\fR
+because their output is not a result to encode: \fBstats \-follow\fR (a
+live redrawing view), \fBcompletion\fR (a shell script for \fBeval\fR) and
+\fBbackup create\fR (the archive itself). \fBserve\fR is the other special case: it never
 exits with a single result, so \fB\-json\fR there means JSON log lines
 instead (see \fB\-json\fR in \fBOPTIONS\fR).
 .PP
@@ -787,11 +788,8 @@ Per\-command JSON shapes:
 \fB\-json\fR so they can't interleave with the result.
 .TP
 .B certificate issue
-\fB{serial, cert, key}\fR or \fB{serial, certFile, keyFile}\fR with
-\fB\-out\fR \(en inline as JSON strings instead of raw bytes on stdout, or
-the paths they were written to. With \fB\-export\fR: \fB{serial, bundle}\fR
-or \fB{serial, file}\fR with \fB\-out\fR, the \fI.ovpn\fR bundle instead of
-cert/key.
+\fB{serial, cert, key}\fR, or with \fB\-export\fR \fB{serial, bundle}\fR
+(the \fI.ovpn\fR bundle instead of cert/key), as JSON strings.
 .TP
 .B certificate revoke
 \fB{serial, crlPath}\fR.
@@ -814,9 +812,6 @@ the machine.
 .TP
 .B ca status
 \fB{cn, notAfter, status}\fR.
-.TP
-.B backup create
-\fB{file}\fR.
 .TP
 .B certificate list
 array of \fB{status, kind, cn, serial, expires}\fR.
@@ -1205,12 +1200,12 @@ ovcp certificate list
 ovcp certificate revoke \-serial 682b2da83f4d...
 .RE
 .fi
-Renew that same client's cert before it expires, writing the new key+cert
-to files instead of stdout, then renew the openvpn server cert and the CA
-certificate itself (both admin, both need a restart to take effect):
+Renew that same client's profile before it expires, then renew the openvpn
+server cert and the CA certificate itself (both admin, both need a restart
+to take effect):
 .nf
 .RS
-ovcp certificate issue \-cn dana\-phone \-renew \-out dana\-phone\-renewed
+(umask 077; ovcp certificate issue \-cn dana\-phone \-renew \-export > dana\-phone.ovpn)
 ovcp certificate renew
 ovcp ca renew
 ovcp vpn restart

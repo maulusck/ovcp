@@ -199,9 +199,10 @@ func TestJSONFullAutomation(t *testing.T) {
 	rotate := withEnv(env, "OVCP_CA_NEW_PASSPHRASE=a totally different passphrase")
 	assertCleanJSON(t, run(t, rotate, "ca", "rotate"), &outcome{})
 
-	backupFile := filepath.Join(t.TempDir(), "backup.ovcpbak")
 	create := withEnv(env, "OVCP_BACKUP_PASSPHRASE=backup-pass-123")
-	assertCleanJSON(t, run(t, create, "backup", "create", "-out", backupFile), &backupCreateOut{})
+	if r := run(t, create, "backup", "create"); r.code == 0 || !strings.Contains(r.stdout, `"error"`) {
+		t.Fatalf("backup create must refuse -json (the archive is the output): %+v", r)
+	}
 
 	addBob := withEnv(env, "OVCP_USER_PASSWORD=bobs-password-1")
 	assertCleanJSON(t, run(t, addBob, "user", "add", "-name", "bob", "-role", "operator"), &userAddOut{})
@@ -906,16 +907,10 @@ func TestRenewClient(t *testing.T) {
 		t.Fatalf("issue without -renew on an active CN should fail, got: %+v", r)
 	}
 
-	// -out writes files instead of printing PEM to stdout.
-	outPrefix := filepath.Join(t.TempDir(), "alice-renewed")
-	if r := run(t, env, "certificate", "issue", "-cn", "alice", "-renew", "-out", outPrefix); r.code != 0 {
-		t.Fatalf("issue -renew -out: %+v", r)
-	}
-	if _, err := os.Stat(outPrefix + ".crt"); err != nil {
-		t.Fatalf("expected %s.crt: %v", outPrefix, err)
-	}
-	if _, err := os.Stat(outPrefix + ".key"); err != nil {
-		t.Fatalf("expected %s.key: %v", outPrefix, err)
+	// stdout is the only output: the renewed cert and key, PEM.
+	r = run(t, env, "certificate", "issue", "-cn", "alice", "-renew")
+	if r.code != 0 || !strings.Contains(r.stdout, "BEGIN CERTIFICATE") || !strings.Contains(r.stdout, "PRIVATE KEY") {
+		t.Fatalf("issue -renew should print cert and key: %+v", r)
 	}
 }
 
@@ -978,7 +973,8 @@ func TestBackupRestore(t *testing.T) {
 
 	backupFile := filepath.Join(t.TempDir(), "backup.ovcpbak")
 	create := withEnv(src, "OVCP_BACKUP_PASSPHRASE=backup-pass-123")
-	if r := run(t, create, "backup", "create", "-out", backupFile); r.code != 0 {
+	r := run(t, create, "backup", "create")
+	if r.code != 0 || os.WriteFile(backupFile, []byte(r.stdout), 0o600) != nil {
 		t.Fatalf("backup create: %+v", r)
 	}
 
@@ -1595,5 +1591,23 @@ mkdir $D/foreign && OVCP_DATA=$D/foreign "$BIN" version >/dev/null && stat -c %u
 	out, err := cmd.CombinedOutput()
 	if got, want := string(out), "ovcp\n1111\n0000000000001400\n1\n0\n"; err != nil || got != want {
 		t.Fatalf("got %q err=%v, want %q", got, err, want)
+	}
+}
+
+// TestBackupCreateRefusesTerminal: the archive goes to stdout only, so a
+// terminal stdout is refused instead of filled with binary.
+func TestBackupCreateRefusesTerminal(t *testing.T) {
+	if _, err := exec.LookPath("script"); err != nil {
+		t.Skip("script(1) unavailable for a pty")
+	}
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	cmd := exec.Command("script", "-qec", binPath+" backup create", "/dev/null")
+	cmd.Env = append(os.Environ(), append(env, "OVCP_BACKUP_PASSPHRASE=backup-pass-123")...)
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "refusing to write the archive to a terminal") {
+		t.Fatalf("want refusal on a terminal, got err=%v\n%s", err, out)
 	}
 }

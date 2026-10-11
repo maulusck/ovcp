@@ -425,12 +425,13 @@ func (h *e2eHost) startClient(t *testing.T, cn, suffix, hostIP, clientIP string)
 	hostIface, clientIface := "veh"+suffix, "vec"+suffix
 	h.outer.veth(t, h.outer, hostIface, hostIP+"/30", ns, clientIface, clientIP+"/30")
 
-	outPrefix := t.TempDir() + "/" + cn
-	if r := run(t, h.env, "certificate", "issue", "-cn", cn, "-export", "-remote", hostIP, "-out", outPrefix); r.code != 0 {
+	profile := t.TempDir() + "/" + cn + ".ovpn"
+	r := run(t, h.env, "certificate", "issue", "-cn", cn, "-export", "-remote", hostIP)
+	if r.code != 0 || os.WriteFile(profile, []byte(r.stdout), 0o600) != nil {
 		t.Fatalf("issue+export %s: %s", cn, r.stderr)
 	}
 
-	full := append(append([]string{}, ns.prefix...), "openvpn", "--config", outPrefix+".ovpn")
+	full := append(append([]string{}, ns.prefix...), "openvpn", "--config", profile)
 	c := exec.Command(full[0], full[1:]...)
 	if err := c.Start(); err != nil {
 		t.Fatalf("start openvpn client %s: %v", cn, err)

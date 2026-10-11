@@ -341,7 +341,6 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 	cn := fs.String("cn", "", "common name (required)")
 	renew := fs.Bool("renew", false, "replace an existing active cert for this CN (else: error if one exists)")
 	days := fs.Int("days", 365, "validity (days)")
-	out := fs.String("out", "", "write to files with this prefix instead of printing (.crt/.key, or .ovpn with -export)")
 	keyPass := fs.String("key-pass", "", "encrypt private key with this password")
 	export := fs.Bool("export", false, "print a ready .ovpn bundle instead of raw cert+key")
 	remote := fs.String("remote", "", "-export: server host clients connect to (default: OVCP_SERVER_CN / server cert CN)")
@@ -377,20 +376,8 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		s.Audit("cli", action, fmt.Sprintf("cn=%s serial=%s", *cn, ic.SerialHex))
 
 		if !*export {
-			o := issueOut{Serial: ic.SerialHex}
-			if *out != "" {
-				die(os.WriteFile(*out+".crt", ic.CertPEM, 0o644))
-				die(os.WriteFile(*out+".key", ic.KeyPEM, 0o600))
-				o.CertFile, o.KeyFile = *out+".crt", *out+".key"
-			} else {
-				o.CertPEM, o.KeyPEM = string(ic.CertPEM), string(ic.KeyPEM)
-			}
-			output(o, func(o issueOut) {
-				if o.CertFile != "" {
-					fmt.Println("wrote", o.CertFile, o.KeyFile)
-				} else {
-					fmt.Print(o.CertPEM, o.KeyPEM)
-				}
+			output(issueOut{ic.SerialHex, string(ic.CertPEM), string(ic.KeyPEM)}, func(o issueOut) {
+				fmt.Print(o.CertPEM, o.KeyPEM)
 				fmt.Fprintln(os.Stderr, "serial:", o.Serial)
 			})
 			return
@@ -436,40 +423,24 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 			TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: *splitTunnel, Extra: extra,
 		})
 		die(err)
-		o := exportOut{Serial: ic.SerialHex}
-		if *out != "" {
-			die(os.WriteFile(*out+".ovpn", bundle, 0o644))
-			o.File = *out + ".ovpn"
-		} else {
-			o.Bundle = string(bundle)
-		}
-		output(o, func(o exportOut) {
-			if o.File != "" {
-				fmt.Println("wrote", o.File)
-			} else {
-				fmt.Print(o.Bundle)
-			}
+		output(exportOut{ic.SerialHex, string(bundle)}, func(o exportOut) {
+			fmt.Print(o.Bundle)
 			fmt.Fprintln(os.Stderr, "serial:", o.Serial)
 		})
 	}
 }
 
-// issueOut is `issue -json`'s shape: the PEM bytes inline (no -out), or the
-// paths they were written to instead.
+// issueOut / exportOut are `issue -json`'s shapes: the PEM pair, or with
+// -export the .ovpn bundle, inline — stdout is the only output.
 type issueOut struct {
-	Serial   string `json:"serial"`
-	CertPEM  string `json:"cert,omitempty"`
-	KeyPEM   string `json:"key,omitempty"`
-	CertFile string `json:"certFile,omitempty"`
-	KeyFile  string `json:"keyFile,omitempty"`
+	Serial  string `json:"serial"`
+	CertPEM string `json:"cert"`
+	KeyPEM  string `json:"key"`
 }
 
-// exportOut is `issue -export -json`'s shape: the .ovpn bundle inline (no
-// -out), or the path it was written to instead.
 type exportOut struct {
 	Serial string `json:"serial"`
-	Bundle string `json:"bundle,omitempty"`
-	File   string `json:"file,omitempty"`
+	Bundle string `json:"bundle"`
 }
 
 // regenCRLFromStore rebuilds the CRL from s's full revoked set — the shared
@@ -1908,24 +1879,20 @@ type renewCAOut struct {
 
 // cmdBackup and cmdUser take no top-level flags: opArg's rest is fed to a
 // fresh FlagSet per op, same as vpn/debug/telegram.
-func cmdBackupCreate(cfs *flag.FlagSet) func(ctx *cliContext) {
-	out := cfs.String("out", "", "output file (default: ovcp-backup-<timestamp>.ovcpbak)")
+func cmdBackupCreate(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
-		if *out == "" {
-			*out = "ovcp-backup-" + time.Now().Format("20060102-150405") + ".ovcpbak"
+		if jsonOut {
+			die(fmt.Errorf("-json is not supported for backup create (the archive is the output)"))
+		}
+		if term.IsTerminal(int(os.Stdout.Fd())) {
+			die(fmt.Errorf("refusing to write the archive to a terminal; redirect stdout to a file"))
 		}
 		pass := readSecret("Backup passphrase", "OVCP_BACKUP_PASSPHRASE", true)
 		s := ctx.openStore()
 		defer s.Close()
-		f, err := os.Create(*out)
-		die(err)
-		defer f.Close()
-		die(backup.Create(ctx.dataDir, s, f, pass))
-		s.Audit("cli", "backup_create", "file="+*out)
-		output(backupCreateOut{*out}, func(o backupCreateOut) {
-			fmt.Println("backup written:", o.File)
-			fmt.Println("keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
-		})
+		die(backup.Create(ctx.dataDir, s, os.Stdout, pass))
+		s.Audit("cli", "backup_create", "")
+		fmt.Fprintln(os.Stderr, "backup written; keep the passphrase safe: it cannot be recovered, and the archive is unreadable without it")
 	}
 }
 
@@ -1949,10 +1916,6 @@ func cmdBackupRestore(rfs *flag.FlagSet) func(ctx *cliContext) {
 				fmt.Println("      then: ovcp vpn start")
 			})
 	}
-}
-
-type backupCreateOut struct {
-	File string `json:"file"`
 }
 
 // backupBodies wires backup's ops through opDispatch.
