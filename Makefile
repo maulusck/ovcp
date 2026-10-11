@@ -2,10 +2,9 @@
 require = command -v $(firstword $(1)) >/dev/null 2>&1 $(patsubst %,|| command -v % >/dev/null 2>&1,$(wordlist 2,99,$(1))) || { echo "missing: $(2)"; exit 1; }
 
 BINARY  := ovcp
-# strip a leading v (v1.2.3 tags): deb's Version field must start with a
-# digit, and this feeds nfpm.yaml's version: field for every package format.
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
-VERSION := $(if $(VERSION),$(VERSION),dev)
+# v1.2.3 tags give 1.2.3; an untagged tree gives 0.0.0-<hash>, which every
+# package format accepts (deb needs a leading digit) and sorts below 1.0.0.
+VERSION := $(shell v=$$(git describe --tags --dirty 2>/dev/null) && echo $${v#v} || echo 0.0.0-$$(git describe --always --dirty 2>/dev/null || echo dev))
 # GNU Coding Standards: lowercase prefix, uppercase DESTDIR (staged
 # installs). Default /usr, not /usr/local, to match nfpm.yaml's own paths.
 prefix  ?= /usr
