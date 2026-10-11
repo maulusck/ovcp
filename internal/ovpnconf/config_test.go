@@ -57,10 +57,6 @@ func TestRender(t *testing.T) {
 	if strings.Contains(string(c.Render()), "explicit-exit-notify") {
 		t.Fatal("exit-notify must be udp-only")
 	}
-	c.RunAsUser = ""
-	if strings.Contains(string(c.Render()), "\nuser ") {
-		t.Fatal("empty RunAsUser must omit the user/group lines")
-	}
 }
 
 // TestPushInternalDNSFirst: the internal resolver must be pushed before any

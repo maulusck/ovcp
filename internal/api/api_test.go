@@ -74,7 +74,6 @@ func setup(t *testing.T) *env {
 		DebugLevel:      new(slog.LevelVar),
 		CertsHostsPath:  filepath.Join(dir, "dns", "certs.hosts"),
 		CustomHostsPath: filepath.Join(dir, "dns", "custom.hosts"),
-		DNSGroupGID:     -1,
 	}
 	if err := srv.WriteServerCert(serverIC); err != nil {
 		t.Fatal(err)

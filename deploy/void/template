@@ -7,6 +7,7 @@ build_style=gnu-makefile
 make_install_args="prefix=/usr"
 hostmakedepends="go gcc nodejs mandoc"
 depends="openvpn"
+system_accounts="ovcp"
 short_desc="OpenVPN Control Plane — web UI and native PKI for OpenVPN"
 maintainer="YOUR NAME <YOUR EMAIL>"
 license="MIT"

@@ -75,11 +75,14 @@ make build TARGET=arm64     # cross, glibc arm64
 `make help`'s `TARGET` line is generated from this table (`CROSS_TARGETS`
 in the Makefile) and stays in sync with it automatically.
 
+### Install
+
 Install a native build directly, without packaging it — binary, man page,
 and shell completions, `DESTDIR`/`prefix` honored (GNU Coding Standards):
 
 ```sh
 sudo make install
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin ovcp   # the account ovcp runs as; packages create it
 ```
 
 This does not install the systemd unit or the SELinux policy; a distro
@@ -209,9 +212,9 @@ Without this mount, every image build recompiles from a cold cache: zig
 rebuilds its target's libc/compiler-rt objects from scratch, and
 `go build` has no prior object cache, because `~/.cache` lives inside the
 ephemeral build container and is not preserved between `podman build`
-invocations. `COPY . .` earlier in the same stage means this step re-runs
-on any source change, so the cold-cache cost is paid repeatedly without
-the mount.
+invocations. The source `COPY` lines earlier in the same stage make this
+step re-run on any source change, so the cold-cache cost is paid
+repeatedly without the mount.
 
 The mount persists the cache in the container engine's own build-cache
 store — outside the checkout, shared across builds on the same host,
@@ -304,6 +307,45 @@ fresh checkout with `pattern all:dist: no matching files found` until
 `go test ./...`/`go vet ./...` directly only works once `make ui` (or any
 target that pulls it in) has populated `web/dist` at least once.
 
+### Running from the checkout
+
+Started as root, `ovcp` switches to the `ovcp` account (`man ovcp`,
+**PRIVILEGES**), which cannot reach a binary or data directory inside a
+private `$HOME`. From a checkout, run it either unprivileged, where the UI,
+CLI, PKI and database work but openvpn, dnsmasq and nft cannot start
+without `CAP_NET_ADMIN`:
+
+```sh
+export PATH=/usr/sbin:$PATH OVCP_DATA=$PWD/data \
+  OVCP_CTRL_SOCK=$PWD/run/control.sock OVCP_MGMT_SOCK=$PWD/run/mgmt.sock
+bin/ovcp init -server-cn vpn.example.com
+bin/ovcp serve
+```
+
+or as root without the privilege drop:
+
+```sh
+sudo OVCP_USER=root OVCP_DATA=$PWD/data bin/ovcp serve
+```
+
+`sudo bin/ovcp` with the `ovcp` account present fails with
+`exec …/bin/ovcp as ovcp: permission denied` and leaves an empty `./data`
+owned by `ovcp`; remove it with `sudo rmdir data`.
+
+### Tests
+
+`make test` runs every suite. Two suites exercise privileges rootless,
+inside user namespaces, and skip when their tools are missing:
+
+```sh
+go test ./cmd/ovcp -run TestDropRoot -v   # needs unshare --map-auto (an /etc/subuid entry)
+go test ./cmd/ovcp -run TestE2E -v        # needs unshare, nsenter, ip, nft, openvpn
+go test ./... -skip TestE2E               # everything else
+```
+
+On Debian, `ip`, `nft` and `openvpn` live in `/usr/sbin`; prefix the
+commands with `PATH=/usr/sbin:$PATH`.
+
 ## CI / the release pipeline
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) runs on
@@ -338,5 +380,7 @@ every `v*` tag push and has three stages:
 | `unknown TARGET=foo (see: make help)` | Typo, or `foo` is not in the table above | `make help` lists every valid name |
 | `missing: zig (cross-compiler for TARGET=...)` | Cross build, zig not installed | Install zig, or use `TARGET=host` when already on that architecture |
 | `error: this host can't run linux/X containers (no working QEMU/binfmt for it)` | Cross image build, no binfmt handlers | `sudo docker run --privileged --rm docker.io/tonistiigi/binfmt --install all` (one-time, host-wide) |
+| `user: unknown user ovcp: create that system account ...` | Started as root, no `ovcp` account | **Install** above, or `OVCP_USER=root` |
+| `exec …/ovcp as ovcp: permission denied` | Binary inside a private `$HOME` | **Install** above, or **Running from the checkout** |
 | `no value specified for --platform=` | An old podman/docker invoked directly, bypassing `make image` | Use `make image`, which always passes `--platform` explicitly, or add `--platform=linux/$(uname -m)` manually |
 | Image build takes 6+ minutes every time | Build cache was pruned, or this is the first build on this host | Expected once; subsequent builds reuse `id=ovcp-build-cache` and drop to ~2 minutes |

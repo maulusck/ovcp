@@ -97,19 +97,19 @@ func TestWriteAtomicHosts(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "certs.hosts")
 
-	if err := WriteAtomicHosts(path, []byte("10.8.0.1 ovcp\n"), -1); err != nil {
+	if err := WriteAtomicHosts(path, []byte("10.8.0.1 ovcp\n")); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != "10.8.0.1 ovcp\n" {
 		t.Fatalf("got %q err=%v", got, err)
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o640 {
-		t.Fatalf("mode = %v, want 0640", fi.Mode().Perm())
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", fi.Mode().Perm())
 	}
 
 	// second write replaces the file wholesale (rename-over), not append.
-	if err := WriteAtomicHosts(path, []byte("10.8.0.1 ovcp\n10.8.0.2 alice\n"), -1); err != nil {
+	if err := WriteAtomicHosts(path, []byte("10.8.0.1 ovcp\n10.8.0.2 alice\n")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = os.ReadFile(path)
@@ -133,7 +133,7 @@ func TestWriteAtomicHostsSkipsUnchangedWrite(t *testing.T) {
 	path := filepath.Join(dir, "certs.hosts")
 	data := []byte("10.8.0.1 ovcp\n")
 
-	if err := WriteAtomicHosts(path, data, -1); err != nil {
+	if err := WriteAtomicHosts(path, data); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-time.Hour)
@@ -141,14 +141,14 @@ func TestWriteAtomicHostsSkipsUnchangedWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := WriteAtomicHosts(path, data, -1); err != nil {
+	if err := WriteAtomicHosts(path, data); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(path); !fi.ModTime().Equal(old) {
 		t.Fatalf("identical content must skip the rename, mtime changed to %v", fi.ModTime())
 	}
 
-	if err := WriteAtomicHosts(path, []byte("10.8.0.1 ovcp\n10.8.0.2 alice\n"), -1); err != nil {
+	if err := WriteAtomicHosts(path, []byte("10.8.0.1 ovcp\n10.8.0.2 alice\n")); err != nil {
 		t.Fatal(err)
 	}
 	if fi, _ := os.Stat(path); fi.ModTime().Equal(old) {
@@ -171,7 +171,6 @@ func TestRefreshCertsHostsLiveDefaultRemote(t *testing.T) {
 		Store:          s,
 		CertsHostsPath: filepath.Join(t.TempDir(), "certs.hosts"),
 		DefaultRemote:  func() string { return remote },
-		DNSGroupGID:    -1,
 	}
 
 	die := func(err error) {

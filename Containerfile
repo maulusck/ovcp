@@ -1,10 +1,12 @@
-# OVCP all-in-one image: ovcp (as root) owns the PKI and starts openvpn. Run
+# OVCP all-in-one image: ovcp runs as the image's ovcp account (man ovcp, PRIVILEGES). Run
 # examples: README.md "Container"; TARGET=/cross-build/cache details: docs/BUILD.md.
 FROM --platform=$BUILDPLATFORM docker.io/library/node:22-alpine AS ui
 WORKDIR /src/web/ui
 COPY web/ui/package*.json ./
 RUN npm ci
-COPY web/ui .
+COPY web/ui/index.html web/ui/jsconfig.json web/ui/svelte.config.js web/ui/vite.config.js ./
+COPY web/ui/public ./public
+COPY web/ui/src ./src
 RUN npm run build
 
 # Runs on the builder's own platform (not emulated), cross-compiling via zig — same mechanism the Makefile
@@ -16,11 +18,14 @@ RUN apk add --no-cache zig mandoc
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
+COPY web/web.go ./web/
 COPY --from=ui /src/web/dist ./web/dist
+COPY docs/ovcp.8 ./docs/
 RUN mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
-# cache mount, not a layer: without it, COPY . . above forces a from-scratch zig/go rebuild on every
-# source change. See docs/BUILD.md, "The persistent build cache".
+# cache mount, not a layer: without it, any source change forces a from-scratch zig/go rebuild.
+# See docs/BUILD.md, "The persistent build cache".
 RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
     case "$TARGETARCH$TARGETVARIANT" in \
       amd64)   ZIG=x86_64-linux-musl ;; \
@@ -35,15 +40,14 @@ RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
 
 FROM docker.io/library/alpine:latest
 # refresh base packages at build time, not just whatever alpine:latest last
-# baked in — this ships a root-owned VPN/PKI tool, worth the extra seconds.
-RUN apk upgrade --no-cache && apk add --no-cache openvpn dnsmasq nftables
+# baked in — this ships a VPN/PKI tool, worth the extra seconds.
+RUN apk upgrade --no-cache && apk add --no-cache openvpn dnsmasq nftables \
+    && adduser -S -D -H ovcp && install -d -o ovcp -m 0700 /var/lib/ovcp
 COPY --from=build /ovcp /usr/bin/ovcp
 ENV OVCP_DATA=/var/lib/ovcp \
     OVCP_LISTEN=0.0.0.0:8443 \
     OVCP_CA_PASSPHRASE=changeme! \
-    OVCP_USER_PASSWORD=changeme! \
-    OVCP_OPENVPN_GROUP=nobody \
-    OVCP_DNSMASQ_GROUP=nobody
+    OVCP_USER_PASSWORD=changeme!
 # logrotate/log-shippers expect /var/log; symlink into the data volume
 # instead of duplicating files.
 RUN ln -s /var/lib/ovcp/logs /var/log/ovcp

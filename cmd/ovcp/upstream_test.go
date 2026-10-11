@@ -299,12 +299,9 @@ func newE2EHost(t *testing.T, outer netNS) *e2eHost {
 		"OVCP_DATA=" + dataDir, "OVCP_CA_PASSPHRASE=" + e2ePassphrase,
 		"OVCP_CTRL_SOCK=" + sockDir + "/c",
 		"OVCP_MGMT_SOCK=" + sockDir + "/m",
-		// The rootless netns maps exactly one uid/gid (0, via
-		// --map-root-user) with setgroups() left denied (the kernel's own
-		// unprivileged-userns restriction) — nobody/nogroup (the real
-		// default) can't be dropped to, and neither can any other identity,
-		// same-user included. No privilege drop at all, opted out via "".
-		"OVCP_OPENVPN_USER=", "OVCP_OPENVPN_GROUP=",
+		// The rootless netns maps exactly one uid (0, via --map-root-user):
+		// there's no other account to drop to.
+		"OVCP_USER=root",
 		// DNS isn't exercised by this suite and dnsmasq's pidfile isn't
 		// test-scoped (a real, shared system path) — skip starting it
 		// rather than risk colliding with a real dnsmasq elsewhere.

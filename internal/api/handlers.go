@@ -595,7 +595,7 @@ func (s *Server) handleCustomHostsPut(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := WriteAtomicHosts(s.CustomHostsPath, []byte(in.Content), s.DNSGroupGID); err != nil {
+	if err := WriteAtomicHosts(s.CustomHostsPath, []byte(in.Content)); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}

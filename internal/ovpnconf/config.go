@@ -33,7 +33,6 @@ type Config struct {
 
 	// paths (filled by the app from its data dir)
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, MgmtSocket, StatusLog string
-	RunAsUser, RunAsGroup                                               string // e.g. nobody/nogroup; empty = omit
 	ServerCN                                                            string // admin cert CN; drives DOMAIN-SEARCH push (Records tab)
 
 	// StatusInterval: seconds between openvpn rewriting StatusLog. Server-owned
@@ -92,19 +91,7 @@ func Default() Config {
 		Routes:     SplitCSV(os.Getenv("OVCP_OPENVPN_ROUTES")),
 		RedirectGW: os.Getenv("OVCP_OPENVPN_REDIRECT_GW") != "false",
 		Extra:      os.Getenv("OVCP_OPENVPN_EXTRA"),
-		RunAsUser:  envOr("OVCP_OPENVPN_USER", "nobody"),
-		RunAsGroup: envOr("OVCP_OPENVPN_GROUP", "nogroup"),
 	}
-}
-
-// envOr, unlike cmp.Or(os.Getenv(key), def), honors an explicit empty
-// value — needed for RunAsUser/RunAsGroup, where "" means "drop no
-// privileges" (e.g. no other uid/gid to drop to), not "unset".
-func envOr(key, def string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-	return def
 }
 
 // EnvInt reads key as an int, falling back to def if unset or unparseable —
@@ -198,14 +185,9 @@ func (c *Config) Render() []byte {
 	w("data-ciphers-fallback %s", c.Cipher)
 	w("auth SHA256")
 	w("keepalive 10 60")
-	// persist-key/-tun: openvpn drops to nobody at startup and can't re-read
-	// root-owned files, so these keep the tun device and key across SIGUSR1.
+	// persist-key/-tun: keep the tun device and key across SIGUSR1.
 	w("persist-key")
 	w("persist-tun")
-	if c.RunAsUser != "" {
-		w("user %s", c.RunAsUser)
-		w("group %s", c.RunAsGroup)
-	}
 	w("management %s unix", c.MgmtSocket)
 	if c.ManagementClientAuth {
 		w("management-client-auth")

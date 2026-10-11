@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -419,7 +420,9 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		switch *customOpts {
 		case "":
 		case "-":
-			extra, _ = editText("")
+			var err error
+			extra, err = editText("")
+			die(err)
 		default:
 			extra = commaOrLines(*customOpts)
 		}
@@ -1041,12 +1044,13 @@ func cmdRecordEdit(_ *flag.FlagSet) func(ctx *cliContext) {
 		pp := dataPaths(ctx.dataDir)
 		ctx.openStore().Close() // guarantees dns/ (and everything else) exists before the read/write below
 		cur, _ := os.ReadFile(pp.CustomHosts)
-		out, changed := editText(string(cur))
-		if !changed {
+		out, err := editText(string(cur))
+		die(err)
+		if out == string(cur) {
 			output(msg("no change"), printMsg)
 			return
 		}
-		die(api.WriteAtomicHosts(pp.CustomHosts, []byte(out), dnsGID(dnsRunAsGroup())))
+		die(api.WriteAtomicHosts(pp.CustomHosts, []byte(out)))
 		s := ctx.openStore()
 		s.Audit("cli", "dns_custom_change", "")
 		s.Close()
@@ -1652,20 +1656,25 @@ func commaOrLines(s string) string {
 	return strings.Join(parts, "\n")
 }
 
-// editText opens initial in $EDITOR (fallback vi), returning what was saved
-// and whether it changed — computed once so every caller gets it for free.
-func editText(initial string) (out string, changed bool) {
-	tmp := filepath.Join(os.TempDir(), "ovcp-edit.conf")
-	die(os.WriteFile(tmp, []byte(initial), 0o600))
-	defer os.Remove(tmp)
-	editor := cmp.Or(os.Getenv("EDITOR"), "vi")
-	cmd := exec.Command(editor, tmp)
+// editText opens initial in $EDITOR (default vi, run by the shell so it may
+// carry arguments) in a private temp file, and returns what was saved.
+func editText(initial string) (string, error) {
+	f, err := os.CreateTemp("", "ovcp-edit-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	_, err = f.WriteString(initial)
+	if err = errors.Join(err, f.Close()); err != nil {
+		return "", err
+	}
+	cmd := exec.Command("sh", "-c", `${EDITOR:-vi} "$1"`, "sh", f.Name())
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	die(cmd.Run())
-	data, err := os.ReadFile(tmp)
-	die(err)
-	out = string(data)
-	return out, out != initial
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("editor: %w", err)
+	}
+	out, err := os.ReadFile(f.Name())
+	return string(out), err
 }
 
 // cmdVPNConfigGet prints the persisted server config — GET /api/vpn/config's CLI twin.
@@ -1744,7 +1753,10 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 		switch *extra {
 		case "":
 		case "-":
-			cfg.Extra, _ = editText(cfg.Extra)
+			var err error
+			if cfg.Extra, err = editText(cfg.Extra); err != nil {
+				return cfg, err
+			}
 		default:
 			cfg.Extra = commaOrLines(*extra)
 		}

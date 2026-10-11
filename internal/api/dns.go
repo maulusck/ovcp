@@ -78,20 +78,18 @@ func (s *Server) RefreshCertsHosts(live []controller.VPNClient) error {
 		serverIP = ip
 	}
 	data := CertsHostsContent(certs, live, s.DefaultRemote(), serverIP)
-	return WriteAtomicHosts(s.CertsHostsPath, data, s.DNSGroupGID)
+	return WriteAtomicHosts(s.CertsHostsPath, data)
 }
 
-// WriteAtomicHosts installs data at path via temp+rename, skipping the
-// rename when data is unchanged so dnsmasq's inotify watch doesn't fire for
-// nothing. Chown failure is tolerated, not fatal, same as ensureDNSDir.
-func WriteAtomicHosts(path string, data []byte, gid int) error {
+// WriteAtomicHosts installs data at path via temp+rename, skipped when data is
+// unchanged so dnsmasq's inotify watch fires only on real changes.
+func WriteAtomicHosts(path string, data []byte) error {
 	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
 		return nil
 	}
 	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp")
-	if err := os.WriteFile(tmp, data, 0o640); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	os.Chown(tmp, -1, gid)
 	return os.Rename(tmp, path)
 }

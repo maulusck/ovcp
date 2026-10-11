@@ -1150,9 +1150,9 @@ func TestUnreachableServe(t *testing.T) {
 
 func TestBuildDnsmasqArgs(t *testing.T) {
 	ip := net.ParseIP("10.8.0.1")
-	args := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", false)
+	args := buildDnsmasqArgs(ip, "/d/dns", false)
 	want := []string{
-		"-k", "--user=nobody", "--group=nogroup", "--bind-dynamic",
+		"-k", "--user=root", "--bind-dynamic",
 		"--listen-address=10.8.0.1",
 		"--hostsdir=/d/dns", "--log-queries", "--log-facility=-",
 	}
@@ -1165,7 +1165,7 @@ func TestBuildDnsmasqArgs(t *testing.T) {
 		}
 	}
 
-	blocked := buildDnsmasqArgs("nobody", "nogroup", ip, "/d/dns", true)
+	blocked := buildDnsmasqArgs(ip, "/d/dns", true)
 	if !containsArg(blocked, "--no-resolv") || !containsArg(blocked, "--server=/#/") {
 		t.Fatalf("blockInternet=true must append --no-resolv and --server=/#/, got %v", blocked)
 	}
@@ -1272,15 +1272,6 @@ func containsArg(args []string, want string) bool {
 	return false
 }
 
-func TestDnsGID(t *testing.T) {
-	if gid := dnsGID("root"); gid != 0 {
-		t.Fatalf("dnsGID(root) = %d, want 0", gid)
-	}
-	if gid := dnsGID("this-group-should-not-exist-anywhere"); gid != -1 {
-		t.Fatalf("dnsGID(unknown) = %d, want -1", gid)
-	}
-}
-
 func TestEnsureSkeleton(t *testing.T) {
 	dir := t.TempDir()
 	pp := dataPaths(dir)
@@ -1289,12 +1280,12 @@ func TestEnsureSkeleton(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, want := range map[string]os.FileMode{
-		dir:            modeDataDir,
-		pp.PKIDir:      modePKIDir,
-		pp.LogsDir:     modeLogsDir,
-		pp.DNSDir:      modeDNSDir,
-		pp.CertsHosts:  modeDNSFile,
-		pp.CustomHosts: modeDNSFile,
+		dir:            0o700,
+		pp.PKIDir:      0o700,
+		pp.LogsDir:     0o700,
+		pp.DNSDir:      0o700,
+		pp.CertsHosts:  0o600,
+		pp.CustomHosts: 0o600,
 	} {
 		fi, err := os.Stat(path)
 		if err != nil || fi.Mode().Perm() != want {
@@ -1316,14 +1307,14 @@ func TestEnsureSkeleton(t *testing.T) {
 
 	// a pre-existing dataDir at the wrong mode must still be repaired —
 	// MkdirAll alone is a no-op here, only the explicit Chmod fixes it.
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := ensureSkeleton(dir); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != modeDataDir {
-		t.Fatalf("dataDir mode after repair = %v err=%v, want %o", fi, err, modeDataDir)
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("dataDir mode after repair = %v err=%v, want 0700", fi, err)
 	}
 }
 
@@ -1356,6 +1347,18 @@ func TestCustomOptsNoChange(t *testing.T) {
 	// validation run — it now saves through the same path `set` does.
 	if !strings.Contains(r.stdout, "client-to-client") {
 		t.Fatalf("edit should show its diff, not just 'saved': %+v", r)
+	}
+
+	// a failed edit fails the command and leaves no temp file; $EDITOR may carry arguments.
+	tmp := t.TempDir()
+	if r := run(t, withEnv(env, "TMPDIR="+tmp, "EDITOR=false"), "vpn", "config", "set", "-extra", "-"); r.code == 0 {
+		t.Fatalf("a failing editor must fail the command: %+v", r)
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("temp file left behind: %v", left)
+	}
+	if r := run(t, withEnv(env, "EDITOR="+noop+" --wait"), "vpn", "config", "set", "-extra", "-"); r.code != 0 {
+		t.Fatalf("$EDITOR with arguments: %+v", r)
 	}
 
 	// bare `set` (no flags at all) is also an empty diff — must not silently
@@ -1559,5 +1562,38 @@ func TestRecordCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.Custom, "10.8.0.50 pihole") {
 		t.Fatalf("record list -json custom = %q, want the edited entry", out.Custom)
+	}
+}
+
+// TestDropRoot: as (userns) root, an invocation becomes OVCP_USER in place —
+// same pid and name, every uid dropped, exactly dropCaps ambient — works
+// without NET_ADMIN, owns the data dir it creates, and never re-owns an
+// existing one. --map-auto maps subuids so "daemon" (uid 1) is a real target.
+func TestDropRoot(t *testing.T) {
+	if exec.Command("unshare", "--map-root-user", "--map-auto", "true").Run() != nil {
+		t.Skip("unshare --map-auto unavailable (needs /etc/subuid)")
+	}
+	d, err := os.MkdirTemp("", "ovcp-droproot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(d, 0o755)                     // daemon must reach its data dir
+	os.Chmod(filepath.Dir(binPath), 0o755) // and the binary
+	script := `set -e
+export OVCP_USER=daemon OVCP_DATA=$D/data OVCP_CTRL_SOCK=$D/run/c OVCP_MGMT_SOCK=$D/run/m \
+  OVCP_LISTEN=127.0.0.1:0 OVCP_OPENVPN_AUTOSTART=false OVCP_DNSMASQ_AUTOSTART=false
+trap 'kill $p 2>/dev/null; wait; rm -rf $D' EXIT
+setpriv --bounding-set -net_admin "$BIN" init -server-cn vpn.example.com -admin "" >/dev/null
+"$BIN" serve 2>/dev/null & p=$!
+for i in $(seq 50); do [ -S $D/run/c ] && break; sleep 0.1; done
+awk '/^Name/{print $2} /^Uid/{print $2$3$4$5} /^CapAmb/{print $2}' /proc/$p/status
+stat -c %u $D/data
+mkdir $D/foreign && OVCP_DATA=$D/foreign "$BIN" version >/dev/null && stat -c %u $D/foreign`
+	cmd := exec.Command("unshare", "--map-root-user", "--map-auto", "sh", "-c", script)
+	cmd.Env = append(os.Environ(), "D="+d, "BIN="+binPath,
+		"OVCP_CA_PASSPHRASE=correct horse battery staple", "OVCP_USER_PASSWORD=admin-password-1")
+	out, err := cmd.CombinedOutput()
+	if got, want := string(out), "ovcp\n1111\n0000000000001400\n1\n0\n"; err != nil || got != want {
+		t.Fatalf("got %q err=%v, want %q", got, err, want)
 	}
 }

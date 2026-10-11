@@ -4,25 +4,24 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# ovcp runs as root: it is the sole owner of the PKI (0600 root:root) and
-# starts openvpn itself as a detached worker. One unit, one process tree.
+# systemd drops privileges itself: ovcp never starts as root, and it and its
+# openvpn/dnsmasq/nft children hold only these two capabilities.
 ExecStart=/usr/bin/ovcp serve
 Environment=OVCP_DATA=/var/lib/ovcp
+User=ovcp
+Group=ovcp
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+# created owned by ovcp; overriding OVCP_DATA needs a matching StateDirectory=.
+StateDirectory=ovcp
+StateDirectoryMode=0700
+RuntimeDirectory=ovcp
+RuntimeDirectoryMode=0700
 Restart=on-failure
 RestartSec=2
-# openvpn (spawned by ovcp) needs the tun device and net admin
 DeviceAllow=/dev/net/tun rw
-RuntimeDirectory=ovcp
-RuntimeDirectoryMode=0750
 ProtectSystem=strict
 ProtectHome=true
-# ReadWritePaths is a literal path, not a $OVCP_DATA reference — systemd
-# can't expand it. Override OVCP_DATA via a drop-in (systemctl edit ovcp)
-# and update this path to match, or ProtectSystem=strict blocks writes there.
-ReadWritePaths=/var/lib/ovcp
-# root stays root (openvpn needs it) but everything else is stripped: no kernel/module/log
-# tampering, no new setuid, no exec-gained privilege, no writable+exec memory.
-# NoNewPrivileges doesn't block openvpn's/dnsmasq's own setuid() drop — that's self-demotion, not a gain via exec.
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true

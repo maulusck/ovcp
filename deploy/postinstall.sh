@@ -3,6 +3,14 @@
 # knows its layout/permissions. Honors OVCP_DATA if the installer set it.
 set -e
 DATA="${OVCP_DATA:-/var/lib/ovcp}"
+# the account ovcp drops to (see dropRoot): useradd (deb/rpm) or adduser (apk/OpenWrt).
+if ! id ovcp >/dev/null 2>&1; then
+	if command -v useradd >/dev/null 2>&1; then
+		useradd --system --no-create-home --shell /usr/sbin/nologin ovcp
+	else
+		adduser -S -D -H -s /sbin/nologin ovcp
+	fi
+fi
 OVCP_DATA="$DATA" ovcp init -skeleton
 # SELinux (RHEL/Fedora): auto-labels if the box is confined, safe no-op
 # elsewhere; never fails the install (see the script's own guards).

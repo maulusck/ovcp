@@ -1,5 +1,5 @@
 #!/bin/sh /etc/rc.common
-# OVCP — OpenVPN control plane, same shape as the systemd/OpenRC units: one root command, respawned by procd.
+# OVCP — OpenVPN control plane: started as root, ovcp drops to its own account; respawned by procd.
 # apk ships openrc/ovcp.initd by default (wrong interpreter here); postinstall.sh swaps this in when /etc/rc.common (procd's marker) is present.
 
 START=95

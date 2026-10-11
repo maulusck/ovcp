@@ -1,4 +1,4 @@
-.TH OVCP 8 "2026-07-26" "ovcp" "System Administration"
+.TH OVCP 8 "2026-10-11" "ovcp" "System Administration"
 .SH NAME
 ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for an OpenVPN server
 .SH SYNOPSIS
@@ -15,19 +15,18 @@ is a single static binary that manages one OpenVPN server: a built\-in
 certificate authority (no easy\-rsa), client profile export, server
 configuration, and a web admin UI. It talks to the running
 .BR openvpn (8)
-process over its management \fIunix socket\fR (disconnects only \(en
-connected\-client status is read from its periodic status file instead, see
-\fBFILES\fR) and owns everything else through files in its data directory.
-.B ovcp
-runs as root, is the sole owner of the PKI and configuration, and starts
-openvpn itself as a reaped foreground child \(en the same on the host, under
-systemd, and inside the container.
+process over its management \fIunix socket\fR to disconnect clients (the
+connected\-client list comes from openvpn's periodic status file, see
+\fBFILES\fR) and manages everything else through files in its data
+directory. It starts openvpn as a supervised foreground child and runs
+unprivileged, identically on a host, under systemd and in a container (see
+\fBPRIVILEGES\fR). Commands that use the data directory run as root or as
+the \fIovcp\fR account; the examples on this page omit \fBsudo\fR.
 .PP
 The CA private key is encrypted at rest; a passphrase held only in memory
 gates every signing operation (see \fBSECURITY\fR).
 .PP
-This page is also rendered into the web UI's \fBDocs\fR tab at build time
-\(en one source, readable with or without a terminal.
+This page is also rendered into the web UI's \fBDocs\fR tab at build time.
 .PP
 This page is the complete runtime reference. Building and packaging are
 documented in \fBBUILD.md\fR; internal design in \fBARCHITECTURE.md\fR.
@@ -70,11 +69,9 @@ Every operator secret \(en the CA passphrase, admin/user passwords \(en
 must be at least 8 characters and mix at least 2 of upper/lower/digit/
 symbol, enforced the same way whether set interactively, via
 \fBOVCP_CA_PASSPHRASE\fR / \fBOVCP_USER_PASSWORD\fR, or through the web UI.
-\fBOVCP_YOLO_PASSWORD\fR (set to anything non\-empty) waives this
-requirement across the CLI and web UI, since \fBserve\fR inherits its
-process environment \(en named for what it is, not a setting to reach for
-by accident. Every acceptance through this door is still audited
-(\fBweak_password_accepted\fR).
+\fBOVCP_YOLO_PASSWORD\fR (any non\-empty value) waives this requirement in
+the CLI and, through \fBserve\fR's environment, in the web UI. Every weak
+secret accepted this way is audited as \fBweak_password_accepted\fR.
 .PP
 Client private keys are embedded in the exported profile once and never
 stored server\-side (no escrow): a lost profile means revoke + reissue, not
@@ -114,34 +111,11 @@ checked against exactly one configured Telegram identity (numeric id or
 \fB@username\fR); every other sender gets a 403 reply and the message is
 otherwise ignored \(en for the first 3 attempts. Past that, the sender is
 blocked for the rest of the process's life: no more 403s, no API call, no
-log line. The bot's own command surface is deliberately narrow and
-report\-only for anything PKI\-related
-(\fB/status\fR reports openvpn and dnsmasq state plus a cert\-expiry
-summary; \fB/menu\fR hands out openvpn's Start/Stop/Restart/Reconnect;
-\fB/dns\fR hands out dnsmasq's own Start/Stop/Restart \(en Stop and
-Restart always behind a confirm step, for both; \fB/certs\fR lists every
-certificate grouped by status) \(en renewing or revoking any certificate
-(client, server, or the CA), user management, CA rotation, config, and
-backup are all unreachable from Telegram at any privilege, CLI/web\-login
-only. Its buttons call the same openvpn/dnsmasq lifecycle methods
-.B vpn
-and
-.B dns
-themselves use, so mashing Restart in the chat hits the same overlap guard
-described there \(en no more disruptive than doing it from the CLI.
-.SH QUICK START
-.nf
-.RS
-# 1. one\-shot setup: CA, server cert, tls\-crypt key, config, admin user
-ovcp init \-server\-cn vpn.example.com
-
-# 2. run (admin UI on https://127.0.0.1:8443)
-ovcp serve
-
-# 3. hand out a client profile
-ovcp certificate issue \-cn alice \-export \-remote vpn.example.com > alice.ovpn
-.RE
-.fi
+log line. The bot can only report status and start, stop, restart or
+reconnect the workers; certificate, user, CA, configuration and backup
+operations are unreachable from Telegram (see \fBtelegram\fR in
+\fBCOMMANDS\fR). Its lifecycle buttons use the same overlap guard as
+\fBvpn\fR and \fBdns\fR.
 .SH COMMANDS
 .TP
 .B init \fB\-server\-cn\fR \fIHOST\fR [\fB\-ca\-cn\fR \fINAME\fR] [\fB\-ca\-years\fR \fIN\fR] [\fB\-server\-days\fR \fIN\fR] [\fB\-admin\fR \fINAME\fR] [\fB\-mgmt\fR \fIPATH\fR]
@@ -159,12 +133,8 @@ anytime, and what packaging scripts use instead of their own
 .TP
 .B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-mgmt\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR]
 Run the HTTPS admin UI and REST API (default \fI127.0.0.1:8443\fR, self\-signed
-certificate generated on first run). \fB\-mgmt\fR (default
-\fI/run/ovcp/mgmt.sock\fR, same as \fB$OVCP_MGMT_SOCK\fR) and \fB\-ctrl\fR
-(default \fI/run/ovcp/control.sock\fR, same as \fB$OVCP_CTRL_SOCK\fR) are two
-independent sockets \(en the flag overrides take effect for this
-\fBserve\fR only, no env vars required; see \fBOVCP_MGMT_SOCK\fR /
-\fBOVCP_CTRL_SOCK\fR below for what each is for. Starts the
+certificate generated on first run). \fB\-mgmt\fR and \fB\-ctrl\fR override
+\fBOVCP_MGMT_SOCK\fR and \fBOVCP_CTRL_SOCK\fR for this invocation. Starts the
 .B openvpn
 worker from \fIserver.conf\fR as a foreground child (reaped on exit \(en no
 zombies) with its log in \fIlogs/openvpn.log\fR, and stops it on clean shutdown.
@@ -177,7 +147,7 @@ within 60 seconds, logging an error instead of retrying forever (fix the
 config, then \fBovcp vpn start\fR). A deliberate
 .B ovcp vpn stop
 never auto\-restarts.
-Exposes a root\-only control socket so a separate
+Exposes an owner\-only control socket so a separate
 .B ovcp vpn
 invocation can drive the worker. Refuses to start with an
 actionable error if
@@ -237,8 +207,9 @@ server. Three equivalent forms, pick whichever fits:
 a comma\-separated list, split into one directive per line:
 \fB\-custom\-opts\fR "keepalive 5 30,verb 4"
 .IP \(bu 2
-a bare \fB\-\fR, which opens \fB$EDITOR\fR (falls back to \fBvi\fR) for
-multi\-line editing, same idiom as \fBgit commit\fR
+a bare \fB\-\fR, which opens \fB$EDITOR\fR (default \fBvi\fR; run by the
+shell, so it may carry arguments such as \fBcode \-\-wait\fR) on a private
+temporary file
 .IP \(bu 2
 a file's contents by way of the shell:
 \fB\-custom\-opts\fR "$(cat FILE)" \(en already newline\-separated with no
@@ -302,10 +273,7 @@ of whatever is currently persisted (or the built\-in/env\-seeded defaults,
 see \fBinit\fR and \fBOVCP_OPENVPN_PROTO\fR and friends below, if nothing
 has been saved yet). \fB\-dns\fR and \fB\-routes\fR take a comma\-separated
 list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
-appending to it. \fB\-extra\fR takes the same three forms as
-\fBcertificate issue \-export\fR's \fB\-custom\-opts\fR (comma list, \fB$(cat
-FILE)\fR, or a bare \fB\-\fR to open the current directives in \fB$EDITOR\fR,
-same idiom as \fBgit commit\fR / \fBcrontab \-e\fR). \fB\-redirect\-gw\fR and
+appending to it. \\fB\\-extra\\fR takes the same three forms as\n\\fBcertificate issue \\-export\\fR's \\fB\\-custom\\-opts\\fR; a bare \\fB\\-\\fR\nopens the current directives. \fB\-redirect\-gw\fR and
 \fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
 or \fB1\fR/\fB0\fR, case\-insensitive \(en the same boolean vocabulary as
 \fBdns config set \-block\-internet\fR below. Rejects an invalid combination
@@ -337,7 +305,7 @@ the block by falling through to one of those other pushed resolvers.
 \fBvpn config set\fR and \fBdns config set\fR both print a non\-fatal
 warning (CLI: stderr; web UI: inline) when they detect either combination,
 but never block the save \(en it's occasionally the intended setup (e.g. a
-resolver deliberately kept reachable for split\-DNS).
+resolver kept reachable for split\-DNS).
 .RE
 .TP
 .B vpn config preview [\fIsame flags as\fR \fBvpn config set\fR]
@@ -352,9 +320,7 @@ saved until the same flags are run through \fBvpn config set\fR instead \(en
 Re\-encrypt the CA private key under a new passphrase (prompts for the
 current one, then the new one twice). The CA keypair and certificate are
 unchanged \(en issued certificates stay valid, nothing needs reissuing.
-\fICLI\-only\fR by design \(en a rare maintenance operation, not a routine
-one like \fBcertificate issue\fR/\fBcertificate revoke\fR, so the new
-passphrase never has to cross the HTTP surface at all.
+\\fICLI\\-only\\fR, so the new passphrase never crosses HTTP.
 .TP
 .B ca renew [\fB\-years\fR \fIN\fR]
 Reissue the CA certificate itself in place: a fresh serial and extended
@@ -363,12 +329,7 @@ from \fBca rotate\fR (passphrase only) \(en this is what to run if the CA
 certificate's own expiry, not its passphrase, is the problem. Every
 already\-issued client/server cert stays valid: verification only checks
 the CA's signing key, never which CA certificate happens to be on disk, so
-nothing needs reissuing. \fICLI\-only\fR by design, same as \fBca rotate\fR
-\(en not because a passphrase crosses HTTP here (it doesn't, unlike
-\fBrotate\fR), but because the CA is the one thing in \fBovcp\fR where a
-mistake or a hijacked admin session costs everything, not just one cert;
-that stays behind shell access to the machine, not a browser tab. The web
-UI only ever shows the CA's status (Dashboard), never a way to act on it.
+nothing needs reissuing. \\fICLI\\-only\\fR, like \\fBca rotate\\fR: a mistake or a hijacked admin session\non the CA affects every certificate, so CA operations require shell access.\nThe web UI shows the CA status (Dashboard) only.
 Takes effect on the next
 .B ovcp vpn restart
 \(en openvpn does not hot\-reload the CA certificate either.
@@ -383,7 +344,7 @@ into the client/server certs surface.
 Write an encrypted archive (argon2id + AES\-256\-GCM, prompts twice for a
 backup passphrase) of the CA, CRL, tls\-crypt key, TOTP key,
 \fIserver.conf\fR, and database. Also available from the web UI (Settings, admin role).
-Deliberately excludes the openvpn server certificate and private key:
+Excludes the openvpn server certificate and private key:
 OpenVPN clients trust the CA chain and a CN match, never a pinned server
 cert, so a restore just issues a fresh one (\fBcertificate renew\fR)
 \(en the server's private key never has to leave the
@@ -393,10 +354,7 @@ either.
 .TP
 .B backup restore [\fB\-force\fR] \fIFILE\fR
 Decrypt and extract a backup into \fB\-data\fR (must be an uninitialized
-directory, or pass \fB\-force\fR to overwrite one). \fICLI\-only\fR by
-design \(en restoring is an offline, disaster\-recovery operation against a
-data directory, not something to expose over HTTP on a possibly\-live
-server. Follow with \fBcertificate renew\fR (the archive has
+directory, or pass \fB\-force\fR to overwrite one). \\fICLI\\-only\\fR: restoring is an offline\ndisaster\\-recovery operation on a data directory, not exposed over HTTP. Follow with \fBcertificate renew\fR (the archive has
 no server cert) and \fBovcp vpn start\fR.
 .TP
 .B status [\fB\-ctrl\fR \fIPATH\fR]
@@ -458,7 +416,7 @@ replacement).
 .B kill
 disconnects one connected client immediately by CN, without touching the
 worker process itself. SIGHUP / in\-place reload is intentionally not
-supported: a fresh restart re\-reads every root\-owned file, which SIGHUP
+supported: a fresh restart re\-reads every file, which SIGHUP
 cannot. Each lifecycle op prints the resulting openvpn pid, so a repeated
 .B start
 reports \(lqalready started\(rq rather than spawning a second process.
@@ -501,9 +459,7 @@ on) only until the first save \(en see \fBvpn config set\fR above for the
 same seed\-once\-then\-persisted pattern.
 .B dns config get
 prints the current value; \fB\-block\-internet\fR on \fBdns config set\fR
-takes the same boolean vocabulary as \fBvpn config set \-redirect\-gw\fR
-(\fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR, \fB1\fR/\fB0\fR,
-case\-insensitive); omitting it makes \fBset\fR a no\-op. See
+takes the same boolean values as \\fBvpn config set \\-redirect\\-gw\\fR;\nomitting it makes \fBset\fR a no\-op. See
 \fBPush internal DNS\fR under \fBvpn config set\fR above for how this
 interacts with that setting:
 turning this on without also pushing the internal resolver, or combining
@@ -522,8 +478,7 @@ prints every certificate (not just currently-connected ones) with its DNS
 include/exclude status, same filters/sort/coloring as \fBcertificate
 list\fR, plus \fIcustom.hosts\fR' raw content.
 .B edit
-opens the custom entries in \fB$EDITOR\fR (fallback vi), same idiom as
-\fBvpn config set \-extra \-\fR's \fB$EDITOR\fR trigger.
+opens the custom entries in \\fB$EDITOR\\fR (see \\fB\\-custom\\-opts\\fR).
 .B include
 and
 .B exclude
@@ -860,11 +815,10 @@ array of \fB{status, kind, cn, serial, expires}\fR.
 The full persisted server config: \fB{Proto, Port, Subnet, Cipher, DNS,
 PushInternalDNS, Routes, RedirectGW, Extra}\fR plus the \fBovcp\fR\-managed
 path/runtime fields (\fBCACert, ServerCert, ServerKey, CRL, TLSCrypt,
-MgmtSocket, StatusLog, StatusInterval, RunAsUser, RunAsGroup, ServerCN\fR).
-Deliberately \fInot\fR this page's usual lowercase field\-name convention
-\(en it's the same untagged Go struct \fBGET\fR/\fBPUT /api/vpn/config\fR
-already return, so a script gets byte\-identical shapes from the CLI and
-the web UI for this one resource.
+MgmtSocket, StatusLog, StatusInterval, ServerCN\fR).
+Field names are the Go struct's, not this page's lowercase convention: it
+is the same untagged struct \fBGET\fR/\fBPUT /api/vpn/config\fR return, so
+the CLI and the REST API produce identical shapes.
 .TP
 .B vpn config preview
 \fB{diff, changed}\fR: \fBdiff\fR an array of unified \fB+\fR/\fB\-\fR
@@ -1010,32 +964,16 @@ connected clients) may be bound before the tun interface exists
 (IP_FREEBIND).
 .TP
 .B OVCP_MGMT_SOCK
-OpenVPN management socket path (default \fI/run/ovcp/mgmt.sock\fR); same
-path \fBserve \-mgmt\fR sets for a single invocation, no env var needed.
-Read/written only by \fBserve\fR itself (and \fBinit\fR/\fBserve\fR, when
-writing it into server.conf) \(en OpenVPN's management interface serves
-exactly one connected client, ever, and \fBserve\fR holds that connection
-for its whole life. Nothing else dials this socket directly.
+OpenVPN management socket (default \fI/run/ovcp/mgmt.sock\fR);
+\fBserve \-mgmt\fR sets it for a single invocation. Only \fBserve\fR
+connects to it.
 .TP
 .B OVCP_CTRL_SOCK
-ovcp control socket for \fBvpn\fR (including \fBkill\fR), \fBdns\fR,
-\fBtelegram\fR, \fBdebug\fR, and \fBstats \-follow\fR (default
-\fI/run/ovcp/control.sock\fR); same path \fBserve \-ctrl\fR sets for a
-single invocation, no env var needed. The CLI talks to a running
-\fBserve\fR here for anything that needs its in\-process state \(en only
-\fBkill\fR and the connected\-client list (\fBclients\fR, used by the
-top\-level \fBovcp status\fR and by \fBstats \-follow\fR) actually proxy
-through to \fBserve\fR's own \fBOVCP_MGMT_SOCK\fR connection, per above.
-Everything else answers from \fBserve\fR's own state directly, never
-touching the management socket: \fBvpn\fR/\fBdns\fR
-\fBstatus\fR/\fBstart\fR/\fBstop\fR/\fBrestart\fR drive their own
-\fBSupervisor\fR; \fBvpn reconnect\fR sends \fBSIGUSR1\fR straight to the
-openvpn child; \fBtelegram\fR lifecycle ops drive its own \fBPoller\fR;
-\fBdebug\fR flips an in\-process log\-level variable. This is a
-\fIseparate\fR socket from
-\fBOVCP_MGMT_SOCK\fR/\fB\-mgmt\fR above \(en overriding one does not move
-the other; pass both flags (or set both env vars) to run \fBserve\fR
-entirely out of a non\-root\-writable directory.
+Control socket through which CLI commands reach a running \fBserve\fR
+(default \fI/run/ovcp/control.sock\fR); \fBserve \-ctrl\fR sets it for a
+single invocation. Independent of \fBOVCP_MGMT_SOCK\fR: set both to move
+all of \fBserve\fR's sockets out of \fI/run/ovcp\fR. Internals:
+\fBARCHITECTURE.md\fR.
 .TP
 .B OVCP_STATUS_INTERVAL
 Seconds between openvpn rewriting \fI/run/ovcp/status\fR (see \fBFILES\fR)
@@ -1056,10 +994,8 @@ Non\-interactive equivalents for \fBca rotate\fR's new passphrase and
 \fBbackup\fR's archive passphrase. Same leak caveat as above.
 .TP
 .B OVCP_YOLO_PASSWORD
-Set (to anything non\-empty) to waive the length/complexity check on every
-passphrase/password above, CLI and web UI alike. Every weak secret it lets
-through is still audited as \fBweak_password_accepted\fR. Named for what it
-is, not a setting to reach for by accident.
+Any non\-empty value waives the strength check on every passphrase and
+password above (see \fBSECURITY\fR).
 .TP
 .B OVCP_TELEGRAM_TOKEN
 Non\-interactive equivalent for \fBtelegram config set \-token\fR's bot
@@ -1071,10 +1007,10 @@ Non\-interactive equivalent for \fBtelegram config set\fR's \fB\-admin\fR
 flag: the numeric Telegram id or \fB@username\fR the bot will ever respond
 to.
 .TP
-.B OVCP_OPENVPN_USER, OVCP_OPENVPN_GROUP
-Unprivileged account openvpn drops to after startup (default \fInobody\fR
-/ \fInogroup\fR). The container image sets \fBOVCP_OPENVPN_GROUP=nobody\fR
-since Alpine has no \fInogroup\fR.
+.B OVCP_USER
+Account a root invocation drops to (default \fIovcp\fR; see
+\fBPRIVILEGES\fR). \fBroot\fR opts out (containers or user namespaces
+where root is already confined).
 .TP
 .B OVCP_OPENVPN_PROTO, OVCP_OPENVPN_PORT, OVCP_OPENVPN_SUBNET,
 .B OVCP_OPENVPN_CIPHER, OVCP_OPENVPN_DNS, OVCP_OPENVPN_ROUTES,
@@ -1147,10 +1083,6 @@ same \(lqanything but \fBfalse\fR means on\(rq rule as
 one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR above \(en
 see \fBlogs\fR in \fBCOMMANDS\fR.
 .TP
-.B OVCP_DNSMASQ_USER, OVCP_DNSMASQ_GROUP
-Same as \fBOVCP_OPENVPN_USER\fR/\fBGROUP\fR, but dnsmasq's own account \(en
-independently configurable, same defaults.
-.TP
 .B OVCP_OPENVPN_AUTOSTART, OVCP_DNSMASQ_AUTOSTART
 Set to \fBfalse\fR to skip starting that worker automatically when
 \fBserve\fR starts (default: both start). Either can still be started
@@ -1158,19 +1090,10 @@ manually afterward (\fBovcp vpn start\fR / \fBovcp dns start\fR, or the
 web UI); this only gates the boot\-time launch.
 .TP
 .B NO_COLOR
-Same as \fB\-no\-color\fR: disable ANSI color in \fBcertificate list\fR/
-\fBrecord list\fR/\fBstatus\fR/\fBvpn status\fR/\fBdns status\fR/
-\fBtelegram status\fR/\fBuser list\fR/\fBca status\fR's table output, the
-diff lines in \fBvpn config preview\fR, the platform/build tag in
-\fBversion\fR, and in \fBovcp\fR's own log lines. Color is already off
-automatically when the relevant stream isn't a terminal (piped, journal,
-redirected to a file).
+Same as \fB\-no\-color\fR.
 .TP
 .B OVCP_JSON
-Same as \fB\-json\fR: JSON instead of human text, for every command (see
-\fBMACHINE\-READABLE OUTPUT\fR). Set it once in the environment \(en a
-container, a CI runner, an automation user's shell profile \(en instead of
-passing \fB\-json\fR on every invocation.
+Same as \fB\-json\fR.
 .SH FILES
 All paths below are rooted at \fB$OVCP_DATA\fR (default \fI/var/lib/ovcp\fR)
 \(en set it once and everything follows, including these.
@@ -1202,8 +1125,8 @@ connection stats (Stats tab; 24\-hour retention). Private keys are never
 stored in the database.
 .TP
 .I $OVCP_DATA/admin\-tls/
-Self\-signed certificate for the admin UI \(en deliberately its own root,
-never \fBpki/ca.key.enc\fR. That CA's only job is deciding which client
+Self\-signed certificate for the admin UI, issued by its own key, never by
+\fBpki/ca.key.enc\fR. That CA's only job is deciding which client
 certs get VPN access; sharing it with the browser\-facing cert would let
 a CA compromise MITM the web login too, not just mint VPN clients. Its
 CN is a snapshot taken at \fBovcp serve\fR startup \(en a
@@ -1250,10 +1173,8 @@ Symlink to \fI$OVCP_DATA/logs\fR (package/container installs), for a
 log\-shipper or an external \fBlogrotate\fR used instead of the internal one.
 .TP
 .I $OVCP_MGMT_SOCK, $OVCP_CTRL_SOCK
-OpenVPN management socket (unix only, never TCP) and ovcp's root\-only
-(0600) control socket for \fBvpn\fR/\fBdns\fR/\fBtelegram\fR lifecycle ops,
-\fBdebug\fR, and \fBstats \-follow\fR. Default to \fI/run/ovcp/mgmt.sock\fR
-and \fI/run/ovcp/control.sock\fR.
+The OpenVPN management socket (unix only, never TCP) and ovcp's
+owner\-only (0600) control socket; defaults in \fBENVIRONMENT\fR.
 .TP
 .I /run/ovcp/status
 openvpn's periodic connected\-clients snapshot, read by \fBstatus\fR/
@@ -1349,56 +1270,57 @@ ovcp stats \-cn dana\-phone \-follow
 .RE
 .fi
 .SH PRIVILEGES
-.B ovcp
-runs as root and is the sole owner of the PKI and configuration, so those
-files are secure by default \(en there is no privilege drop and no
-per\-mode juggling. It starts openvpn, which needs root or CAP_NET_ADMIN at
-startup and then drops to \fInobody\fR on its own. The \fIpki\fR directory
-is \fI0701\fR and \fI$OVCP_DATA\fR itself is \fI0751\fR \(en not
-\fI0700\fR/\fI0750\fR \(en so openvpn can still traverse into them after
-dropping to \fInobody\fR to re\-stat \fIcrl.pem\fR. Individual files range
-from \fI0600\fR (private keys, \fIovcp.db\fR) through \fI0640\fR
-(\fIserver.conf\fR) to \fI0644\fR (the CA/server certificates and the CRL,
-meant to be publicly verifiable).
-In containers, run with \-\-cap\-add NET_ADMIN; the runtime dir
-\fI/run/ovcp\fR (0750) holds the management and control sockets. openvpn
-runs as a foreground child of ovcp and cannot outlive it (Pdeathsig).
-dnsmasq (optional \(en only used if found on \fIPATH\fR) gets the same
-treatment: a foreground child, its own privilege drop
-(\fBOVCP_DNSMASQ_USER\fR/\fBGROUP\fR), and its own \fI$OVCP_DATA/dns\fR
-directory (\fI0750\fR, group\-owned by that account, so \fB\-\-hostsdir\fR
-can list it). \fBinit \-skeleton\fR (re)applies every mode above in one
-shot, e.g. after fixing a permissions mistake by hand.
+Started as root \(en any command, not just \fBserve\fR \(en \fBovcp\fR
+becomes \fBOVCP_USER\fR (default \fIovcp\fR) in place: same process, no
+root process left, keeping only \fBCAP_NET_ADMIN\fR and
+\fBCAP_NET_BIND_SERVICE\fR (those it holds), which openvpn, dnsmasq and nft
+inherit. Root at most creates \fI$OVCP_DATA\fR itself and never reads or
+writes anything inside it. Under systemd the unit
+does this itself (\fBUser=\fR, \fBAmbientCapabilities=\fR) and ovcp never
+sees root.
 .PP
-ovcp does not separate the admin UI from the PKI/openvpn\-supervision path
-into a lower\-privilege process; see \fBARCHITECTURE.md\fR for the
-rationale. The shipped systemd unit sandboxes the whole process instead
-(\fBProtectSystem=strict\fR, \fBNoNewPrivileges\fR,
-\fBMemoryDenyWriteExecute\fR, and more) \(en native containment, not an
-app\-level privilege split.
+\fBovcp\fR sets an owner only on a \fI$OVCP_DATA\fR or \fI/run/ovcp\fR it
+creates itself; it never re\-owns an existing path, so a pre\-existing one
+must already belong to that account (packages, the container image and the
+unit's \fBStateDirectory=\fR arrange this). The account must be able to
+reach both the binary and \fI$OVCP_DATA\fR, so neither can be inside a
+private \fI$HOME\fR. Every directory is \fI0700\fR; files range from \fI0600\fR (private keys,
+\fIovcp.db\fR) to \fI0644\fR (the CA/server certificates and the CRL,
+meant to be publicly verifiable); \fBinit \-skeleton\fR re\-applies the
+modes. \fI/run/ovcp\fR holds the management and control sockets.
+Containers need \fB\-\-cap\-add NET_ADMIN\fR.
+.PP
+openvpn and dnsmasq (optional, used if found on \fIPATH\fR) run as
+foreground children of ovcp and cannot outlive it (Pdeathsig); dnsmasq
+reads its own \fI$OVCP_DATA/dns\fR via \fB\-\-hostsdir\fR.
+.PP
+The admin UI and openvpn supervision run in the same process at the same
+privilege level; \fBARCHITECTURE.md\fR gives the rationale. The systemd
+unit additionally sandboxes the process tree (\fBProtectSystem=strict\fR,
+\fBNoNewPrivileges\fR, \fBMemoryDenyWriteExecute\fR and more).
 .SH DEPLOYMENT
 One runtime, everywhere: ovcp owns the openvpn worker (fork/exec + signals,
 no SIGHUP, no in\-place reload) the same way on bare metal, under systemd,
 and inside a container. If ovcp restarts, its \fBserve\fR process brings
 openvpn back up.
 .SS systemd
-A single unit runs ovcp as root; ovcp starts and stops openvpn itself.
+A single unit runs ovcp unprivileged (see \fBPRIVILEGES\fR); ovcp starts
+and stops openvpn itself.
 Distro packages install \fIovcp.service\fR automatically; a from\-source
-build does not (see \fBBUILD.md\fR) and needs it copied in manually:
+install (\fBBUILD.md\fR, binary and account) needs it copied in manually:
 .nf
 .RS
 sudo install \-m644 deploy/systemd/ovcp.service /usr/lib/systemd/system/
-sudo OVCP_DATA=/var/lib/ovcp ovcp init \-server\-cn vpn.example.com
+sudo ovcp init \-server\-cn vpn.example.com
 sudo systemctl enable \-\-now ovcp
 .RE
 .fi
 Overriding \fBOVCP_DATA\fR (e.g. via \fBsystemctl edit ovcp\fR) also needs
-the unit's \fBReadWritePaths=\fR updated to match \(en it is a literal
-path, not a \fB$OVCP_DATA\fR reference, and \fBProtectSystem=strict\fR
+a matching \fBStateDirectory=\fR \(en \fBProtectSystem=strict\fR
 silently blocks writes anywhere else.
 .SS container
-One all\-in\-one image (\fBmake image\fR): ovcp (as root) owns the PKI and
-starts openvpn inside the container. Init once, then run:
+One all\-in\-one image (\fBmake image\fR): ovcp drops to the image's \fIovcp\fR
+account and starts openvpn inside the container. Init once, then run:
 .nf
 .RS
 podman run \-\-rm \-v ovcp:/var/lib/ovcp ovcp init \-server\-cn vpn.example.com
@@ -1452,11 +1374,10 @@ No bind\-address setting exists; the rendered \fIserver.conf\fR never emits
 a \fBlocal\fR directive, so openvpn listens on \fBall interfaces\fR on its
 configured \fBport\fR/\fBproto\fR. To scope it to one address, add
 \fBlocal <IP>\fR yourself via \fBvpn config set \-extra\fR (see \fBvpn
-config\fR in \fBCOMMANDS\fR) \(en deliberately not a first\-class flag,
-the same escape hatch \fB\-extra\fR is for generally.
+config\fR in \fBCOMMANDS\fR); there is no dedicated flag.
 .TP
 .B dnsmasq
-Not configurable at all, on purpose: \fB\-\-listen\-address\fR is always
+Not configurable: \fB\-\-listen\-address\fR is always
 the VPN's own tunnel IP (the server's \fBServerTunIP()\fR, e.g.
 \fI10.8.0.1\fR). DNS only ever answers already\-connected VPN clients; it
 has no reason to exist on any other address, so there is no setting for one.
@@ -1499,8 +1420,7 @@ line if either looks off \(en advisory, never fatal. The NAT half is
 best\-effort: it can confirm a rule via the standard iptables
 .B nat
 table, but a host doing NAT through native nftables, firewalld, or a
-router upstream of this box reads as unverifiable, not broken \(en it
-under\-warns before it cries wolf.
+router upstream of this box is reported as unverifiable, not missing.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

@@ -44,7 +44,6 @@ type Server struct {
 	NftPath          string               // "" if nft isn't on PATH
 	CertsHostsPath   string               // Records tab: machine-owned certs.hosts, regenerated wholesale
 	CustomHostsPath  string               // Records tab: user-authored custom.hosts, edited as one blob
-	DNSGroupGID      int                  // dnsmasq's resolved drop-to group; both hosts files are chgrp'd to it
 	UI               fs.FS                // built frontend; nil = API only
 	DebugLevel       *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
 	PollInterval     time.Duration        // RunSampler's ticker; set from OVCP_STATUS_INTERVAL, same cadence OpenVPN writes its status file at

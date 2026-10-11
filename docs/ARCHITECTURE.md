@@ -1,191 +1,152 @@
 # Architecture
 
-Internal design of ovcp: how the source is organized, how the process is
-composed at runtime, and the rationale behind decisions that affect more
-than one package. Audience: contributors and reviewers working on the
-codebase.
+Internal design of ovcp: source layout, runtime composition, and the
+rationale for decisions that span more than one package. Audience:
+contributors and reviewers.
 
-- Command and flag reference: `man ovcp` ([`docs/ovcp.8`](ovcp.8)).
-- Build and packaging: [`docs/BUILD.md`](BUILD.md).
+- Commands, flags, environment, files, privileges: `man ovcp`
+  ([`docs/ovcp.8`](ovcp.8)).
+- Building and packaging: [`docs/BUILD.md`](BUILD.md).
 
 ## Source layout
 
 | Path | Responsibility |
 |---|---|
-| `cmd/ovcp` | CLI entrypoint: flag parsing, command dispatch, and the `serve` composition root. |
+| `cmd/ovcp` | CLI entrypoint: flag parsing, command dispatch, privilege drop, and the `serve` composition root. |
 | `internal/pki` | Certificate authority: issue, revoke, renew, CRL generation, `.ovpn` bundle assembly, tls-crypt key generation. |
-| `internal/store` | SQLite persistence for users, sessions, certificate metadata, audit log, and connection stats. Never stores private keys. |
-| `internal/backup` | Encrypted export/import of the CA, CRL, tls-crypt key, TOTP key, server config, and database. |
-| `internal/controller` | OpenVPN process supervision (fork/exec, reap, restart backoff), the control-socket server, and the management-socket client used to query and drive a running OpenVPN process. |
+| `internal/store` | SQLite persistence for users, sessions, certificate metadata, audit log and connection statistics. Never stores private keys. |
+| `internal/backup` | Encrypted export and import of the CA, CRL, tls-crypt key, TOTP key, server configuration and database. |
+| `internal/controller` | Worker supervision (fork/exec, reap, restart backoff), the control-socket server, and the OpenVPN management-socket client. |
 | `internal/ovpnconf` | Validated `server.conf` generation from stored configuration. |
-| `internal/upstream` | Policy-routed VPN egress: renders and applies the routing-table/nftables rules that steer client traffic out an admin-chosen interface, or redirects it to an in-process relay that speaks SOCKS5 to an admin-chosen backend (Tor, proxychains, self-hosted). Also holds per-CN overrides: one client's egress can differ from the server-wide default, installed reactively off OpenVPN's own `>CLIENT:ESTABLISHED` management-socket event (see `internal/controller/mgmt.go`) rather than through any address allocation of ovcp's own. |
-| `internal/auth` | Password hashing (argon2id), sessions, TOTP, login rate-limiting, RBAC. |
-| `internal/telegram` | Optional notification bot: long-poller, narrow command surface, expiry sweep. |
-| `internal/api` | REST/JSON handlers, the embedded web UI, HTTPS, CSRF, and the session/RBAC middleware chain. |
-| `web/ui` | Svelte 5 sources for the admin UI, built to `web/dist` and embedded in the binary. |
-| `web` | `go:embed`s the built `web/dist` tree and exposes it as an `fs.FS` to `internal/api`. |
+| `internal/upstream` | Policy-routed egress: routing-table and nftables rules that steer client traffic out a chosen interface or into an in-process SOCKS5 relay. Per-client overrides are installed on OpenVPN's `>CLIENT:ESTABLISHED` management event (`internal/controller/mgmt.go`). |
+| `internal/auth` | Password hashing (argon2id), sessions, TOTP, login rate limiting, RBAC. |
+| `internal/telegram` | Optional notification bot: long-poller, command menu, expiry sweep. |
+| `internal/api` | REST/JSON handlers, the embedded web UI, HTTPS, CSRF, and the session and RBAC middleware. |
+| `web/ui` | Svelte 5 sources for the admin UI, built to `web/dist`. |
+| `web` | Embeds `web/dist` and exposes it to `internal/api` as an `fs.FS`. |
 
 ## Process model
 
-`ovcp` is a single binary that plays three roles depending on the command
-invoked: a CLI that runs one operation and exits, an HTTPS server (`serve`)
-that hosts the REST API and embedded UI, and a supervisor for one OpenVPN
-process. `serve` composes all of it in one process: it starts the OpenVPN
-worker through `internal/controller`, and wires the HTTP handlers in
-`internal/api` to `internal/pki`, `internal/store`, `internal/auth`,
-`internal/backup`, and `internal/telegram`.
+`ovcp` is one binary with three roles: a CLI that performs one operation
+and exits, an HTTPS server (`serve`) hosting the REST API and the UI, and a
+supervisor for the OpenVPN and dnsmasq workers. `serve` composes all three
+in one process: it starts the workers through `internal/controller` and
+wires the handlers in `internal/api` to `internal/pki`, `internal/store`,
+`internal/auth`, `internal/backup` and `internal/telegram`.
 
-There is no separate daemon, message broker, or database server. The
-`ovcp.db` SQLite file and the PKI directory are the only persistent state,
-and both are read and written in-process.
+There is no separate daemon, broker or database server. `ovcp.db` and the
+PKI directory are the only persistent state, both accessed in-process.
 
-### Two sockets, two protocols
+### Sockets
 
-A running `serve` process exposes two Unix sockets, each serving a
-different purpose:
+A running `serve` uses two Unix sockets:
 
-- The **management socket** (`OVCP_MGMT_SOCK`) speaks OpenVPN's own
-  management protocol. OpenVPN's management interface accepts exactly one
-  connected client for its entire lifetime; `serve` holds that connection
-  for as long as the OpenVPN worker runs.
-- The **control socket** (`OVCP_CTRL_SOCK`) is ovcp's own protocol,
-  root-only, used by a separate `ovcp` invocation (`vpn`, `dns`,
-  `telegram`, `debug`, `upstream`, `stats -follow`) to reach a running
-  `serve`. Only
-  `kill` and the connected-client list (`clients`, used by the top-level
-  `ovcp status` and by `stats -follow`) actually proxy through to the
-  management-socket connection above. Everything else answers from
-  in-process state instead: `vpn`/`dns start|stop|restart|status` drive
-  their own `Supervisor` (see Supervisor design, below); `vpn reconnect`
-  sends `SIGUSR1` straight to the openvpn child, also without touching
-  mgmt; `telegram start|stop|restart|status` drives its own `Poller`;
-  `debug on`/`off` flips an in-process log-level variable;
-  `upstream-assign` rewrites one connected client's live nft rule
-  (`upstream assign`'s CLI twin to the REST handler, both funneling
-  through `api.ApplyAssign` — see `internal/api/upstream.go`);
-  `upstream-reapply` re-applies the persisted upstream config (`upstream
-  reconcile`, and automatically on `vpn start`/`restart` — see Supervisor
-  design, below). Nothing dials the management socket except `serve`
-  itself. `dns block-internet` is not a control-socket op at all — it
-  reads/writes a stored setting directly and works without `serve`
-  running.
+- The **management socket** (`OVCP_MGMT_SOCK`) speaks OpenVPN's management
+  protocol. OpenVPN accepts one management client for its lifetime; `serve`
+  holds that connection while the worker runs, and nothing else dials it.
+- The **control socket** (`OVCP_CTRL_SOCK`, owner-only) carries ovcp's own
+  protocol from separate `ovcp` invocations (`vpn`, `dns`, `telegram`,
+  `debug`, `upstream`, `status`, `stats -follow`) to `serve`. `kill` and
+  the connected-client list are proxied to the management connection.
+  Every other operation is answered in-process: `vpn`/`dns`
+  `start|stop|restart|status` drive their `Supervisor`, `vpn reconnect`
+  sends `SIGUSR1` to the OpenVPN child, `telegram` drives the `Poller`,
+  `debug` sets the log level, `upstream-assign` rewrites one connected
+  client's nftables rule (the CLI and REST paths share `api.ApplyAssign`),
+  and `upstream-reapply` re-applies the persisted upstream configuration.
 
-Exact defaults, flags, and environment variables for both sockets are
-documented in `man ovcp`, `ENVIRONMENT`.
+`dns block-internet` is a stored setting, not a control-socket operation,
+and works without `serve`. Socket defaults and flags: `man ovcp`,
+**ENVIRONMENT**.
 
-## Supervisor design
+## Supervisor
 
-OpenVPN runs as a foreground child of `serve` (`fork`/`exec`, reaped on
-exit, tied to the parent's lifetime via `Pdeathsig`) rather than as an
-independently managed system service. This keeps process ownership
-unambiguous: if `serve` restarts, it brings OpenVPN back up; if `serve`
-exits, OpenVPN cannot outlive it.
+Workers run as foreground children of `serve` (fork/exec, reaped on exit,
+bound to the parent by `Pdeathsig`). If `serve` restarts it brings them
+back; if it exits they cannot outlive it.
 
-An exit `ovcp` did not itself request is logged and the worker is
-auto-restarted after a fixed delay. A configuration bad enough to make
-OpenVPN exit repeatedly trips a breaker after 5 attempts within 60 seconds,
-so a persistent misconfiguration produces one error instead of a restart
-loop.
+An exit ovcp did not request is logged and the worker is restarted; a
+crash loop trips a breaker, so a persistent misconfiguration yields one
+error instead of endless restarts (thresholds: `man ovcp`, `serve`).
 
-Reload is restart-only; in-place reload via `SIGHUP` is not supported. A
-fresh restart re-reads every root-owned file (certificates, CRL,
-`server.conf`); `SIGHUP` cannot guarantee the same. `SIGUSR1` remains
-available for a soft session reset that does not replace the process.
-Command-level behavior for `vpn start|stop|restart|reconnect|status` is
-documented in `man ovcp`, `COMMANDS`.
+Reload is restart-only. A restart re-reads every file (certificates, CRL,
+`server.conf`), which `SIGHUP` cannot guarantee. `SIGUSR1` remains
+available as a soft session reset. Command semantics: `man ovcp`,
+**COMMANDS**.
 
-`Supervisor`'s lifecycle methods (`Start`/`Stop`/`Restart`/`Reconnect`)
-`TryLock` a single per-worker mutex instead of blocking on it: a call that
-overlaps one already in flight is rejected (`ErrBusy`, surfaced as HTTP 409)
-rather than queued behind it. Queuing would still be memory-safe — the
-mutex was already held for each op's whole real duration — but it would
-let a rapid-fire caller (a stuck client retrying, a scripted loop) stack up
-a run of genuinely executed restarts, one after another, each disrupting
-the service again. There is deliberately no cooldown timer on top of this:
-the mutex is already held for exactly as long as the real stop+start cycle
-takes, so pacing falls out of the worker's own actual speed instead of a
-guessed constant. `internal/telegram`'s `Poller` mirrors the identical
-`TryLock`/reject pattern for its own `Start`/`Stop`/`Restart`, independent
-of `Supervisor` (different type, same shape) since its lifecycle is driven
-through the same control socket.
+Lifecycle methods (`Start`, `Stop`, `Restart`, `Reconnect`) take a
+per-worker mutex with `TryLock`. A call that overlaps one in flight fails
+with `ErrBusy` (HTTP 409) instead of queueing, so repeated callers cannot
+stack a series of disruptive restarts. The mutex is held for the real
+duration of each operation, which paces callers without a cooldown timer.
+`internal/telegram`'s `Poller` applies the same pattern to its own
+lifecycle.
 
-dnsmasq (Records tab, optional — only if found on `PATH`) is a second
-worker under the same `Supervisor`/`Lifecycle` type, reachable over the
-same control socket via a `dns-` op prefix; no `reconnect`. Its `Args` are
-recomputed fresh on every (re)start (`Supervisor.PreStart`) from the
-persisted server config's subnet, not baked in once, so a subnet change
-or OpenVPN restart never leaves it listening on a stale address
-(`--bind-dynamic` also tolerates the address not existing yet).
+dnsmasq is a second worker of the same `Supervisor` type, addressed on the
+control socket with a `dns-` prefix and without `reconnect`. Its arguments
+are recomputed on every start (`Supervisor.PreStart`) from the persisted
+subnet, and `--bind-dynamic` tolerates the listen address not existing
+yet, so it never listens on a stale address.
 
-`internal/upstream`'s nftables rules mark traffic by the VPN subnet
-configured in `server.conf` — a value that only ever changes at OpenVPN
-`start`/`restart` (it never hot-reloads), never at config-save time. The
-control socket's dispatcher (`internal/controller/control.go`) reflects
-this exactly: a successful `vpn start`/`restart` triggers the same
-upstream re-apply `upstream reconcile` uses, so nft's notion of the
-subnet can never drift from what the running process actually has;
-`vpn stop`/`reconnect` deliberately do not, since neither changes what
-OpenVPN considers its subnet to be.
+`internal/upstream` marks traffic by the VPN subnet, which changes only
+when OpenVPN starts or restarts. A successful `vpn start` or `restart`
+therefore re-applies the upstream rules, as `upstream reconcile` does;
+`stop` and `reconnect` do not, since neither changes the subnet.
 
 `RoutingPrereqsWarning` (`internal/controller`) checks two host settings
-ovcp never manages: IPv4 forwarding, and an outbound NAT/masquerade rule
-for the default route. Both are needed for a plain client (no `upstream`
-override) to reach the internet at all — orthogonal to `internal/upstream`'s
-own reserved nftables band, which only covers overridden egress. `status`/
-`vpn start` surface a miss as one advisory `warning:` line. The NAT half is
-a heuristic — it greps iptables' `nat` table specifically — so a host
-routing NAT through native nftables, firewalld, or a router upstream of
-this box reads as unverifiable, not broken: it under-warns before it cries
-wolf.
+ovcp does not manage: IPv4 forwarding and an outbound NAT rule for the
+default route. Both are required for clients without an upstream override
+to reach the internet; what is checked and reported: `man ovcp`,
+**NETWORKING**.
 
 ## Privilege model
 
-`ovcp` runs as a single root-owned process; the admin UI, the REST API, and
-PKI operations all execute in the same process and the same privilege
-level. Splitting this — a root supervisor plus a non-root HTTP worker
-talking over IPC — is unresolved: no design pass has been done yet.
+ovcp runs as one process at one privilege level, and that level is not
+root. `dropRoot` (`cmd/ovcp`) enforces two invariants on every
+invocation:
 
-Current leaning against it: reaching the admin UI at all already requires
-defeating the VPN's own authentication, CSRF protection, RBAC, and
-optional TOTP. A second process and an IPC protocol would add
-implementation and audit surface without obviously changing the effective
-trust boundary, since compromising the HTTP worker still yields the same
-PKI and configuration access an attacker would need to target the root
-process directly. Any real design pass would also have to solve how the
-unprivileged side reaches PKI ops and OpenVPN control without just
-re-growing root through the IPC channel. Until that happens, process
-containment is delegated to the OS: the shipped systemd unit sandboxes the
-whole process (`ProtectSystem=strict`, `NoNewPrivileges`,
-`MemoryDenyWriteExecute`, and more — see `deploy/systemd/ovcp.service`).
+- **No root process survives.** A root invocation switches to `OVCP_USER`
+  in place: setuid, keep `dropCaps` as ambient capabilities, then exec
+  itself under the same pid. The workers inherit exactly that set, so no
+  configuration, including `server.conf`'s `Extra` directives, can raise a
+  worker above the privileges the admin UI already has. The systemd unit
+  applies the same drop natively (`User=`, `AmbientCapabilities=`).
+- **Ownership is set only at creation.** ovcp chowns a directory only when
+  it has just created it, and does so through file descriptors (`mkdirat`,
+  `openat` with `O_NOFOLLOW`, `fchown`). It never changes the owner of an
+  existing path, so no link or path substitution can redirect a chown
+  performed as root. The layout of pre-existing directories belongs to the
+  installer.
 
-File modes, capability requirements, and container privilege flags are
-documented in `man ovcp`, `PRIVILEGES`.
+A root supervisor with a non-root web worker was rejected: the worker
+would still need to rewrite routing and `server.conf`, so the IPC between
+them would carry root-equivalent operations while adding a protocol to
+secure. Containment beyond the drop is delegated to the OS; the systemd
+unit sandboxes the whole process tree (`deploy/systemd/ovcp.service`).
 
-`$OVCP_DATA`'s own directory tree (the root, `pki/`, `logs/`, `dns/`) has
-exactly one owner: `cmd/ovcp`'s `ensureSkeleton`. `internal/store`,
-`internal/pki`, and `internal/controller` no longer create or `chmod` their
-own directories — they trust the tree already exists, because every
-stateful command reaches it through `cliContext.openStore`, which calls
-`ensureSkeleton` first (`serve` included: `cmdServe` opens the store, then
-calls `runServe`). It's idempotent and cheap, so it runs on every
-invocation rather than once at install time; `ovcp init -skeleton` exposes
-it directly, for packaging scripts and as a permissions-repair command.
+The operational details (account, capabilities, modes, container flags)
+are specified in `man ovcp`, **PRIVILEGES**.
+
+`$OVCP_DATA`'s tree (the root, `pki/`, `logs/`, `dns/`) is created and its
+modes repaired only by `ensureSkeleton` (`cmd/ovcp`); when started as root,
+`dropRoot` creates the root directory first so it can set its owner.
+`internal/store`, `internal/pki` and `internal/controller` assume the tree
+exists, because every stateful command reaches it through
+`cliContext.openStore`, which calls `ensureSkeleton` first. It is
+idempotent and runs on every invocation; `ovcp init -skeleton` runs it
+alone, for packaging and permission repair.
 
 ## Data boundaries
 
-Three storage locations, three different exposure levels:
+- **`internal/store` (SQLite)**: operational metadata only: users,
+  sessions, certificate records, audit log, statistics. No private key
+  material.
+- **PKI directory**: the CA private key (argon2id + AES-256-GCM) and the
+  server keypair. The CA passphrase exists only in memory during a signing
+  operation.
+- **Client private keys**: generated, embedded once into the exported
+  `.ovpn`, and discarded. There is no escrow; a lost profile is revoked and
+  reissued.
 
-- **`internal/store` (SQLite)** — operational metadata only: users,
-  sessions, certificate records, audit log, connection stats. No private
-  key material is ever written here.
-- **PKI directory (filesystem)** — the CA private key (encrypted,
-  argon2id + AES-256-GCM) and the server keypair. The CA passphrase exists
-  only in process memory for the duration of a signing operation and is
-  never persisted.
-- **Client private keys** — generated, embedded once into the exported
-  `.ovpn` profile, and discarded. There is no server-side escrow; a lost
-  profile is a revoke-and-reissue, not a recovery.
-
-Authoritative file paths and their contents are documented in `man ovcp`,
-`FILES`; the security properties of each are documented in `man ovcp`,
-`SECURITY`.
+File paths and contents: `man ovcp`, **FILES**. Security properties:
+`man ovcp`, **SECURITY**.

@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -189,6 +190,7 @@ func main() {
 			}
 			body := c.run(fs) // registers flags on fs
 			fs.Parse(args[1:])
+			dropRoot(*dataDir)
 			body(ctx)
 			return
 		}
@@ -203,14 +205,10 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	if lf, err := os.OpenFile(pp.OvcpLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640); err == nil {
 		slog.SetDefault(slog.New(newLogHandler(io.MultiWriter(logWriter(), lf))))
 	}
-	if os.Geteuid() != 0 {
-		slog.Warn("not root; ovcp owns the PKI and starts openvpn, both need root")
-	}
 
 	ovVersion, ovPath, _ := controller.OpenVPNVersion() // both "" if not found — advisory only
 	sup := newSupervisor(dataDir, ovPath)
 	dnsVersion, dnsPath, _ := controller.DnsmasqVersion() // same advisory-only treatment
-	dnsGid := dnsGID(dnsRunAsGroup())
 	nftVersion, nftPath, _ := controller.NftablesVersion()
 	upstreamsEnabled := upstream.Enabled(nftPath)
 	dnsSup := newDNSSupervisor(pp, dnsPath, s)
@@ -254,7 +252,6 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 		NftPath:          nftPath,
 		CertsHostsPath:   pp.CertsHosts,
 		CustomHostsPath:  pp.CustomHosts,
-		DNSGroupGID:      dnsGid,
 		DNS:              dnsSup,
 		PollInterval:     time.Duration(statusInterval()) * time.Second,
 	}
@@ -411,20 +408,14 @@ func newSupervisor(dataDir, bin string) *controller.Supervisor {
 	}
 }
 
-// dnsRunAsUser/dnsRunAsGroup: dnsmasq's own drop-to account, independently
-// configurable from openvpn's (OVCP_OPENVPN_USER/GROUP) — same shape,
-// same defaults, but its own knob, not silently shared.
-func dnsRunAsUser() string  { return cmp.Or(os.Getenv("OVCP_DNSMASQ_USER"), "nobody") }
-func dnsRunAsGroup() string { return cmp.Or(os.Getenv("OVCP_DNSMASQ_GROUP"), "nogroup") }
-
 // buildDnsmasqArgs assembles dnsmasq's argv. --hostsdir auto-reloads on
 // change; --bind-dynamic tolerates serverIP not existing yet; --log-facility=-
 // logs to stderr (Supervisor's inherited fd) instead of dnsmasq opening LogPath itself.
-func buildDnsmasqArgs(user, group string, serverIP net.IP, dnsDir string, blockInternet bool) []string {
+// --user=root keeps dnsmasq in ovcp's identity (it only switches users as root).
+func buildDnsmasqArgs(serverIP net.IP, dnsDir string, blockInternet bool) []string {
 	args := []string{
 		"-k",
-		"--user=" + user,
-		"--group=" + group,
+		"--user=root",
 		"--bind-dynamic",
 		"--listen-address=" + serverIP.String(),
 		"--hostsdir=" + dnsDir,
@@ -467,25 +458,85 @@ func newDNSSupervisor(pp paths, bin string, s *store.Store) *controller.Supervis
 				slog.Warn("dnsmasq: server tun IP", "err", err)
 				ip = net.IPv4zero
 			}
-			return buildDnsmasqArgs(dnsRunAsUser(), dnsRunAsGroup(), ip, pp.DNSDir, api.LoadDNSConfig(s).BlockInternet)
+			return buildDnsmasqArgs(ip, pp.DNSDir, api.LoadDNSConfig(s).BlockInternet)
 		},
 		LogPath: pp.DnsmasqLog,
 	}
 }
 
-// dnsGID resolves dnsmasq's drop-to group to a gid, so the hosts files can
-// be chgrp'd to it — group-scoped, tighter than the pki dir's world-traversal
-// precedent. -1 (not found) means "leave the file's group alone".
-func dnsGID(group string) int {
-	g, err := user.LookupGroup(group)
-	if err != nil {
-		return -1
+// dropCaps is all ovcp keeps of root: tun and nft, and dnsmasq's port 53.
+var dropCaps = []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE}
+
+// dropRoot re-runs a root invocation as $OVCP_USER (default ovcp) in place,
+// holding only the dropCaps it was given; openvpn, dnsmasq and nft inherit
+// them. OVCP_USER=root stays root.
+// ponytail: one uid for ovcp and its workers; per-worker uids need a root spawner.
+func dropRoot(dataDir string) {
+	name := cmp.Or(os.Getenv("OVCP_USER"), "ovcp")
+	if os.Geteuid() != 0 || name == "root" {
+		return
 	}
-	gid, err := strconv.Atoi(g.Gid)
+	u, err := user.Lookup(name)
 	if err != nil {
-		return -1
+		die(fmt.Errorf("%w: create that system account, or set OVCP_USER=root", err))
 	}
-	return gid
+	uid, err := strconv.Atoi(u.Uid)
+	die(err)
+	gid, err := strconv.Atoi(u.Gid)
+	die(err)
+	for _, d := range []string{dataDir, filepath.Dir(ctrlSock()), filepath.Dir(mgmtSock())} {
+		die(mkdirOwned(d, uid, gid))
+	}
+	exe, err := os.Executable()
+	die(err)
+
+	runtime.LockOSThread() // capabilities are per thread: set them here, exec from here
+	hdr := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+	var c [2]unix.CapUserData
+	die(unix.Capget(&hdr, &c[0]))
+	var keep uint32
+	for _, cp := range dropCaps {
+		keep |= c[0].Permitted & (1 << cp)
+	}
+	die(unix.Prctl(unix.PR_SET_KEEPCAPS, 1, 0, 0, 0))
+	die(syscall.Setgroups(nil))
+	die(syscall.Setgid(gid))
+	die(syscall.Setuid(uid))
+	c = [2]unix.CapUserData{{Effective: keep, Permitted: keep, Inheritable: keep}}
+	die(unix.Capset(&hdr, &c[0]))
+	for _, cp := range dropCaps {
+		if keep&(1<<cp) != 0 {
+			die(unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_RAISE, cp, 0, 0))
+		}
+	}
+	die(fmt.Errorf("exec %s as %s: %w", exe, name, syscall.Exec(exe, os.Args, os.Environ())))
+}
+
+// mkdirOwned creates dir for uid:gid; an existing dir is left as it is. The
+// chown goes through the new dir's own fd, so nothing done to the path in
+// the meantime can redirect it.
+func mkdirOwned(dir string, uid, gid int) error {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	parent, err := os.Open(filepath.Dir(dir))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	switch err := unix.Mkdirat(int(parent.Fd()), filepath.Base(dir), 0o700); err {
+	case nil:
+	case unix.EEXIST:
+		return nil
+	default:
+		return err
+	}
+	fd, err := unix.Openat(int(parent.Fd()), filepath.Base(dir), unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	return unix.Fchown(fd, uid, gid)
 }
 
 // refreshCertsHostsCLI regenerates certs.hosts after a CLI-side cert change
@@ -494,8 +545,7 @@ func dnsGID(group string) int {
 func refreshCertsHostsCLI(dataDir string, s *store.Store) {
 	live, _ := controller.Clients(ctrlSock())
 	pp := dataPaths(dataDir)
-	gid := dnsGID(dnsRunAsGroup())
-	srv := &api.Server{Store: s, CertsHostsPath: pp.CertsHosts, DNSGroupGID: gid,
+	srv := &api.Server{Store: s, CertsHostsPath: pp.CertsHosts,
 		DefaultRemote: func() string { return adminCertCN(dataDir) }}
 	if err := srv.RefreshCertsHosts(live); err != nil {
 		slog.Warn("certs.hosts refresh failed", "err", err)
@@ -529,43 +579,25 @@ func dataPaths(dataDir string) paths {
 	}
 }
 
-// Every $OVCP_DATA permission ovcp sets — ensureSkeleton below is the only place they're applied.
-const (
-	modeDataDir = 0o751 // root:root — world-traverse only, nothing listable/readable without a file's own grant
-	modePKIDir  = 0o701 // root:root — same trick; ca.crt/crl.pem (0644) are the public bits behind it
-	modeLogsDir = 0o750 // root:root — no unprivileged process opens into it directly (fds inherited pre-exec)
-	modeDNSDir  = 0o750 // root:dnsGID — group-scoped, confidential hosts content, not world-readable
-	modeDNSFile = 0o640 // root:dnsGID
-)
-
-// ensureSkeleton creates/repairs the whole tree above. Idempotent; called by
-// every command that touches the data dir, via cliContext.openStore.
+// ensureSkeleton creates/repairs the tree, all 0700 and private to ovcp's
+// account. Idempotent; every command touching the data dir reaches it via
+// cliContext.openStore.
 func ensureSkeleton(dataDir string) error {
 	pp := dataPaths(dataDir)
-	if err := os.MkdirAll(dataDir, modeDataDir); err != nil {
-		return err
+	for _, d := range []string{dataDir, pp.PKIDir, pp.LogsDir, pp.DNSDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(d, 0o700); err != nil { // MkdirAll no-ops the mode on an existing dir
+			return err
+		}
 	}
-	if err := os.Chmod(dataDir, modeDataDir); err != nil { // MkdirAll no-ops the mode if dataDir already exists
-		return err
-	}
-	if err := os.MkdirAll(pp.PKIDir, modePKIDir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(pp.LogsDir, modeLogsDir); err != nil {
-		return err
-	}
-	gid := dnsGID(dnsRunAsGroup())
-	if err := os.MkdirAll(pp.DNSDir, modeDNSDir); err != nil {
-		return err
-	}
-	os.Chown(pp.DNSDir, -1, gid)
 	for _, f := range []string{pp.CertsHosts, pp.CustomHosts} {
 		if _, err := os.Stat(f); os.IsNotExist(err) {
-			if err := os.WriteFile(f, nil, modeDNSFile); err != nil {
+			if err := os.WriteFile(f, nil, 0o600); err != nil {
 				return err
 			}
 		}
-		os.Chown(f, -1, gid)
 	}
 	return nil
 }
