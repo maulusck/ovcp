@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,37 @@ func mockAPI(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(SetAPIBaseForTesting(srv.URL + "/bot"))
+}
+
+// TestSendMessageSplits: a long text goes out as in-order chunks of at most
+// maxMessage bytes, cut on line breaks, markup on the last chunk only.
+func TestSendMessageSplits(t *testing.T) {
+	type sent struct {
+		Text   string
+		Markup any `json:"reply_markup"`
+	}
+	var got []sent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m sent
+		json.NewDecoder(r.Body).Decode(&m)
+		got = append(got, m)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(SetAPIBaseForTesting(srv.URL + "/bot"))
+
+	text := strings.TrimSuffix(strings.Repeat("  · alice-laptop (client) — expires in 30d\n", 300), "\n")
+	newBot(goodToken).sendMessage(context.Background(), 1, text, map[string]any{"k": 1})
+	var parts []string
+	for i, m := range got {
+		if len(m.Text) > maxMessage || (m.Markup != nil) != (i == len(got)-1) {
+			t.Fatalf("chunk %d: %d bytes, markup %v", i, len(m.Text), m.Markup)
+		}
+		parts = append(parts, m.Text)
+	}
+	if len(got) < 2 || strings.Join(parts, "\n") != text {
+		t.Fatalf("%d chunks don't rejoin to the input", len(got))
+	}
 }
 
 // TestSetTokenAndAdmin covers both independently — setting one must never

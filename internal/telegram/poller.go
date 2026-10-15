@@ -465,8 +465,7 @@ func certDetail(c store.Cert) string {
 }
 
 // certsText: every cert (client, server, CA), grouped by status — report
-// only, renew/revoke stays CLI/web-UI-only. ponytail: no length cap
-// (Telegram's own 4096-char limit is the ceiling); paginate if cert count ever outgrows it.
+// only, renew/revoke stays CLI/web-UI-only. Any length: sendMessage splits it.
 func (p *Poller) certsText() string {
 	certs, err := p.s.AllCerts(p.p)
 	if err != nil {

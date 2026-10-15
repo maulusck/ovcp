@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // apiBase is a var, not a const, so tests can point it at an httptest
@@ -72,7 +74,25 @@ func (b *bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
 
 // markup is *inlineKeyboard (buttons on this one message), *replyKeyboard
 // (persistent, replaces the device keyboard), or nil.
+// maxMessage is sendMessage's limit in UTF-16 units; a byte count is never smaller.
+const maxMessage = 4096
+
+// sendMessage splits text on line breaks into chunks Telegram accepts
+// (an overlong line is cut at a rune boundary); markup rides the last one.
 func (b *bot) sendMessage(ctx context.Context, chatID int64, text string, markup any) {
+	for len(text) > maxMessage {
+		cut := strings.LastIndexByte(text[:maxMessage], '\n')
+		if cut <= 0 {
+			for cut = maxMessage; !utf8.RuneStart(text[cut]); cut-- {
+			}
+		}
+		b.send(ctx, chatID, text[:cut], nil)
+		text = strings.TrimPrefix(text[cut:], "\n")
+	}
+	b.send(ctx, chatID, text, markup)
+}
+
+func (b *bot) send(ctx context.Context, chatID int64, text string, markup any) {
 	body := map[string]any{"chat_id": chatID, "text": text}
 	if markup != nil {
 		body["reply_markup"] = markup
