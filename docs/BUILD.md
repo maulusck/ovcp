@@ -351,12 +351,11 @@ Live acceptance on real machines, this host plus an Alpine client VM:
 
 ## CI / the release pipeline
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the gates
-above on every push and pull request; there, a skipped `TestE2E` or
-`TestDropRoot` fails the build.
-
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) runs on
-every `v*` tag push and has three stages:
+One workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+Its `test` job runs the gates above on every push and pull request; there,
+a skipped `TestE2E` or `TestDropRoot` fails the build. A `v*` tag push
+also runs three release stages, each only after `test` passes (toolchain
+versions live once, in the workflow's `env`):
 
 1. **`build`** — every `TARGET` row above, as a separate matrix job:
    binary, shell completions, and (`.deb`/`.rpm`/`.zst` for glibc targets,
