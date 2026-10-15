@@ -206,6 +206,7 @@ t "certificate issue -out is gone" "! O certificate issue -cn x -out /tmp/x 2>&1
 t "duplicate active CN refused (schema index)" "! sudo -n env OVCP_CA_PASSPHRASE=$CA ovcp certificate issue -cn vm3 >/dev/null 2>&1"
 t "logs rotate" "O logs rotate"
 t "user add operator" "sudo -n env OVCP_USER_PASSWORD=Ops-pass-12 ovcp user add -name ops -role operator"
+t "username outside the name rule refused" "! sudo -n env OVCP_USER_PASSWORD=Ops-pass-12 ovcp user add -name 'bad name' -role operator"
 t "audit has login + issue" "O audit | grep -q login && O audit | grep -q issue"
 t "stats has samples" "O stats | grep -q 'sample'"
 
