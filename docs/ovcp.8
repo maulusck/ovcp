@@ -108,9 +108,7 @@ be argon2id\-hashed the way a password is. Same exposure tier as
 someone send/read messages as that bot, nothing more \(en it grants no
 access to the CA, the database, or the admin UI. Every inbound message is
 checked against exactly one configured Telegram identity (numeric id or
-\fB@username\fR); every other sender gets a 403 reply and the message is
-otherwise ignored \(en for the first 3 attempts. Past that, the sender is
-blocked for the rest of the process's life: no more 403s, no API call, no
+\fB@username\fR); every other sender is ignored: no reply, only a debug
 log line. The bot can only report status and start, stop, restart or
 reconnect the workers; certificate, user, CA, configuration and backup
 operations are unreachable from Telegram (see \fBtelegram\fR in
@@ -664,7 +662,7 @@ business on the command line): prompts interactively, or reads
 \fBOVCP_TELEGRAM_TOKEN\fR, validated against Telegram's \fBgetMe\fR before
 saving. \fB\-admin\fR takes the numeric user id or \fB@username\fR
 directly (default \fBOVCP_TELEGRAM_ADMIN\fR if set); anyone else who
-messages the bot gets a 403 reply and nothing else.
+messages the bot is ignored (no reply).
 \fBtelegram config get\fR prints whether a token is set, the current admin,
 and whether the chat is linked yet (a \fB@username\fR admin only links once
 they've messaged the bot; re\-saving the same token or admin never unlinks

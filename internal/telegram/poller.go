@@ -26,11 +26,6 @@ var notifyActions = map[string]bool{
 	"revoke": true, "user_add": true, "user_del": true, "ca_rotate": true, "renew_ca": true,
 }
 
-// unauthorizedBlockThreshold: an unrecognized sender gets this many 403s,
-// then goes silent for the process's life, capping the sendMessage burst a spam wave would trigger.
-// ponytail: unbounded in-memory map, no eviction/TTL; add one if abused.
-const unauthorizedBlockThreshold = 3
-
 type Poller struct {
 	s    *store.Store
 	p    *pki.PKI
@@ -41,10 +36,6 @@ type Poller struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	running bool
-
-	abuseMu  sync.Mutex
-	attempts map[int64]int
-	blocked  map[int64]bool
 }
 
 func New(s *store.Store, p *pki.PKI, vpn, dns controller.Lifecycle, mgmt *controller.Client) *Poller {
@@ -226,30 +217,6 @@ func (p *Poller) loop(ctx context.Context, b *bot, admin string) {
 	}
 }
 
-// shouldReplyUnauthorized tracks id's attempts and reports whether this one
-// still gets a 403 reply; past unauthorizedBlockThreshold it's blocked for good.
-func (p *Poller) shouldReplyUnauthorized(id int64, username string) bool {
-	p.abuseMu.Lock()
-	defer p.abuseMu.Unlock()
-	if p.blocked == nil {
-		p.blocked = map[int64]bool{}
-		p.attempts = map[int64]int{}
-	}
-	if p.blocked[id] {
-		return false
-	}
-	p.attempts[id]++
-	if p.attempts[id] >= unauthorizedBlockThreshold {
-		p.blocked[id] = true
-		delete(p.attempts, id)
-		slog.Warn("telegram: blocking unauthorized sender after repeated attempts",
-			"id", id, "username", username, "threshold", unauthorizedBlockThreshold)
-		return true // this message still gets one final reply, explaining why
-	}
-	slog.Debug("telegram: unauthorized sender rejected", "id", id, "username", username)
-	return true
-}
-
 func matches(admin string, u user) bool {
 	if id, err := strconv.ParseInt(admin, 10, 64); err == nil {
 		return u.ID == id
@@ -272,10 +239,8 @@ func (p *Poller) handle(ctx context.Context, b *bot, admin string, u update) {
 	if from.ID == 0 {
 		return
 	}
-	if !matches(admin, from) {
-		if p.shouldReplyUnauthorized(from.ID, from.Username) && u.Message != nil {
-			b.sendMessage(ctx, chatID, "🚫 403: not my admin.", nil)
-		}
+	if !matches(admin, from) { // strangers get no reply: nothing to learn, nothing to amplify
+		slog.Debug("telegram: ignored unauthorized sender", "id", from.ID, "username", from.Username)
 		return
 	}
 	if err := p.s.SetSetting(keyChat, strconv.FormatInt(chatID, 10)); err != nil {
