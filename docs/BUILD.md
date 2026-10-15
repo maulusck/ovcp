@@ -351,6 +351,10 @@ Live acceptance on real machines, this host plus an Alpine client VM:
 
 ## CI / the release pipeline
 
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the gates
+above on every push and pull request; there, a skipped `TestE2E` or
+`TestDropRoot` fails the build.
+
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) runs on
 every `v*` tag push and has three stages:
 

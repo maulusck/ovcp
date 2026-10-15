@@ -1,0 +1,32 @@
+name: ci
+
+# Every push and PR runs the gates in BUILD.md. The E2E and TestDropRoot must
+# run, never skip: a skipped one fails the build.
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: install test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mandoc openvpn dnsmasq-base nftables uidmap
+          # 24.04's AppArmor denies unprivileged user namespaces; the rootless E2E needs them
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # TestDropRoot maps subordinate ids (unshare --map-auto)
+          grep -q "^$USER:" /etc/subuid || echo "$USER:100000:65536" | sudo tee -a /etc/subuid /etc/subgid
+      - run: make ui
+      - run: go vet ./cmd/... ./internal/...
+      - run: test -z "$(gofmt -l cmd internal web)"
+      - run: mandoc -T lint -W warning docs/ovcp.8
+      - run: go test ./cmd/... ./internal/... -skip 'TestE2E|TestDropRoot'
+      - name: E2E and TestDropRoot, no skips
+        run: |
+          go test -v ./cmd/ovcp -run 'TestE2E|TestDropRoot' | tee e2e.log
+          ! grep -- '--- SKIP' e2e.log
