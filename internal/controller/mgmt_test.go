@@ -133,14 +133,14 @@ func TestKill(t *testing.T) {
 	sock, _ := fakeMgmt(t)
 	c := NewClient(sock, writeStatus(t, killStatus))
 	for _, msg := range []string{"HALT", "RESTART"} {
-		if err := c.Kill("alice", msg); err != nil {
-			t.Fatalf("%s: %v", msg, err)
+		if n, err := c.Kill("alice", msg); n != 1 || err != nil {
+			t.Fatalf("%s: n=%d err=%v", msg, n, err)
 		}
 	}
-	if err := c.Kill("nobody", "HALT"); err == nil {
-		t.Fatal("want error for a cn with no session")
+	if n, err := c.Kill("nobody", "HALT"); n != 0 || err != nil {
+		t.Fatalf("no session: n=%d err=%v, want 0 and no error", n, err)
 	}
-	if err := c.Kill("alice", "SIGTERM"); err == nil {
+	if _, err := c.Kill("alice", "SIGTERM"); err == nil {
 		t.Fatal("want error for an unknown message")
 	}
 }
@@ -150,10 +150,10 @@ func TestKill(t *testing.T) {
 func TestAppErrorKeepsConnection(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
 	c := NewClient(sock, writeStatus(t, killStatus))
-	if err := c.Kill("ghost", "HALT"); err == nil {
+	if _, err := c.Kill("ghost", "HALT"); err == nil {
 		t.Fatal("want the fake's ERROR reply for ghost")
 	}
-	if err := c.Kill("alice", "HALT"); err != nil {
+	if _, err := c.Kill("alice", "HALT"); err != nil {
 		t.Fatal(err)
 	}
 	if got := atomic.LoadInt32(accepts); got != 1 {
@@ -305,7 +305,7 @@ func TestClientConnectDuringKillDoesNotDeadlock(t *testing.T) {
 	defer server.Close()
 
 	killDone := make(chan error, 1)
-	go func() { killDone <- c.Kill("alice", "HALT") }()
+	go func() { _, err := c.Kill("alice", "HALT"); killDone <- err }()
 
 	r := bufio.NewReader(server)
 	if got := readLine(t, server, r); got != "client-kill 7 HALT" {
@@ -375,14 +375,14 @@ func readLine(t *testing.T, conn net.Conn, r *bufio.Reader) string {
 func TestReconnectsAfterDrop(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
 	c := NewClient(sock, writeStatus(t, killStatus))
-	if err := c.Kill("alice", "HALT"); err != nil {
+	if _, err := c.Kill("alice", "HALT"); err != nil {
 		t.Fatal(err)
 	}
 	c.mu.Lock()
 	c.conn.Close() // simulate the peer going away
 	c.mu.Unlock()
 
-	if err := c.Kill("alice", "HALT"); err != nil {
+	if _, err := c.Kill("alice", "HALT"); err != nil {
 		t.Fatalf("expected transparent reconnect, got error: %v", err)
 	}
 	if got := atomic.LoadInt32(accepts); got != 2 {

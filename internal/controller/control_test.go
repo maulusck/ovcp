@@ -153,11 +153,11 @@ func TestControlClientsAndKill(t *testing.T) {
 	if err != nil || len(cl) != 1 || cl[0].CN != "alice" {
 		t.Fatalf("Clients: %+v err=%v", cl, err)
 	}
-	if err := Kill(sock, "alice", "HALT"); err != nil {
-		t.Fatalf("Kill: %v", err)
+	if n, err := Kill(sock, "alice", "HALT"); n != 1 || err != nil {
+		t.Fatalf("Kill alice: n=%d err=%v", n, err)
 	}
-	if err := Kill(sock, "nobody", "HALT"); err == nil {
-		t.Fatal("Kill of an unknown cn should error")
+	if n, err := Kill(sock, "nobody", "HALT"); n != 0 || err != nil {
+		t.Fatalf("Kill nobody: n=%d err=%v, want 0 and no error", n, err)
 	}
 }
 

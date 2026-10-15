@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -130,7 +131,12 @@ func serveControlConn(c net.Conn, d ControlDeps) {
 	// the pid/changed trailer every Lifecycle op below shares, so they return directly.
 	if arg, ok := strings.CutPrefix(op, "kill "); ok {
 		msg, cn, _ := strings.Cut(arg, " ")
-		replyOK(c, d.Mgmt.Kill(cn, msg))
+		n, err := d.Mgmt.Kill(cn, msg)
+		if err != nil {
+			replyOK(c, err)
+			return
+		}
+		fmt.Fprintf(c, "OK %d\n", n)
 		return
 	}
 	if op == "clients" {
@@ -239,10 +245,13 @@ func serveControlConn(c net.Conn, d ControlDeps) {
 // controlRequest sends one op to a running serve process and returns the raw
 // payload after "OK " (error for "ERR "). Control, Clients, and Kill below
 // just parse this payload differently depending on the op.
+// ErrServeDown: nothing listens on the control socket, so no serve and no openvpn run.
+var ErrServeDown = errors.New("ovcp serve not reachable (is it running?)")
+
 func controlRequest(sockPath, op string) (string, error) {
 	c, err := net.DialTimeout("unix", sockPath, 3*time.Second)
 	if err != nil {
-		return "", fmt.Errorf("controller: ovcp serve not reachable at %s (is it running?): %w", sockPath, err)
+		return "", fmt.Errorf("controller: %w at %s: %w", ErrServeDown, sockPath, err)
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(65 * time.Second))
@@ -297,9 +306,12 @@ func Clients(sockPath string) ([]VPNClient, error) {
 }
 
 // Kill is Client.Kill via serve's own mgmt connection (same reasoning as Clients).
-func Kill(sockPath, cn, msg string) error {
-	_, err := controlRequest(sockPath, "kill "+msg+" "+cn)
-	return err
+func Kill(sockPath, cn, msg string) (int, error) {
+	payload, err := controlRequest(sockPath, "kill "+msg+" "+cn)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(payload)
 }
 
 // UpstreamAssign asks a running serve to instantly rewrite cn's live nft

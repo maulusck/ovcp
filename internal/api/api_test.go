@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -214,6 +216,67 @@ func TestIssueRevokeWrongPass(t *testing.T) {
 		`{"Serial":"`+out.Serial+`","Passphrase":"wrong"}`, true); r.StatusCode != 403 {
 		t.Fatal("wrong passphrase must 403, got", r.Status)
 	}
+}
+
+// TestRevokeRestartsSessions: both API revoke paths (revoke, export renew)
+// send RESTART to the CN's live session, via the env's mgmt socket and status file.
+func TestRevokeRestartsSessions(t *testing.T) {
+	e := setup(t)
+	status, _ := os.ReadFile(writeStatus(t, "alice")) // alice, CID 0
+	os.WriteFile(filepath.Join(e.dir, "no-status.log"), status, 0o600)
+	l, err := net.Listen("unix", filepath.Join(e.dir, "no.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	kills := make(chan string, 4)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				c.Write([]byte(">INFO:OpenVPN Management Interface Version 5\r\n"))
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if cmd := strings.TrimSpace(line); strings.HasPrefix(cmd, "client-kill ") {
+						kills <- cmd
+					}
+					c.Write([]byte("SUCCESS: ok\r\n"))
+				}
+			}()
+		}
+	}()
+	wantKill := func(step string) {
+		select {
+		case got := <-kills:
+			if got != "client-kill 0 RESTART" {
+				t.Fatalf("%s: got %q", step, got)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: no client-kill sent", step)
+		}
+	}
+
+	e.login("admin")
+	r := e.req("POST", "/api/certs", `{"CN":"alice","Passphrase":"`+pass+`"}`, true)
+	var out struct{ Serial string }
+	json.NewDecoder(r.Body).Decode(&out)
+	if r := e.req("POST", "/api/certs/revoke", `{"Serial":"`+out.Serial+`","Passphrase":"`+pass+`"}`, true); r.StatusCode != 200 {
+		t.Fatal("revoke:", r.Status)
+	}
+	wantKill("revoke")
+	e.req("POST", "/api/certs", `{"CN":"alice","Passphrase":"`+pass+`"}`, true)
+	if r := e.req("POST", "/api/certs/export", `{"CN":"alice","Passphrase":"`+pass+`","Renew":true}`, true); r.StatusCode != 200 {
+		t.Fatal("renew:", r.Status)
+	}
+	wantKill("renew")
 }
 
 func TestRenewServer(t *testing.T) {

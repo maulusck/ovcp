@@ -141,7 +141,8 @@ func TestCertsText(t *testing.T) {
 	must(s.AddCert(store.Cert{Serial: "s1", CN: "alice", Kind: "client", CertPEM: []byte("x"), IssuedAt: now, NotAfter: now.Add(5 * 24 * time.Hour)}))
 	must(s.AddCert(store.Cert{Serial: "s2", CN: "bob", Kind: "client", CertPEM: []byte("x"), IssuedAt: now, NotAfter: now.Add(-3 * 24 * time.Hour)}))
 	must(s.AddCert(store.Cert{Serial: "s3", CN: "carol", Kind: "client", CertPEM: []byte("x"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}))
-	must(s.Revoke("s3", now))
+	_, err := s.Revoke("s3", now)
+	must(err)
 
 	po := &Poller{s: s, p: caPKI}
 	got := po.certsText()

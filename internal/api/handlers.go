@@ -146,8 +146,13 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request, u *store.Use
 		jsonErr(w, 400, "cn required")
 		return
 	}
-	if err := s.Mgmt.Kill(in.CN, "HALT"); err != nil {
+	n, err := s.Mgmt.Kill(in.CN, "HALT")
+	if err != nil {
 		jsonErr(w, 502, err.Error())
+		return
+	}
+	if n == 0 {
+		jsonErr(w, 404, in.CN+" is not connected")
 		return
 	}
 	s.Store.Audit(u.Username, "kill", "cn="+in.CN)
@@ -223,14 +228,13 @@ func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int,
 	if err := s.Store.ReplaceCert(store.CertFrom(ic, "client")); err != nil {
 		return nil, err
 	}
-	return ic, s.regenCRL([]byte(passphrase))
+	return ic, s.revoked(cn, []byte(passphrase))
 }
 
-// regenCRL rebuilds the CRL from the store's full revoked set — the shared
-// tail end of anything that revokes a cert, whether directly (handleRevoke)
-// or as the side effect of a client renewal (issueClientCert).
-func (s *Server) regenCRL(passphrase []byte) error {
-	rev, err := s.Store.RevokedCerts()
+// RegenCRL rebuilds the CRL from the store's full revoked set: the one
+// implementation behind every revoke, CLI (cmd/ovcp) or API.
+func RegenCRL(st *store.Store, p *pki.PKI, passphrase []byte) error {
+	rev, err := st.RevokedCerts()
 	if err != nil {
 		return err
 	}
@@ -238,7 +242,19 @@ func (s *Server) regenCRL(passphrase []byte) error {
 	for i, c := range rev {
 		entries[i] = pki.RevokedEntry{SerialHex: c.Serial, RevokedAt: *c.RevokedAt}
 	}
-	return s.PKI.RegenCRL(entries, passphrase)
+	return p.RegenCRL(entries, passphrase)
+}
+
+// revoked is every API revoke's tail: regenerate the CRL, then restart cn's
+// sessions so openvpn checks it on reconnect, not at the next renegotiation.
+func (s *Server) revoked(cn string, passphrase []byte) error {
+	if err := RegenCRL(s.Store, s.PKI, passphrase); err != nil {
+		return err
+	}
+	if _, err := s.Mgmt.Kill(cn, "RESTART"); err != nil {
+		slog.Warn("revoke: live sessions not restarted", "cn", cn, "err", err)
+	}
+	return nil
 }
 
 // WriteServerCert persists a freshly issued server cert+key to the paths
@@ -320,11 +336,12 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, u *store.U
 		s.pkiErr(w, err)
 		return
 	}
-	if err := s.Store.Revoke(in.Serial, time.Now()); err != nil {
+	cn, err := s.Store.Revoke(in.Serial, time.Now())
+	if err != nil {
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	if err := s.regenCRL([]byte(in.Passphrase)); err != nil {
+	if err := s.revoked(cn, []byte(in.Passphrase)); err != nil {
 		s.pkiErr(w, err)
 		return
 	}

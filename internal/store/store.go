@@ -270,19 +270,15 @@ func (s *Store) ListCerts() ([]Cert, error) {
 	return out, rows.Err()
 }
 
-// Revoke marks a cert revoked. Returns sql.ErrNoRows if unknown,
-// and an error if already revoked (idempotence is the caller's policy call).
-func (s *Store) Revoke(serial string, at time.Time) error {
-	res, err := s.db.Exec(
-		`UPDATE certs SET revoked_at = ? WHERE serial = ? AND revoked_at IS NULL`, at.Unix(), serial)
-	if err != nil {
-		return err
+// Revoke marks a cert revoked and returns its CN; an unknown or already
+// revoked serial is an error (idempotence is the caller's policy call).
+func (s *Store) Revoke(serial string, at time.Time) (cn string, err error) {
+	err = s.db.QueryRow(`UPDATE certs SET revoked_at = ? WHERE serial = ? AND revoked_at IS NULL RETURNING cn`,
+		at.Unix(), serial).Scan(&cn)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("store: cert %s not found or already revoked", serial)
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("store: cert %s not found or already revoked", serial)
-	}
-	return nil
+	return cn, err
 }
 
 // RevokedCerts returns the full revoked set (feeds CRL regeneration).

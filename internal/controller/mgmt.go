@@ -413,30 +413,26 @@ func parseStatusFile(r *bufio.Reader) ([]VPNClient, error) {
 	}
 }
 
-// Kill sends msg to every session of cn via client-kill: HALT keeps the
-// client off, RESTART makes it reconnect.
+// Kill sends msg to every session of cn via client-kill and returns how many
+// it reached: HALT keeps the client off, RESTART makes it reconnect.
 // ponytail: sessions from the status file miss one younger than its interval; go live once readLoop stops dropping multi-line replies.
-func (c *Client) Kill(cn, msg string) error {
+func (c *Client) Kill(cn, msg string) (n int, err error) {
 	if msg != "HALT" && msg != "RESTART" {
-		return fmt.Errorf("controller: invalid kill message %q", msg)
+		return 0, fmt.Errorf("controller: invalid kill message %q", msg)
 	}
 	live, err := c.Status()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	n := 0
 	for _, v := range live {
 		if v.CN == cn {
 			if err := c.simple("client-kill " + v.CID + " " + msg); err != nil {
-				return err
+				return n, err
 			}
 			n++
 		}
 	}
-	if n == 0 {
-		return fmt.Errorf("controller: %s is not connected", cn)
-	}
-	return nil
+	return n, nil
 }
 
 func (c *Client) simple(cmd string) error {

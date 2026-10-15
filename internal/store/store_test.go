@@ -25,10 +25,10 @@ func TestCertLifecycle(t *testing.T) {
 	if err != nil || got.CN != "alice" || got.RevokedAt != nil {
 		t.Fatalf("get: %+v err=%v", got, err)
 	}
-	if err := s.Revoke("abc123", now); err != nil {
-		t.Fatal(err)
+	if cn, err := s.Revoke("abc123", now); err != nil || cn != "alice" {
+		t.Fatalf("revoke: cn=%q err=%v", cn, err)
 	}
-	if err := s.Revoke("abc123", now); err == nil {
+	if _, err := s.Revoke("abc123", now); err == nil {
 		t.Fatal("double revoke should error")
 	}
 	rev, err := s.RevokedCerts()
@@ -101,7 +101,7 @@ func TestAddCertDuplicateCN(t *testing.T) {
 	if err := s.AddCert(client("s2")); !errors.Is(err, ErrDuplicateCN) {
 		t.Fatalf("want ErrDuplicateCN, got %v", err)
 	}
-	if err := s.Revoke("s1", now); err != nil {
+	if _, err := s.Revoke("s1", now); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AddCert(client("s3")); err != nil {
@@ -205,7 +205,7 @@ func TestRequireActiveCert(t *testing.T) {
 		t.Fatalf("client cert must not satisfy a server-kind check, got %v", err)
 	}
 
-	if err := s.Revoke("c1", now); err != nil {
+	if _, err := s.Revoke("c1", now); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RequireActiveCert("alice", "client"); !errors.Is(err, ErrNoActiveCert) {

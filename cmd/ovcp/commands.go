@@ -368,7 +368,7 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *renew {
 			action = "renew"
 			die(s.ReplaceCert(store.CertFrom(ic, "client")))
-			die(regenCRLFromStore(ctx.p, s, pass))
+			revokedCLI(ctx.p, s, *cn, pass)
 		} else if err := s.AddCert(store.CertFrom(ic, "client")); err != nil {
 			die(fmt.Errorf("%w — add -renew to replace it", err))
 		}
@@ -443,19 +443,13 @@ type exportOut struct {
 	Bundle string `json:"bundle"`
 }
 
-// regenCRLFromStore rebuilds the CRL from s's full revoked set — the shared
-// tail end of anything that revokes a cert, whether directly (cmdRevoke) or
-// as the side effect of a client renewal (cmdRenew).
-func regenCRLFromStore(p *pki.PKI, s *store.Store, passphrase []byte) error {
-	rev, err := s.RevokedCerts()
-	if err != nil {
-		return err
+// revokedCLI is every CLI revoke's tail, the API's Server.revoked twin: the
+// CRL, then serve restarts cn's sessions (no serve running means no sessions).
+func revokedCLI(p *pki.PKI, s *store.Store, cn string, passphrase []byte) {
+	die(api.RegenCRL(s, p, passphrase))
+	if _, err := controller.Kill(ctrlSock(), cn, "RESTART"); err != nil && !errors.Is(err, controller.ErrServeDown) {
+		slog.Warn("revoke: live sessions not restarted", "cn", cn, "err", err)
 	}
-	entries := make([]pki.RevokedEntry, len(rev))
-	for i, c := range rev {
-		entries[i] = pki.RevokedEntry{SerialHex: c.Serial, RevokedAt: *c.RevokedAt}
-	}
-	return p.RegenCRL(entries, passphrase)
 }
 
 func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -467,9 +461,10 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.Revoke(*serial, time.Now()))
+		cn, err := s.Revoke(*serial, time.Now())
+		die(err)
 		refreshCertsHostsCLI(ctx.dataDir, s)
-		die(regenCRLFromStore(ctx.p, s, pass))
+		revokedCLI(ctx.p, s, cn, pass)
 		s.Audit("cli", "revoke", "serial="+*serial)
 		output(revokeOut{*serial, ctx.p.CRLPath()}, func(o revokeOut) {
 			fmt.Println("revoked; CRL regenerated:", o.CRLPath)
@@ -947,7 +942,11 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
 		}
-		die(controller.Kill(*ctrl, *cn, "HALT"))
+		n, err := controller.Kill(*ctrl, *cn, "HALT")
+		die(err)
+		if n == 0 {
+			die(fmt.Errorf("%s is not connected", *cn))
+		}
 		s := ctx.openStore()
 		defer s.Close()
 		s.Audit("cli", "kill", "cn="+*cn)

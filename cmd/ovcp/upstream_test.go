@@ -506,6 +506,40 @@ func TestE2EKillHalts(t *testing.T) {
 	}
 }
 
+// TestE2ERevokeDisconnects: revoking a connected client's cert restarts its
+// session at once, and the reconnect fails the CRL check.
+func TestE2ERevokeDisconnects(t *testing.T) {
+	outer := requireNetNS(t)
+	h := newE2EHost(t, outer)
+	h.newClient(t, "alice", "1", "10.90.10.1", "10.90.10.2")
+	var rows []certOut
+	if r := run(t, h.env, "-json", "certificate", "list"); r.code != 0 || json.Unmarshal([]byte(r.stdout), &rows) != nil {
+		t.Fatalf("certificate list: %s", r.stderr)
+	}
+	serial := ""
+	for _, c := range rows {
+		if c.CN == "alice" {
+			serial = c.Serial
+		}
+	}
+	if r := run(t, h.env, "certificate", "revoke", "-serial", serial); r.code != 0 {
+		t.Fatalf("revoke: %s", r.stderr)
+	}
+	connected := func() bool { r := run(t, h.env, "status"); return strings.Contains(r.stdout, "alice") }
+	if !retry(50, 200*time.Millisecond, func() error {
+		if connected() {
+			return fmt.Errorf("still connected")
+		}
+		return nil
+	}) {
+		t.Fatal("alice still connected 10 s after revoke")
+	}
+	time.Sleep(5 * time.Second) // RESTART makes the client retry at once; the CRL must refuse it
+	if connected() {
+		t.Fatal("alice reconnected with a revoked cert")
+	}
+}
+
 // TestE2EIfaceMode: server-wide default upstream is iface-mode, pointed at
 // a local backend standing in for a real second interface — traffic must
 // reach that backend specifically, proving real nft mark+route+masquerade
