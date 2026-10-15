@@ -57,7 +57,6 @@ func RenderOVPN(p BundleParams) ([]byte, error) {
 	w("remote %s %d", p.Remote, p.Port)
 	w("resolv-retry infinite")
 	w("nobind")
-	w("persist-key")
 	w("persist-tun")
 	w("remote-cert-tls server")
 	if p.Proto == "udp" {

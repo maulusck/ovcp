@@ -299,6 +299,9 @@ func TestRenderOVPN(t *testing.T) {
 			t.Fatalf("missing %q in bundle", want)
 		}
 	}
+	if bytes.Contains(out, []byte("persist-key")) { // inline keys: a no-op, and 2.7 warns
+		t.Fatal("persist-key must not be in a profile")
+	}
 	if bytes.Contains(out, []byte("pull-filter")) {
 		t.Fatal("pull-filter must be omitted when SplitTunnel is false")
 	}

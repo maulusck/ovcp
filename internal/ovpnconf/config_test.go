@@ -53,6 +53,9 @@ func TestRender(t *testing.T) {
 			t.Fatalf("missing %q\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "persist-key") { // 2.7 deprecates it; openvpn as ovcp re-reads its key anyway
+		t.Fatal("persist-key must not be rendered")
+	}
 	c.Proto = "tcp"
 	if strings.Contains(string(c.Render()), "explicit-exit-notify") {
 		t.Fatal("exit-notify must be udp-only")

@@ -131,6 +131,7 @@ t "connect (pushed redirect-gateway)" "connect ''"
 t "8.8.8.8 via tun0" "C 'ip route get 8.8.8.8 | grep -q tun0'"
 t "HTTPS egress through VPN NAT" "C 'curl -s -m 8 -o /dev/null https://1.1.1.1/'"
 t "no DOMAIN in PUSH_REPLY" "! C 'grep PUSH_REPLY /tmp/ovpn.log | grep -q DOMAIN'"
+t "client logs no persist-key deprecation" "! C 'grep -qi persist-key /tmp/ovpn.log'"
 
 echo "== API"
 J='Content-Type: application/json'

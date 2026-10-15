@@ -186,9 +186,7 @@ func (c *Config) Render() []byte {
 	w("data-ciphers-fallback %s", c.Cipher)
 	w("auth SHA256")
 	w("keepalive 10 60")
-	// persist-key/-tun: keep the tun device and key across SIGUSR1.
-	w("persist-key")
-	w("persist-tun")
+	w("persist-tun") // keep ovcp0 (and its nft rules, routes) across SIGUSR1
 	w("management %s unix", c.MgmtSocket)
 	if c.ManagementClientAuth {
 		w("management-client-auth")
