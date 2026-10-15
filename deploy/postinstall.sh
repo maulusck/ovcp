@@ -8,7 +8,8 @@ if ! id ovcp >/dev/null 2>&1; then
 	if command -v useradd >/dev/null 2>&1; then
 		useradd --system --no-create-home --shell /usr/sbin/nologin ovcp
 	else
-		adduser -S -D -H -s /sbin/nologin ovcp
+		addgroup -S ovcp # busybox -S alone puts the user in the shared nogroup
+		adduser -S -D -H -G ovcp -s /sbin/nologin ovcp
 	fi
 fi
 OVCP_DATA="$DATA" ovcp init -skeleton

@@ -72,6 +72,7 @@ if [ "${1:-}" = apk ]; then # the .apk on the Alpine client (OpenRC) instead of 
 	echo "== apk (OpenRC, on the client)"
 	cd $SRC && rm -f dist/*.apk && make apk >$T/apk.log 2>&1 && scp -q dist/*.apk $VM:/root/ovcp.apk
 	t "apk add: postinstall finds every file it calls" "C 'modprobe tun; apk add -q dnsmasq && apk add --allow-untrusted /root/ovcp.apk' >$T/add.log 2>&1 && ! grep -qi 'not found' $T/add.log"
+	t "account ovcp in its own group" "[ \"\$(C id -gn ovcp)\" = ovcp ]"
 	t "init, rc-service start" "C 'OVCP_CA_PASSPHRASE=$CA OVCP_USER_PASSWORD=$ADM ovcp init -server-cn vm3.example && rc-service ovcp start' && sleep 6"
 	t "serve + workers: ovcp, CapEff 0x1400, NoNewPrivs 0 (OpenRC)" "C \"\$(declare -f creds); creds 0\""
 	echo "== RESULT: $PASSES passed, $FAILS failed"; rm -rf "$T"; [ $FAILS -eq 0 ]; exit
