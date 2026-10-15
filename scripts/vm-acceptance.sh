@@ -66,6 +66,9 @@ if [ "${1:-}" = purge ]; then
 	echo "== purge"; purge; echo "== RESULT: $PASSES passed, $FAILS failed"; rm -rf "$T"; [ $FAILS -eq 0 ]; exit
 fi
 
+# forwarding is the operator's choice; neither ovcp nor this script sets it
+[ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || { echo "enable forwarding first: sudo sysctl -w net.ipv4.ip_forward=1" >&2; exit 2; }
+
 echo "== build"
 cd $SRC && rm -f dist/*.deb && make deb >$T/deb.log 2>&1
 DEB=$(ls dist/ovcp_*.deb 2>/dev/null)
@@ -192,11 +195,15 @@ t "user add operator" "sudo -n env OVCP_USER_PASSWORD=Ops-pass-12 ovcp user add 
 t "audit has login + issue" "O audit | grep -q login && O audit | grep -q issue"
 t "stats has samples" "O stats | grep -q 'sample'"
 
+echo "== kill"
+t "vpn kill: client told to HALT, its openvpn exits" "O vpn kill -cn vm3 && C 'timeout 15 sh -c \"while pgrep openvpn >/dev/null; do sleep 1; done\"'"
+t "vpn kill of a disconnected CN fails (after one status interval)" "sleep 4; ! O vpn kill -cn vm3"
+t "reconnect for revoke" "connect ''"
+
 echo "== revoke"
 SER=$(O -json certificate list | python3 -c 'import sys,json;print([c["serial"] for c in json.load(sys.stdin) if c["cn"]=="vm3" and c["status"]!="revoked"][0])')
 t "revoke vm3" "sudo -n env OVCP_CA_PASSPHRASE=$CA ovcp certificate revoke -serial $SER"
-t "kill vm3" "O vpn kill -cn vm3"
-t "reconnect refused: certificate revoked" "timeout 150 sh -c 'until sudo -n tail -n 300 /var/lib/ovcp/logs/openvpn.log | grep -q \"certificate revoked\"; do sleep 3; done'"
+t "revoke restarts the session; reconnect refused (no manual kill)" "timeout 20 sh -c 'until sudo -n tail -n 300 /var/lib/ovcp/logs/openvpn.log | grep -q \"certificate revoked\"; do sleep 1; done'"
 sudo -n env OVCP_CA_PASSPHRASE=$CA ovcp certificate issue -cn vm3 -export > $T/vm3.ovpn 2>/dev/null
 scp -q $T/vm3.ovpn $VM:/root/vm3.ovpn
 t "reissued profile connects" "connect ''"
