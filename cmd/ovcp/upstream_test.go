@@ -96,6 +96,8 @@ func requireNetNS(t *testing.T) netNS {
 	if out, err := outer.cmd("nft", "list", "tables").CombinedOutput(); err != nil {
 		t.Skipf("rootless netns: nft probe failed: %v\n%s", err, out)
 	}
+	// a new netns copies the host's ip_forward; serve's netns must not depend on it
+	outer.run(t, "sh", "-c", "echo 1 > /proc/sys/net/ipv4/ip_forward")
 	return outer
 }
 
