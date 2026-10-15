@@ -18,9 +18,10 @@ fail() { echo "FAIL  $1"; FAILS=$((FAILS+1)); }
 t() { local n=$1; shift; if eval "$*" >/dev/null 2>&1; then pass "$n"; else fail "$n"; fi; }
 C() { ssh -o BatchMode=yes -o ConnectTimeout=5 $VM "$@"; }
 O() { sudo -n ovcp "$@"; }
-creds() { # every ovcp/openvpn/dnsmasq process: ovcp, CapEff 0x1400, NoNewPrivs=$1
-	local n=0 p
-	for p in $(pgrep -x 'ovcp|openvpn|dnsmasq'); do
+creds() { # serve and the workers it runs: ovcp, CapEff 0x1400, NoNewPrivs=$1
+	local n=0 p serve
+	serve=$(pgrep -f '^/usr/bin/ovcp serve') || return 1
+	for p in $serve $(pgrep -P $serve); do
 		[ "$(stat -c %U /proc/$p)" = ovcp ] || return 1
 		grep -q '^CapEff:.*0000000000001400$' /proc/$p/status || return 1
 		grep -q "^NoNewPrivs:.*$1\$" /proc/$p/status || return 1
@@ -197,7 +198,7 @@ t "stats has samples" "O stats | grep -q 'sample'"
 
 echo "== kill"
 t "vpn kill: client told to HALT, its openvpn exits" "O vpn kill -cn vm3 && C 'timeout 15 sh -c \"while pgrep openvpn >/dev/null; do sleep 1; done\"'"
-t "vpn kill of a disconnected CN fails (after one status interval)" "sleep 4; ! O vpn kill -cn vm3"
+t "vpn kill of a disconnected CN fails" "timeout 20 sh -c 'while sudo -n ovcp status | grep -q \" vm3 \"; do sleep 1; done' && ! O vpn kill -cn vm3"
 t "reconnect for revoke" "connect ''"
 
 echo "== revoke"
