@@ -370,6 +370,14 @@ func TestAudit(t *testing.T) {
 	if err != nil || len(tail) != 2 || tail[0].Action != "revoke" {
 		t.Fatalf("tail: %+v err=%v", tail, err)
 	}
+	if one, _ := s.AuditTail(1); len(one) != 1 {
+		t.Fatalf("limit 1: %+v", one)
+	}
+	var all []string
+	s.AuditEach(-1, func(e AuditEntry) { all = append(all, e.Action) }) // the unbounded download path
+	if len(all) != 2 || all[0] != "revoke" || all[1] != "issue" {
+		t.Fatalf("AuditEach(-1) = %v, want every row newest-first", all)
+	}
 }
 
 func TestAuditHook(t *testing.T) {

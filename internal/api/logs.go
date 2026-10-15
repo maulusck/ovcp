@@ -20,9 +20,6 @@ import (
 const (
 	tailMaxBytes  = 256 * 1024 // bound the read regardless of file size
 	tailLineLimit = 200        // lines returned to the UI
-	// ponytail: no unbounded audit query exists, so this stands in as "all" —
-	// raise it if an install ever outlives this many audit rows.
-	auditDownloadLimit = 1_000_000
 )
 
 // tailLines returns up to n trailing lines of path (missing file isn't an
@@ -96,14 +93,10 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 			}
 		}
 	}
-	if entries, err := s.Store.AuditTail(auditDownloadLimit); err == nil {
-		var sb strings.Builder
-		for _, e := range entries { // newest-first, same order the UI shows
-			fmt.Fprintf(&sb, "%s %s %s %s\n", e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail)
-		}
-		if f, err := zw.Create("audit.log"); err == nil {
-			f.Write([]byte(sb.String()))
-		}
+	if f, err := zw.Create("audit.log"); err == nil {
+		s.Store.AuditEach(-1, func(e store.AuditEntry) { // newest-first, same order the UI shows
+			fmt.Fprintf(f, "%s %s %s %s\n", e.TS.Format(time.RFC3339), e.Actor, e.Action, e.Detail)
+		})
 	}
 	if data, err := json.MarshalIndent(s.statusExport(), "", "  "); err == nil {
 		if f, err := zw.Create("status.json"); err == nil {

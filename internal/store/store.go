@@ -332,24 +332,28 @@ func (s *Store) Audit(actor, action, detail string) error {
 	return err
 }
 
-func (s *Store) AuditTail(limit int) ([]AuditEntry, error) {
+func (s *Store) AuditTail(limit int) (out []AuditEntry, err error) {
+	return out, s.AuditEach(limit, func(e AuditEntry) { out = append(out, e) })
+}
+
+// AuditEach streams up to limit entries newest-first into fn (limit < 0: all).
+func (s *Store) AuditEach(limit int, fn func(AuditEntry)) error {
 	rows, err := s.db.Query(
 		`SELECT id, ts, actor, action, detail FROM audit_log ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
-	var out []AuditEntry
 	for rows.Next() {
 		var e AuditEntry
 		var ts int64
 		if err := rows.Scan(&e.ID, &ts, &e.Actor, &e.Action, &e.Detail); err != nil {
-			return nil, err
+			return err
 		}
 		e.TS = time.Unix(ts, 0)
-		out = append(out, e)
+		fn(e)
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 // --- settings ---
