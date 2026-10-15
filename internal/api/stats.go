@@ -49,9 +49,9 @@ func (s *Server) StatsConfig() StatsConfig { return LoadStatsConfig(s.Store) }
 
 // RunSampler polls on PollInterval (OVCP_STATUS_INTERVAL): every tick
 // refreshes certs.hosts + detects disconnects, every SampleIntervalSec'th
-// tick also records a traffic sample. ponytail: CN-keyed, so a same-tick reconnect is invisible.
+// tick also records a traffic sample.
 func (s *Server) RunSampler(stop <-chan struct{}) {
-	prev := map[string]controller.VPNClient{}
+	prev := map[session]controller.VPNClient{}
 	tick := 0
 	t := time.NewTicker(s.PollInterval)
 	defer t.Stop()
@@ -68,7 +68,14 @@ func (s *Server) RunSampler(stop <-chan struct{}) {
 	}
 }
 
-func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map[string]controller.VPNClient) (next map[string]controller.VPNClient) {
+// session identifies one connection: a reconnect between ticks, or a second
+// client on the same CN, is a different session.
+type session struct {
+	cn    string
+	since int64
+}
+
+func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map[session]controller.VPNClient) (next map[session]controller.VPNClient) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("sampler tick panicked, skipping", "err", r)
@@ -96,14 +103,14 @@ func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map
 	}
 
 	now := time.Now()
-	curByCN := make(map[string]controller.VPNClient, len(cur))
+	live := make(map[session]controller.VPNClient, len(cur))
 	for _, c := range cur {
-		curByCN[c.CN] = c
+		live[session{c.CN, c.ConnectedSince.Unix()}] = c
 	}
 	// Every tick, not gated behind sampleStats — a same-sample-window
 	// connect+disconnect must still show up here, not vanish silently.
-	for cn, was := range prev {
-		if _, stillUp := curByCN[cn]; stillUp {
+	for k, was := range prev {
+		if _, stillUp := live[k]; stillUp {
 			continue
 		}
 		sess := store.ClientSession{
@@ -112,12 +119,12 @@ func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map
 			BytesRecv: was.BytesRecv, BytesSent: was.BytesSent,
 		}
 		if err := s.Store.EndSession(sess); err != nil {
-			slog.Warn("stats session write failed", "cn", cn, "err", err)
+			slog.Warn("stats session write failed", "cn", was.CN, "err", err)
 		}
 	}
 
 	if !sampleStats {
-		return curByCN
+		return live
 	}
 	for _, c := range cur {
 		if err := s.Store.AddClientSample(now, c.CN, c.BytesRecv, c.BytesSent); err != nil {
@@ -127,7 +134,7 @@ func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map
 	if err := s.Store.PruneStats(now.Add(-retention)); err != nil {
 		slog.Warn("stats prune failed", "err", err)
 	}
-	return curByCN
+	return live
 }
 
 // handleStats serves the global aggregate, or one client's series when ?cn=

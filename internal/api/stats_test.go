@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,11 +22,11 @@ func TestSamplerTickSkipsOnMgmtDown(t *testing.T) {
 	dir := t.TempDir()
 	srv := &Server{Mgmt: controller.NewClient(filepath.Join(dir, "no.sock"), filepath.Join(dir, "no-status.log")), VPN: &fakeVPN{},
 		DefaultRemote: func() string { return "" }}
-	prev := map[string]controller.VPNClient{"alice": {CN: "alice"}}
+	prev := map[session]controller.VPNClient{{cn: "alice"}: {CN: "alice"}}
 
 	got := srv.samplerTick(true, 24*time.Hour, prev)
 
-	if len(got) != 1 || got["alice"].CN != "alice" {
+	if len(got) != 1 || got[session{cn: "alice"}].CN != "alice" {
 		t.Fatalf("samplerTick with mgmt down = %v, want prev unchanged", got)
 	}
 }
@@ -81,10 +82,10 @@ func TestSamplerTickRetriesMgmtConnect(t *testing.T) {
 		Mgmt:          controller.NewClient(sock, filepath.Join(t.TempDir(), "no-status.log")),
 		DefaultRemote: func() string { return "" }}
 
-	srv.samplerTick(false, 24*time.Hour, map[string]controller.VPNClient{})
+	srv.samplerTick(false, 24*time.Hour, map[session]controller.VPNClient{})
 
 	accepts := listenFakeMgmt(t, sock)
-	srv.samplerTick(false, 24*time.Hour, map[string]controller.VPNClient{})
+	srv.samplerTick(false, 24*time.Hour, map[session]controller.VPNClient{})
 
 	if got := atomic.LoadInt32(accepts); got != 1 {
 		t.Fatalf("retry tick must dial the now-available mgmt socket exactly once, got %d accepts", got)
@@ -108,6 +109,33 @@ func writeStatus(t *testing.T, cn string) string {
 	return path
 }
 
+// TestSamplerTickReconnectEndsOldSession: same CN, new connected-since
+// between two ticks is a reconnect; the old session gets its EndSession row.
+func TestSamplerTickReconnectEndsOldSession(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	first := writeStatus(t, "alice")
+	srv := &Server{Store: s, VPN: &fakeVPN{}, Mgmt: controller.NewClient("", first),
+		DefaultRemote: func() string { return "" }}
+	prev := srv.samplerTick(false, 24*time.Hour, map[session]controller.VPNClient{})
+
+	body, _ := os.ReadFile(first)
+	again := filepath.Join(t.TempDir(), "status.log")
+	os.WriteFile(again, []byte(strings.Replace(string(body), "1783080000", "1783080100", 1)), 0o600)
+	srv.Mgmt = controller.NewClient("", again)
+	if next := srv.samplerTick(false, 24*time.Hour, prev); len(next) != 1 {
+		t.Fatalf("want the new session tracked, got %v", next)
+	}
+
+	sessions, err := s.Sessions(10)
+	if err != nil || len(sessions) != 1 || sessions[0].ConnectedAt.Unix() != 1783080000 {
+		t.Fatalf("want one ended session for the first connection, got %v err=%v", sessions, err)
+	}
+}
+
 // TestSamplerTickShortSessionNotLost: a client connecting and disconnecting
 // within one non-sample tick must still get an EndSession row, not vanish.
 func TestSamplerTickShortSessionNotLost(t *testing.T) {
@@ -119,7 +147,7 @@ func TestSamplerTickShortSessionNotLost(t *testing.T) {
 	srv := &Server{Store: s, VPN: &fakeVPN{}, Mgmt: controller.NewClient("", writeStatus(t, "alice")),
 		DefaultRemote: func() string { return "" }}
 
-	prev := srv.samplerTick(false, 24*time.Hour, map[string]controller.VPNClient{})
+	prev := srv.samplerTick(false, 24*time.Hour, map[session]controller.VPNClient{})
 	if len(prev) != 1 {
 		t.Fatalf("want alice tracked after connect tick, got %v", prev)
 	}
