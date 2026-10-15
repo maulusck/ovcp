@@ -191,17 +191,18 @@ func TestIssueAndVerify(t *testing.T) {
 	}
 }
 
-// TestIssueCNLength guards the write side of the CN bound internal/api enforces on reads.
-func TestIssueCNLength(t *testing.T) {
+// TestIssueCN: the one CN rule (length + charset) is enforced at issuance.
+func TestIssueCN(t *testing.T) {
 	p := newCA(t)
-	if _, err := p.Issue(KindClient, "", 365, pass); err == nil {
-		t.Fatal("empty cn should be rejected")
+	for _, cn := range []string{strings.Repeat("a", MaxCNLen), "alice", "bob.laptop", "carol_2@corp.example", "10.0.0.1", "x-y"} {
+		if _, err := p.Issue(KindClient, cn, 365, pass); err != nil {
+			t.Errorf("%q should be accepted: %v", cn, err)
+		}
 	}
-	if _, err := p.Issue(KindClient, strings.Repeat("a", MaxCNLen), 365, pass); err != nil {
-		t.Fatalf("cn at exactly MaxCNLen should be accepted: %v", err)
-	}
-	if _, err := p.Issue(KindClient, strings.Repeat("a", MaxCNLen+1), 365, pass); err == nil {
-		t.Fatal("cn over MaxCNLen should be rejected")
+	for _, cn := range []string{"", strings.Repeat("a", MaxCNLen+1), "a b", "a\nkill b", "a\tb", "ünï", "a,b", `a"b`, "a/b"} {
+		if _, err := p.Issue(KindClient, cn, 365, pass); err == nil {
+			t.Errorf("%q should be rejected", cn)
+		}
 	}
 }
 

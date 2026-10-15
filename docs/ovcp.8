@@ -178,8 +178,9 @@ only; private keys are printed exactly once and never stored (if lost,
 \fB(umask 077; ovcp certificate issue \-cn alice \-export > alice.ovpn)\fR. Certificates (public) are kept and can be re\-downloaded
 anytime with \fBcertificate list\fR / the web UI. With \fB\-key\-pass\fR
 the private key is AES\-256 encrypted; OpenVPN prompts for the password on
-connect. \fB\-days\fR must be positive. \fB\-cn\fR is capped at 64 bytes
-(RFC 5280's CommonName limit).
+connect. \fB\-days\fR must be positive. \fB\-cn\fR is 1 to 64 (RFC 5280's
+CommonName limit) of \fBA\-Z a\-z 0\-9 . _ @ \-\fR, so it is safe verbatim
+in OpenVPN's management commands, configs and hosts files.
 .RS
 .TP
 \fB\-export\fR's own flags
