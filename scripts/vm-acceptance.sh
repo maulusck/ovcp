@@ -99,6 +99,7 @@ t "dnsmasq bound 10.8.0.1:53 (NET_BIND_SERVICE)" "ss -lun | grep -q '10.8.0.1:53
 t "UI on loopback and tunnel" "ss -ltn | grep -q '127.0.0.1:8443' && ss -ltn | grep -q '10.8.0.1:8443'"
 t "sudo ovcp status reaches serve (CLI drop)" "O status | grep -q '^OpenVPN: running'"
 t "status warns: NAT missing" "O status 2>&1 | grep -q 'no outbound NAT'"
+t "serve logged the routing warning at start" "sudo -n journalctl --no-pager _PID=\$(pgrep -f '^/usr/bin/ovcp serve') | grep -q 'no outbound NAT'"
 sudo -n iptables -t nat -A POSTROUTING -o $UPLINK -j MASQUERADE
 t "status: NAT warning gone" "! O status 2>&1 | grep -q 'no outbound NAT'"
 t "IP server CN: no DOMAIN pushed" "! sudo -n grep -q DOMAIN /var/lib/ovcp/server.conf"

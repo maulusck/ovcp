@@ -50,6 +50,7 @@
     <p class="status-line"><span class="status-dot {dns.up ? 'ok' : 'down'}"></span> dns {dns.up ? `up · ${dns.uptime}` : 'down'}</p>
   {/if}
   <p class="status-line"><span class="status-dot {!telegram.tokenSet ? 'na' : telegram.running ? 'ok' : 'down'}"></span> telegram: {!telegram.tokenSet ? 'not configured' : telegram.running ? 'running' : 'stopped'}</p>
+  {#if vpn.routingWarning}<p class="status-line warn">{vpn.routingWarning}</p>{/if}
   {#if dnsWarning}<p class="status-line warn">{dnsWarning}</p>{/if}
 </div>
 

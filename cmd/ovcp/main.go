@@ -316,6 +316,9 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	defer ctl.Close()
 	// AUTOSTART only gates the boot-time call below; `ovcp vpn|dns start`
 	// (CLI or web UI) always works regardless, for both workers alike.
+	if w := controller.RoutingPrereqsWarning(); w != "" {
+		slog.Warn(w)
+	}
 	if os.Getenv("OVCP_OPENVPN_AUTOSTART") != "false" {
 		if err := sup.Start(); err != nil {
 			slog.Warn("openvpn start", "err", err)

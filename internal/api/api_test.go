@@ -393,8 +393,9 @@ func TestStatusVPNDown(t *testing.T) {
 	e.login("viewer")
 	r := e.req("GET", "/api/status", "", false)
 	var out struct {
-		VPNUp    bool                      `json:"vpn_up"`
-		Telegram controller.TelegramStatus `json:"telegram"`
+		VPNUp          bool                      `json:"vpn_up"`
+		Telegram       controller.TelegramStatus `json:"telegram"`
+		RoutingWarning *string                   `json:"routing_warning"`
 	}
 	json.NewDecoder(r.Body).Decode(&out)
 	if r.StatusCode != 200 || out.VPNUp {
@@ -402,6 +403,9 @@ func TestStatusVPNDown(t *testing.T) {
 	}
 	if out.Telegram.TokenSet {
 		t.Fatalf("telegram should read not-configured by default: %+v", out.Telegram)
+	}
+	if out.RoutingWarning == nil || *out.RoutingWarning != controller.RoutingPrereqsWarning() {
+		t.Fatalf("routing_warning = %v, want the host's RoutingPrereqsWarning", out.RoutingWarning)
 	}
 }
 

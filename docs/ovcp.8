@@ -1426,7 +1426,8 @@ and
 .B vpn start
 check both and print one
 .B warning:
-line if either looks off \(en advisory, never fatal. The NAT half is
+line if either looks off; \fBserve\fR logs it at start and the web UI's
+dashboard shows it live \(en advisory, never fatal. The NAT half is
 best\-effort: it can confirm a rule via the standard iptables
 .B nat
 table, but a host doing NAT through native nftables, firewalld, or a

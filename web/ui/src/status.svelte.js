@@ -1,7 +1,7 @@
 // Shared live VPN status. Polled app-wide; phase drives the header glow.
 import { api } from './api.js'
 
-export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', ovcpUptime: '', reloadLabel: '' }) // ok | down | reloading
+export const vpn = $state({ up: false, phase: 'down', clients: 0, clientList: [], uptime: '', routingWarning: '', ovcpUptime: '', reloadLabel: '' }) // ok | down | reloading
 export const dns = $state({ up: false, phase: 'down', uptime: '', reloadLabel: '' }) // ok | down | reloading; dnsmasq is optional — App.svelte overrides to "na" when never installed
 export const telegram = $state({ running: false, tokenSet: false, admin: '', chatLinked: false })
 export const upstreams = $state({ warning: '' }) // live iface-down check, read-only — riding this same poll instead of a second one
@@ -52,6 +52,7 @@ export async function pollOnce() {
     }
     if (d.telegram) Object.assign(telegram, d.telegram)
     upstreams.warning = d.upstream_warning || ''
+    vpn.routingWarning = d.routing_warning || ''
     return d
   } catch (err) {
     // api() throws {status, error} once the server has answered (even with an
