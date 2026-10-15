@@ -348,7 +348,7 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 	proto := fs.String("proto", "", "-export: udp|tcp (default: the configured server proto)")
 	serverCN := fs.String("server-cn", "", "-export: verify-x509-name value")
 	splitTunnel := fs.Bool("split-tunnel", false, "-export: keep the client's own default route (needs server redirect on)")
-	customOpts := fs.String("custom-opts", "", "-export: custom client directives: comma-separated, a file via $(cat FILE), or - for $EDITOR")
+	customOpts := linesFlag(fs, "custom-opts", "-export: one custom client directive per use, a file via $(cat FILE), or - for $EDITOR")
 	return func(ctx *cliContext) {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
@@ -403,16 +403,8 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *splitTunnel && !cfg.CanSplitTunnel() {
 			die(ovpnconf.ErrNoRedirect)
 		}
-		var extra string
-		switch *customOpts {
-		case "":
-		case "-":
-			var err error
-			extra, err = editText("")
-			die(err)
-		default:
-			extra = commaOrLines(*customOpts)
-		}
+		extra, _, err := linesValue(*customOpts, "")
+		die(err)
 		caPEM, err := ctx.p.CACertPEM()
 		die(err)
 		tc, err := loadOrCreateTLSCrypt(filepath.Join(ctx.dataDir, "pki", "tls-crypt.key"))
@@ -1614,14 +1606,21 @@ type renewOut struct {
 	NotAfter time.Time `json:"notAfter"`
 }
 
-// commaOrLines: comma list → one directive per line; no-op without a comma, so $(cat FILE) passes through unchanged.
-// ponytail: assumes no directive needs a literal comma; use -custom-opts - if one ever does.
-func commaOrLines(s string) string {
-	parts := strings.Split(s, ",")
-	for i, p := range parts {
-		parts[i] = strings.TrimSpace(p)
+// linesFlag is a repeatable flag: each use adds one line, taken verbatim.
+func linesFlag(fs *flag.FlagSet, name, usage string) *[]string {
+	var v []string
+	fs.Func(name, usage, func(s string) error { v = append(v, s); return nil })
+	return &v
+}
+
+// linesValue joins a linesFlag's lines, or edits initial in $EDITOR for a lone
+// "-"; ok is false when the flag was never given.
+func linesValue(v []string, initial string) (s string, ok bool, err error) {
+	if len(v) == 1 && v[0] == "-" {
+		s, err = editText(initial)
+		return s, true, err
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(v, "\n"), len(v) > 0, nil
 }
 
 // editText opens initial in $EDITOR (default vi, run by the shell so it may
@@ -1684,7 +1683,7 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 	pushInternalDNS := fs.String("push-internal-dns", "", "on|off: also push the internal dnsmasq resolver, first (unchanged if omitted)")
 	routes := fs.String("routes", "", "comma-separated pushed routes, CIDR (unchanged if omitted)")
 	redirectGW := fs.String("redirect-gw", "", "on|off: route all client traffic through the VPN (unchanged if omitted)")
-	extra := fs.String("extra", "", "custom directives: comma-separated, a file via $(cat FILE), or - for $EDITOR (unchanged if omitted)")
+	extra := linesFlag(fs, "extra", "one custom directive per use, a file via $(cat FILE), or - for $EDITOR (unchanged if omitted)")
 	return func(cfg ovpnconf.Config) (ovpnconf.Config, error) {
 		if *proto != "" {
 			cfg.Proto = *proto
@@ -1718,15 +1717,10 @@ func configFlags(fs *flag.FlagSet) func(cur ovpnconf.Config) (ovpnconf.Config, e
 			}
 			cfg.RedirectGW = b
 		}
-		switch *extra {
-		case "":
-		case "-":
-			var err error
-			if cfg.Extra, err = editText(cfg.Extra); err != nil {
-				return cfg, err
-			}
-		default:
-			cfg.Extra = commaOrLines(*extra)
+		if s, ok, err := linesValue(*extra, cfg.Extra); err != nil {
+			return cfg, err
+		} else if ok {
+			cfg.Extra = s
 		}
 		return cfg, nil
 	}

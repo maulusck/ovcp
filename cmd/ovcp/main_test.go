@@ -726,28 +726,16 @@ func TestExportSplitTunnel(t *testing.T) {
 	}
 }
 
-func TestCommaOrLines(t *testing.T) {
-	if got := commaOrLines("keepalive 5 30"); got != "keepalive 5 30" {
-		t.Fatalf("single directive should pass through unchanged, got %q", got)
-	}
-	if got := commaOrLines("keepalive 5 30, verb 4"); got != "keepalive 5 30\nverb 4" {
-		t.Fatalf("comma list should split into lines, got %q", got)
-	}
-	if got := commaOrLines("keepalive 5 30\nverb 4"); got != "keepalive 5 30\nverb 4" {
-		t.Fatalf("already-newlined text (e.g. $(cat FILE)) must pass through unchanged, got %q", got)
-	}
-}
-
 func TestExportCustomOpts(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
 		t.Fatalf("init: %+v", r)
 	}
-	r := run(t, env, "certificate", "issue", "-cn", "alice", "-export", "-remote", "vpn.example.com", "-custom-opts", "keepalive 5 30,verb 4")
+	r := run(t, env, "certificate", "issue", "-cn", "alice", "-export", "-remote", "vpn.example.com", "-custom-opts", "keepalive 5 30", "-custom-opts", `push "dhcp-option DOMAIN-SEARCH a,b"`)
 	if r.code != 0 {
 		t.Fatalf("export: %+v", r)
 	}
-	for _, want := range []string{"keepalive 5 30", "verb 4"} {
+	for _, want := range []string{"keepalive 5 30\n", `push "dhcp-option DOMAIN-SEARCH a,b"` + "\n"} { // each use one line, commas kept
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("missing %q in bundle: %+v", want, r)
 		}
@@ -1389,6 +1377,10 @@ func TestCustomOptsNoChange(t *testing.T) {
 	// re-write server.conf/re-audit a no-op, same guard -extra -'s no-op needs.
 	if r := run(t, env, "vpn", "config", "set"); r.code != 0 || !strings.Contains(r.stdout, "no changes") || strings.Contains(r.stdout, "saved; run") {
 		t.Fatalf("bare set with no flags should report 'no changes', not persist: %+v", r)
+	}
+	// any use of -extra sets it, so an empty one clears what the editor added
+	if r := run(t, env, "vpn", "config", "set", "-extra", ""); r.code != 0 || !strings.Contains(r.stdout, "saved; run") {
+		t.Fatalf("-extra '' should clear and persist: %+v", r)
 	}
 }
 

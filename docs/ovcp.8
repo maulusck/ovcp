@@ -158,7 +158,7 @@ has not been run.
 .TP
 .B certificate issue \fB\-cn\fR \fINAME\fR [\fB\-renew\fR] [\fB\-days\fR \fIN\fR] [\fB\-key\-pass\fR \fIPW\fR]
 .TQ
-.B certificate issue \fB\-cn\fR \fINAME\fR \fB\-export\fR [\fB\-renew\fR] [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-key\-pass\fR \fIPW\fR] [\fB\-split\-tunnel\fR] [\fB\-custom\-opts\fR \fIOPTS\fR|\fB\-\fR]
+.B certificate issue \fB\-cn\fR \fINAME\fR \fB\-export\fR [\fB\-renew\fR] [\fB\-remote\fR \fIHOST\fR] [\fB\-port\fR \fIN\fR] [\fB\-proto\fR udp|tcp] [\fB\-server\-cn\fR \fICN\fR] [\fB\-key\-pass\fR \fIPW\fR] [\fB\-split\-tunnel\fR] [\fB\-custom\-opts\fR \fIDIRECTIVE\fR ...|\fB\-\fR]
 \fBcert\fR is accepted everywhere as a shorthand for \fBcertificate\fR
 (\fBovcp cert list\fR, \fBovcp cert issue ...\fR); the rest of this page
 spells it out in full. Client\-only \(en a server has exactly one cert,
@@ -206,16 +206,15 @@ Appends raw openvpn directives to this one client's profile, unvalidated
 server. Three equivalent forms, pick whichever fits:
 .RS
 .IP \(bu 2
-a comma\-separated list, split into one directive per line:
-\fB\-custom\-opts\fR "keepalive 5 30,verb 4"
+one directive per use, repeatable and taken verbatim (commas included):
+\fB\-custom\-opts\fR "keepalive 5 30" \fB\-custom\-opts\fR "verb 4"
 .IP \(bu 2
 a bare \fB\-\fR, which opens \fB$EDITOR\fR (default \fBvi\fR; run by the
 shell, so it may carry arguments such as \fBcode \-\-wait\fR) on a private
 temporary file
 .IP \(bu 2
 a file's contents by way of the shell:
-\fB\-custom\-opts\fR "$(cat FILE)" \(en already newline\-separated with no
-commas, so it passes through the comma\-split unchanged
+\fB\-custom\-opts\fR "$(cat FILE)", one directive per line
 .RE
 Also available from the web UI (Certs tab), a plain multi\-line field.
 .RE
@@ -266,7 +265,7 @@ cipher, pushed DNS/routes, push\-internal\-dns, redirect\-gateway, and the
 raw extra directives \(en the same values \fBGET /api/vpn/config\fR (web UI
 Settings tab) reads.
 .TP
-.B vpn config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-push\-internal\-dns\fR on|off] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR on|off] [\fB\-extra\fR \fIOPTS\fR|\fB\-\fR]
+.B vpn config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-push\-internal\-dns\fR on|off] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR on|off] [\fB\-extra\fR \fIDIRECTIVE\fR ...|\fB\-\fR]
 Change one or more server settings and persist them, printing the same
 \fB+\fR/\fB\-\fR diff \fBpreview\fR below shows \(en the CLI/env\-var
 equivalent of the web UI's Settings tab \fBPUT /api/vpn/config\fR, for
@@ -279,7 +278,8 @@ has been saved yet). \fB\-dns\fR and \fB\-routes\fR take a comma\-separated
 list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
 appending to it. \fB\-extra\fR takes the same three forms as
 \fBcertificate issue \-export\fR's \fB\-custom\-opts\fR; a bare \fB\-\fR
-opens the current directives. \fB\-redirect\-gw\fR and
+opens the current directives, and any use sets them, so \fB\-extra\fR ""
+clears them. \fB\-redirect\-gw\fR and
 \fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
 or \fB1\fR/\fB0\fR, case\-insensitive \(en the same boolean vocabulary as
 \fBdns config set \-block\-internet\fR below. Rejects an invalid combination
