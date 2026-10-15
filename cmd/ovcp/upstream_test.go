@@ -527,13 +527,14 @@ func TestE2ERevokeDisconnects(t *testing.T) {
 		t.Fatalf("revoke: %s", rev.stderr)
 	}
 	connected := func() bool { r := run(t, h.env, "status"); return strings.Contains(r.stdout, "alice") }
-	if !retry(50, 200*time.Millisecond, func() error {
+	// gone takes openvpn's 5 s delayed exit plus up to one 3 s status interval: ~8 s idle
+	if !retry(100, 200*time.Millisecond, func() error {
 		if connected() {
 			return fmt.Errorf("still connected")
 		}
 		return nil
 	}) {
-		t.Fatalf("alice still connected 10 s after revoke\nrevoke stderr: %s\nstatus: %s", rev.stderr, run(t, h.env, "status").stdout)
+		t.Fatalf("alice still connected 20 s after revoke\nrevoke stderr: %s\nstatus: %s", rev.stderr, run(t, h.env, "status").stdout)
 	}
 	time.Sleep(5 * time.Second) // RESTART makes the client retry at once; the CRL must refuse it
 	if connected() {
