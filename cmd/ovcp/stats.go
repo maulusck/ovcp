@@ -204,7 +204,6 @@ func followStats(ctrl, cn string, intervalSec int) {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sig; restore(); os.Exit(0) }()
 
-	// ponytail: prevC never evicts departed CNs; add a sweep if -follow ever runs unattended for days.
 	prevC := map[string]store.Sample{}
 	printed := 0
 	for {
@@ -248,6 +247,11 @@ func followLines(clients []controller.VPNClient, err error, cn string, now time.
 	byCN := make(map[string]controller.VPNClient, len(clients))
 	for _, c := range clients {
 		byCN[c.CN] = c
+	}
+	for cn := range prevC { // prevC holds last tick's clients only, so its dt is one tick
+		if _, ok := byCN[cn]; !ok {
+			delete(prevC, cn)
+		}
 	}
 
 	if cn == "" {

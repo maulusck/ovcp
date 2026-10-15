@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/store"
 )
@@ -384,6 +385,22 @@ func TestCertAlias(t *testing.T) {
 
 // TestStatsConfigCommand covers the config get/set path added alongside the
 // snapshot/-follow flags — same "-1 means unchanged" idiom as logs config.
+// TestFollowLinesReturningClient: a CN gone for a tick and back has no
+// stale sample, so the global rate's dt stays one tick (it was the gap).
+func TestFollowLinesReturningClient(t *testing.T) {
+	t0 := time.Unix(1_000_000, 0)
+	prev := map[string]store.Sample{}
+	tick := func(at time.Time, clients ...controller.VPNClient) string {
+		return followLines(clients, nil, "", at, prev)[0]
+	}
+	tick(t0, controller.VPNClient{CN: "alice"}, controller.VPNClient{CN: "bob"})
+	tick(t0.Add(time.Second), controller.VPNClient{CN: "alice", BytesRecv: 1000})
+	got := tick(t0.Add(2*time.Second), controller.VPNClient{CN: "alice", BytesRecv: 2000}, controller.VPNClient{CN: "bob", BytesRecv: 5000})
+	if !strings.Contains(got, "rx "+fmtRate(1000)) {
+		t.Fatalf("header %q: want rx %s (alice over one tick, bob new)", got, fmtRate(1000))
+	}
+}
+
 func TestStatsConfigCommand(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
