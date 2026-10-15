@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bufio"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,7 +15,8 @@ import (
 
 // fakeMgmt emulates openvpn's mgmt interface on a unix socket, returning the
 // socket path and an accept counter so tests can assert reuse vs. reconnects.
-// Only client-kill is emulated: CID 7 (alice) succeeds, any other (ghost's 99) errors.
+// It answers "status 3" with killStatus and client-kill: CID 7 (alice)
+// succeeds, any other (ghost's 99) errors.
 func fakeMgmt(t *testing.T) (string, *int32) {
 	t.Helper()
 	var accepts int32
@@ -43,6 +45,8 @@ func fakeMgmt(t *testing.T) (string, *int32) {
 					switch cmd := strings.TrimSpace(line); {
 					case cmd == "hold release":
 						c.Write([]byte("SUCCESS: hold release succeeded\r\n"))
+					case cmd == "status 3":
+						c.Write([]byte(killStatus))
 					case cmd == "client-kill 7 HALT", cmd == "client-kill 7 RESTART":
 						c.Write([]byte("SUCCESS: client-kill command succeeded\r\n"))
 					case strings.HasPrefix(cmd, "client-kill "):
@@ -67,9 +71,18 @@ func writeStatus(t *testing.T, body string) string {
 	return p
 }
 
-// killStatus is oneClientStatus plus ghost (CID 99), whose client-kill fakeMgmt refuses.
-var killStatus = strings.Replace(oneClientStatus, "END\r\n",
-	"CLIENT_LIST\tghost\t203.0.113.9:1\t10.8.0.9\t\t0\t0\tSat Jul  5 11:00:00 2026\t1783080000\tUNDEF\t99\t0\tAES-256-GCM\r\nEND\r\n", 1)
+// killStatus is fakeMgmt's "status 3" reply: 300 filler sessions, then
+// oneClientStatus's alice (CID 7) and ghost (CID 99). One write, so a reader
+// that drops reply lines loses alice or END.
+var killStatus = func() string {
+	var b strings.Builder
+	b.WriteString("TITLE\tOpenVPN 2.6.12\r\nHEADER\tCLIENT_LIST\t...\r\n")
+	for i := range 300 {
+		fmt.Fprintf(&b, "CLIENT_LIST\tf%d\t203.0.113.1:1\t10.8.1.1\t\t0\t0\tSat Jul  5 11:00:00 2026\t1783080000\tUNDEF\t%d\t0\tAES-256-GCM\r\n", i, 1000+i)
+	}
+	return b.String() + oneClientStatus[strings.Index(oneClientStatus, "CLIENT_LIST\talice"):strings.Index(oneClientStatus, "HEADER\tROUTING")] +
+		"CLIENT_LIST\tghost\t203.0.113.9:1\t10.8.0.9\t\t0\t0\tSat Jul  5 11:00:00 2026\t1783080000\tUNDEF\t99\t0\tAES-256-GCM\r\nEND\r\n"
+}()
 
 const oneClientStatus = "TITLE\tOpenVPN 2.6.12\r\n" +
 	"TIME\t2026-07-05 12:00:00\t1783000000\r\n" +
@@ -131,7 +144,7 @@ func TestStatusTornRead(t *testing.T) {
 // the fake only accepts "client-kill 7 HALT|RESTART".
 func TestKill(t *testing.T) {
 	sock, _ := fakeMgmt(t)
-	c := NewClient(sock, writeStatus(t, killStatus))
+	c := NewClient(sock, "")
 	for _, msg := range []string{"HALT", "RESTART"} {
 		if n, err := c.Kill("alice", msg); n != 1 || err != nil {
 			t.Fatalf("%s: n=%d err=%v", msg, n, err)
@@ -149,7 +162,7 @@ func TestKill(t *testing.T) {
 // doesn't trigger a reconnect — only actual connection failures should.
 func TestAppErrorKeepsConnection(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
-	c := NewClient(sock, writeStatus(t, killStatus))
+	c := NewClient(sock, "")
 	if _, err := c.Kill("ghost", "HALT"); err == nil {
 		t.Fatal("want the fake's ERROR reply for ghost")
 	}
@@ -297,7 +310,7 @@ func TestClientDisconnectCallsHandler(t *testing.T) {
 // deadlock — the reader needs writeMu, not c.mu, to answer it.
 func TestClientConnectDuringKillDoesNotDeadlock(t *testing.T) {
 	sock, onConn := fakeMgmtNotify(t)
-	c := NewClient(sock, writeStatus(t, killStatus))
+	c := NewClient(sock, "")
 	if err := c.Connect(); err != nil {
 		t.Fatal(err)
 	}
@@ -308,14 +321,18 @@ func TestClientConnectDuringKillDoesNotDeadlock(t *testing.T) {
 	go func() { _, err := c.Kill("alice", "HALT"); killDone <- err }()
 
 	r := bufio.NewReader(server)
-	if got := readLine(t, server, r); got != "client-kill 7 HALT" {
-		t.Fatalf("got %q, want client-kill 7 HALT", got)
+	if got := readLine(t, server, r); got != "status 3" {
+		t.Fatalf("got %q, want status 3", got)
 	}
 	// push the notification before answering kill — the reader must handle
 	// it (and write back) without Kill's own in-flight exec() blocking it.
 	server.Write([]byte(">CLIENT:CONNECT,9,0\r\n>CLIENT:ENV,common_name=eve\r\n>CLIENT:ENV,END\r\n"))
 	if got := readLine(t, server, r); got != "client-auth-nt 9 0" {
 		t.Fatalf("got %q, want client-auth-nt 9 0", got)
+	}
+	server.Write([]byte(oneClientStatus))
+	if got := readLine(t, server, r); got != "client-kill 7 HALT" {
+		t.Fatalf("got %q, want client-kill 7 HALT", got)
 	}
 	server.Write([]byte("SUCCESS: client-kill command succeeded\r\n"))
 
@@ -374,7 +391,7 @@ func readLine(t *testing.T, conn net.Conn, r *bufio.Reader) string {
 // next call transparently redials and succeeds.
 func TestReconnectsAfterDrop(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
-	c := NewClient(sock, writeStatus(t, killStatus))
+	c := NewClient(sock, "")
 	if _, err := c.Kill("alice", "HALT"); err != nil {
 		t.Fatal(err)
 	}

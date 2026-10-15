@@ -172,8 +172,8 @@ func (c *Client) write(s string) error {
 }
 
 // readLoop is the connection's sole reader for its whole life: >CLIENT:
-// blocks go to the connect/established/disconnect handlers, everything
-// else is forwarded to resp for whichever exec() call is waiting on it.
+// blocks go to the connect/established/disconnect handlers, other notices
+// are dropped, and every reply line is handed to the waiting exec() call.
 func (c *Client) readLoop(r *bufio.Reader, resp chan<- string) {
 	defer close(resp)
 	for {
@@ -194,10 +194,14 @@ func (c *Client) readLoop(r *bufio.Reader, resp chan<- string) {
 			c.handleEstablished(r, line)
 		case strings.HasPrefix(line, ">CLIENT:DISCONNECT,"):
 			c.handleDisconnect(r, line)
+		case strings.HasPrefix(line, ">"):
+			// any other real-time notice (>INFO, >HOLD, ...): no command waits for it
 		default:
+			// a reply line belongs to the in-flight command, whose parser drains to its terminator:
+			// wait for it rather than drop it, bounded so a stray line can't wedge the reader
 			select {
 			case resp <- raw: // raw, not line: ReadString('\n') on the other end needs the delimiter
-			default: // nobody listening (timed out or stray) — drop, never block the reader
+			case <-time.After(c.Timeout):
 			}
 		}
 	}
@@ -353,7 +357,8 @@ func (c *Client) tryExec(cmd string, parse func(*bufio.Reader) error) error {
 		return err
 	}
 	done := make(chan error, 1)
-	go func() { done <- parse(bufio.NewReader(&chanReader{lines: c.resp})) }()
+	lines := c.resp // read here, under c.mu: a retry's connect() replaces it
+	go func() { done <- parse(bufio.NewReader(&chanReader{lines: lines})) }()
 	select {
 	case err := <-done:
 		return err
@@ -414,16 +419,23 @@ func parseStatusFile(r *bufio.Reader) ([]VPNClient, error) {
 }
 
 // Kill sends msg to every session of cn via client-kill and returns how many
-// it reached: HALT keeps the client off, RESTART makes it reconnect.
-// ponytail: sessions from the status file miss one younger than its interval; go live once readLoop stops dropping multi-line replies.
+// it reached: HALT keeps the client off, RESTART makes it reconnect. Sessions are
+// read live ("status 3"), so one younger than the status file's interval is not missed.
 func (c *Client) Kill(cn, msg string) (n int, err error) {
 	if msg != "HALT" && msg != "RESTART" {
 		return 0, fmt.Errorf("controller: invalid kill message %q", msg)
 	}
-	live, err := c.Status()
-	if err != nil {
+	got := make(chan []VPNClient, 2) // one per exec attempt; a timed-out attempt's parser may still finish
+	if err := c.exec("status 3", func(r *bufio.Reader) error {
+		l, err := parseStatusFile(r)
+		if err == nil {
+			got <- l
+		}
+		return err
+	}); err != nil {
 		return 0, err
 	}
+	live := <-got
 	for _, v := range live {
 		if v.CN == cn {
 			if err := c.simple("client-kill " + v.CID + " " + msg); err != nil {

@@ -429,8 +429,7 @@ sends SIGUSR1 for a soft session reset (runtime recovery, no process
 replacement).
 .B kill
 tells every session of a CN to stop (OpenVPN's HALT): the client exits
-instead of reconnecting, and the worker process is untouched. A session
-younger than the status interval is not seen yet. SIGHUP / in\-place reload is intentionally not
+instead of reconnecting, and the worker process is untouched. SIGHUP / in\-place reload is intentionally not
 supported: a fresh restart re\-reads every file, which SIGHUP
 cannot. Each lifecycle op prints the resulting openvpn pid, so a repeated
 .B start

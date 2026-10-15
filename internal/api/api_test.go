@@ -219,11 +219,10 @@ func TestIssueRevokeWrongPass(t *testing.T) {
 }
 
 // TestRevokeRestartsSessions: both API revoke paths (revoke, export renew)
-// send RESTART to the CN's live session, via the env's mgmt socket and status file.
+// send RESTART to the CN's live session, via a fake on the env's mgmt socket.
 func TestRevokeRestartsSessions(t *testing.T) {
 	e := setup(t)
 	status, _ := os.ReadFile(writeStatus(t, "alice")) // alice, CID 0
-	os.WriteFile(filepath.Join(e.dir, "no-status.log"), status, 0o600)
 	l, err := net.Listen("unix", filepath.Join(e.dir, "no.sock"))
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +244,11 @@ func TestRevokeRestartsSessions(t *testing.T) {
 					if err != nil {
 						return
 					}
-					if cmd := strings.TrimSpace(line); strings.HasPrefix(cmd, "client-kill ") {
+					switch cmd := strings.TrimSpace(line); {
+					case cmd == "status 3":
+						c.Write(status)
+						continue
+					case strings.HasPrefix(cmd, "client-kill "):
 						kills <- cmd
 					}
 					c.Write([]byte("SUCCESS: ok\r\n"))
