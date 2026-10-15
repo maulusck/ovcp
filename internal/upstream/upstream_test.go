@@ -594,7 +594,7 @@ func TestApplyWaitsWhileBusy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Apply after waiting its turn: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second): // a deadlock check: real nft under full-suite load can take seconds
 		t.Fatal("Apply never returned after the lock was released")
 	}
 }

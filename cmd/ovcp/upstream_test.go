@@ -451,14 +451,16 @@ func (h *e2eHost) startClient(t *testing.T, cn, suffix, hostIP, clientIP string)
 func (h *e2eHost) newClient(t *testing.T, cn, suffix, hostIP, clientIP string) netNS {
 	t.Helper()
 	ns := h.startClient(t, cn, suffix, hostIP, clientIP)
-	h.waitConnected(t, cn, 8*time.Second)
+	h.waitConnected(t, cn)
 	return ns
 }
 
 // waitConnected polls `ovcp status` until cn shows up connected — the
-// same data a real admin's polling would read, no arbitrary sleep.
-func (h *e2eHost) waitConnected(t *testing.T, cn string, timeout time.Duration) {
+// same data a real admin's polling would read, no arbitrary sleep. A
+// (re)connect plus one 3 s status interval is ~5 s idle; 15 s covers full-package load.
+func (h *e2eHost) waitConnected(t *testing.T, cn string) {
 	t.Helper()
+	const timeout = 15 * time.Second
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		r := run(t, h.env, "status")
@@ -603,8 +605,8 @@ func TestE2EPerCNOverride(t *testing.T) {
 	// The first-ever assignment restarts the openvpn worker (see assign's
 	// doc comment) — both real client processes reconnect on their own,
 	// but the test needs to wait for that before dialing either of them.
-	h.waitConnected(t, "alice", 8*time.Second)
-	h.waitConnected(t, "bob", 8*time.Second)
+	h.waitConnected(t, "alice")
+	h.waitConnected(t, "bob")
 
 	// dialRetry, not dial: right after this restart, openvpn's status file
 	// (what waitConnected polls) can report a client connected slightly
@@ -650,8 +652,8 @@ func TestE2EAssignLiveToAlreadyConnectedPlainClient(t *testing.T) {
 	h.newClient(t, "alice", "1", "10.90.10.1", "10.90.10.2") // just needs to exist and hold an override; never dialed
 	bob := h.newClient(t, "bob", "2", "10.90.11.1", "10.90.11.2")
 	h.assign(t, "alice", "wan1") // first-ever assign: restarts openvpn, both reconnect
-	h.waitConnected(t, "alice", 8*time.Second)
-	h.waitConnected(t, "bob", 8*time.Second)
+	h.waitConnected(t, "alice")
+	h.waitConnected(t, "bob")
 
 	bobGot, err := bob.dialRetry(t, "10.90.1.2:9000", 5*time.Second)
 	if err != nil {
@@ -718,7 +720,7 @@ func TestE2EManyClientsBurst(t *testing.T) {
 		ns[i] = h.startClient(t, c.cn, c.suffix, c.hostIP, c.clientIP)
 	}
 	for _, c := range clients {
-		h.waitConnected(t, c.cn, 15*time.Second)
+		h.waitConnected(t, c.cn)
 	}
 
 	for i, c := range clients {
@@ -750,8 +752,8 @@ func TestE2EPerCNOverrideNoDefault(t *testing.T) {
 	alice := h.newClient(t, "alice", "1", "10.90.10.1", "10.90.10.2")
 	bob := h.newClient(t, "bob", "2", "10.90.11.1", "10.90.11.2")
 	h.assign(t, "alice", "wan1")
-	h.waitConnected(t, "alice", 8*time.Second)
-	h.waitConnected(t, "bob", 8*time.Second)
+	h.waitConnected(t, "alice")
+	h.waitConnected(t, "bob")
 
 	aliceGot, err := alice.dialRetry(t, "10.90.2.2:9000", 5*time.Second)
 	if err != nil {
