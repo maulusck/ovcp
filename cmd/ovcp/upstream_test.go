@@ -522,8 +522,9 @@ func TestE2ERevokeDisconnects(t *testing.T) {
 			serial = c.Serial
 		}
 	}
-	if r := run(t, h.env, "certificate", "revoke", "-serial", serial); r.code != 0 {
-		t.Fatalf("revoke: %s", r.stderr)
+	rev := run(t, h.env, "certificate", "revoke", "-serial", serial)
+	if rev.code != 0 {
+		t.Fatalf("revoke: %s", rev.stderr)
 	}
 	connected := func() bool { r := run(t, h.env, "status"); return strings.Contains(r.stdout, "alice") }
 	if !retry(50, 200*time.Millisecond, func() error {
@@ -532,7 +533,7 @@ func TestE2ERevokeDisconnects(t *testing.T) {
 		}
 		return nil
 	}) {
-		t.Fatal("alice still connected 10 s after revoke")
+		t.Fatalf("alice still connected 10 s after revoke\nrevoke stderr: %s\nstatus: %s", rev.stderr, run(t, h.env, "status").stdout)
 	}
 	time.Sleep(5 * time.Second) // RESTART makes the client retry at once; the CRL must refuse it
 	if connected() {
