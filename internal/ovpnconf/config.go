@@ -253,30 +253,33 @@ func Domain(cn string) string {
 	return domain
 }
 
-// Diff compares two rendered configs, returning changed lines ("-" old-only,
-// "+" new-only). A set diff: every directive is static or single-value, so line order doesn't matter.
-// ponytail: set not multiset, so a value repeated verbatim is invisible; harmless today, swap in LCS if that changes.
+// Diff is an ordered line diff (longest common subsequence): "-" lines only
+// in old, "+" only in new; empty exactly when the line sequences match.
 func Diff(old, new []byte) []string {
-	oldLines := strings.Split(strings.TrimRight(string(old), "\n"), "\n")
-	newLines := strings.Split(strings.TrimRight(string(new), "\n"), "\n")
-	inNew := map[string]bool{}
-	for _, l := range newLines {
-		inNew[l] = true
+	a := strings.Split(strings.TrimRight(string(old), "\n"), "\n")
+	b := strings.Split(strings.TrimRight(string(new), "\n"), "\n")
+	lcs := make([][]int, len(a)+1) // lcs[i][j]: LCS length of a[i:] and b[j:]
+	for i := range lcs {
+		lcs[i] = make([]int, len(b)+1)
 	}
-	inOld := map[string]bool{}
-	for _, l := range oldLines {
-		inOld[l] = true
-	}
-
-	var out []string
-	for _, l := range oldLines {
-		if !inNew[l] {
-			out = append(out, "-"+l)
+	for i := len(a) - 1; i >= 0; i-- {
+		for j := len(b) - 1; j >= 0; j-- {
+			if a[i] == b[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
 		}
 	}
-	for _, l := range newLines {
-		if !inOld[l] {
-			out = append(out, "+"+l)
+	var out []string
+	for i, j := 0, 0; i < len(a) || j < len(b); {
+		switch {
+		case i < len(a) && j < len(b) && a[i] == b[j]:
+			i, j = i+1, j+1
+		case i < len(a) && (j == len(b) || lcs[i+1][j] >= lcs[i][j+1]):
+			out, i = append(out, "-"+a[i]), i+1
+		default:
+			out, j = append(out, "+"+b[j]), j+1
 		}
 	}
 	return out

@@ -185,6 +185,12 @@ func TestDiff(t *testing.T) {
 	if len(d) != 1 || d[0] != want[0] {
 		t.Fatalf("added DNS diff = %v, want %v", d, want)
 	}
+	// a set diff saw none of these: reorder, a dropped duplicate
+	for _, tc := range [][2]string{{"a\nb\n", "b\na\n"}, {"a\na\n", "a\n"}} {
+		if d := Diff([]byte(tc[0]), []byte(tc[1])); len(d) == 0 {
+			t.Errorf("Diff(%q, %q) is empty", tc[0], tc[1])
+		}
+	}
 }
 
 func TestLoadCorrupt(t *testing.T) {
