@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/ovcp/ovcp/internal/ovpnconf"
+	"github.com/ovcp/ovcp/internal/pki"
 )
 
 // Reserved band ovcp exclusively owns — never touches a rule/table outside
@@ -253,6 +254,11 @@ func validateSOCKSURL(raw string) error {
 	if u.Hostname() == "" || u.Port() == "" {
 		return fmt.Errorf("socks url needs host:port")
 	}
+	for _, c := range raw { // RFC 3986: a URL is ASCII (percent-encode, punycode); keeps table cells single-width
+		if c > 127 {
+			return fmt.Errorf("socks url must be ASCII")
+		}
+	}
 	return nil
 }
 
@@ -295,6 +301,9 @@ func (c Config) Validate() error {
 	for _, u := range c.Upstreams {
 		if u.ID == "" {
 			return fmt.Errorf("upstream: empty id")
+		}
+		if err := pki.CheckName("upstream: id", u.ID); err != nil {
+			return err
 		}
 		if seen[u.ID] {
 			return fmt.Errorf("upstream: duplicate id %q", u.ID)

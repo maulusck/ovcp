@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/ovcp/ovcp/internal/pki"
 )
 
 type User struct {
@@ -22,6 +24,9 @@ type User struct {
 }
 
 func (s *Store) AddUser(username, passHash, role string) (int64, error) {
+	if err := pki.CheckName("username", username); err != nil {
+		return 0, err
+	}
 	res, err := s.db.Exec(
 		`INSERT INTO users(username, pass_hash, role, created_at) VALUES (?,?,?,?)`,
 		username, passHash, role, time.Now().Unix())

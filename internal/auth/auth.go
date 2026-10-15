@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
+	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 )
 
@@ -158,6 +159,9 @@ func NewService(s *store.Store) *Service {
 // Login validates credentials (+TOTP when enrolled) and mints a session token.
 // key is the rate-limit bucket (username+ip).
 func (a *Service) Login(username, password, totpCode, ip string) (token string, u *store.User, err error) {
+	if pki.CheckName("", username) != nil {
+		username = "?" // no such user can exist; never echo raw input into the audit log
+	}
 	key := username + "|" + ip
 	if !a.Limiter.Allow(key) || !a.UserLimiter.Allow(username) {
 		return "", nil, ErrRateLimited

@@ -19,6 +19,9 @@ func TestSessionExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.AddUser("eve\nadmin", "hash", "admin"); err == nil {
+		t.Fatal("a username breaking the name rule must be refused")
+	}
 	s.AddSession("expired", id, -time.Second)
 	if u, err := s.SessionUser("expired"); err != nil || u != nil {
 		t.Fatalf("expired session must be nil user, got %+v err=%v", u, err)

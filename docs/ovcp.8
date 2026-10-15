@@ -115,6 +115,10 @@ operations are unreachable from Telegram (see \fBtelegram\fR in
 \fBCOMMANDS\fR). Its lifecycle buttons use the same overlap guard as
 \fBvpn\fR and \fBdns\fR.
 .SH COMMANDS
+A client or server certificate CN, a username and an upstream ID are each 1
+to 64 (RFC 5280's CommonName limit) of \fBA\-Z a\-z 0\-9 . _ @ \-\fR, so a
+name is safe verbatim in OpenVPN's management commands, configs, hosts
+files, logs and tables.
 .TP
 .B init \fB\-server\-cn\fR \fIHOST\fR [\fB\-ca\-cn\fR \fINAME\fR] [\fB\-ca\-years\fR \fIN\fR] [\fB\-server\-days\fR \fIN\fR] [\fB\-admin\fR \fINAME\fR] [\fB\-mgmt\fR \fIPATH\fR]
 One\-shot initialization. Creates the CA (prompting twice for a new
@@ -176,9 +180,7 @@ only; private keys are printed exactly once and never stored (if lost,
 \fB(umask 077; ovcp certificate issue \-cn alice \-export > alice.ovpn)\fR. Certificates (public) are kept and can be re\-downloaded
 anytime with \fBcertificate list\fR / the web UI. With \fB\-key\-pass\fR
 the private key is AES\-256 encrypted; OpenVPN prompts for the password on
-connect. \fB\-days\fR must be positive. \fB\-cn\fR is 1 to 64 (RFC 5280's
-CommonName limit) of \fBA\-Z a\-z 0\-9 . _ @ \-\fR, so it is safe verbatim
-in OpenVPN's management commands, configs and hosts files.
+connect. \fB\-days\fR must be positive.
 .RS
 .TP
 \fB\-export\fR's own flags

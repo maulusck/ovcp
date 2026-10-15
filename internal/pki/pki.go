@@ -37,9 +37,16 @@ type RevokedEntry struct {
 // MaxCNLen mirrors RFC 5280's CommonName limit (ub-common-name = 64 bytes).
 const MaxCNLen = 64
 
-// cnRe is the one CN rule, enforced at issuance: no space, control or
-// non-ASCII byte, so a CN is safe verbatim in mgmt commands, configs and hosts files.
-var cnRe = regexp.MustCompile(fmt.Sprintf(`^[A-Za-z0-9._@-]{1,%d}$`, MaxCNLen))
+var nameRe = regexp.MustCompile(fmt.Sprintf(`^[A-Za-z0-9._@-]{1,%d}$`, MaxCNLen))
+
+// CheckName is the one rule for every name ovcp stores (CNs, usernames, upstream ids):
+// no space, control or non-ASCII byte, so a name is safe verbatim in commands, files, logs and tables.
+func CheckName(what, s string) error {
+	if !nameRe.MatchString(s) {
+		return fmt.Errorf("%s %q must be 1-%d of A-Z a-z 0-9 . _ @ -", what, s, MaxCNLen)
+	}
+	return nil
+}
 
 func New(dir string) *PKI { return &PKI{Dir: dir} }
 
@@ -219,8 +226,8 @@ const (
 
 // Issue creates a keypair + certificate signed by the CA; the private key is returned, not persisted.
 func (p *PKI) Issue(kind CertKind, cn string, days int, passphrase []byte) (*IssuedCert, error) {
-	if !cnRe.MatchString(cn) {
-		return nil, fmt.Errorf("pki: cn %q must be 1-%d of A-Z a-z 0-9 . _ @ -", cn, MaxCNLen)
+	if err := CheckName("pki: cn", cn); err != nil {
+		return nil, err
 	}
 	caCert, caKey, err := p.loadCA(passphrase)
 	if err != nil {

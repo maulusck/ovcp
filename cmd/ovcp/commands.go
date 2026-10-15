@@ -602,9 +602,8 @@ func coloredStatus(status string) string {
 // visibleWidth strips them so colored and plain cells still measure right.
 var ansiSGR = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-// visibleWidth: rune count, ANSI stripped first.
-// ponytail: not display-width-aware, a wide (CJK) rune still misaligns —
-// real content here (IDs, CNs, English text) is single-width; upgrade if that changes.
+// visibleWidth: rune count, ANSI stripped first. Padded columns hold names (ASCII by
+// pki.CheckName) and fixed words; free text sits in the last column, never padded.
 func visibleWidth(s string) int {
 	return utf8.RuneCountInString(ansiSGR.ReplaceAllString(s, ""))
 }

@@ -34,12 +34,14 @@ func TestValidateRejects(t *testing.T) {
 		"duplicate id": func(c *Config) {
 			c.Upstreams = append(c.Upstreams, Upstream{ID: "wan2", Iface: "eth2", Table: tableBase + 2})
 		},
-		"empty iface":           func(c *Config) { c.Upstreams[0].Iface = "" },
-		"bad gateway":           func(c *Config) { c.Upstreams[0].Gateway = "not-an-ip" },
-		"table out of range":    func(c *Config) { c.Upstreams[0].Table = tableBase - 1 },
-		"table collision":       func(c *Config) { c.Upstreams[1].Table = c.Upstreams[0].Table },
-		"unknown default":       func(c *Config) { c.Default = "ghost" },
-		"unknown per-cn target": func(c *Config) { c.PerCN = map[string]string{"alice": "ghost"} },
+		"empty iface":             func(c *Config) { c.Upstreams[0].Iface = "" },
+		"bad gateway":             func(c *Config) { c.Upstreams[0].Gateway = "not-an-ip" },
+		"table out of range":      func(c *Config) { c.Upstreams[0].Table = tableBase - 1 },
+		"table collision":         func(c *Config) { c.Upstreams[1].Table = c.Upstreams[0].Table },
+		"unknown default":         func(c *Config) { c.Default = "ghost" },
+		"unknown per-cn target":   func(c *Config) { c.PerCN = map[string]string{"alice": "ghost"} },
+		"id breaks the name rule": func(c *Config) { c.Upstreams[0].ID, c.Default = "wan 2", "wan 2" },
+		"non-ASCII socks url":     func(c *Config) { c.Upstreams[0] = Upstream{ID: "wan2", SOCKS: "socks5://hôst:1080", Table: tableBase} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

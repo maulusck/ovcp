@@ -76,6 +76,10 @@ func TestLoginSession(t *testing.T) {
 	if err != nil || su == nil || su.Username != "admin" {
 		t.Fatalf("%v %v", su, err)
 	}
+	a.Login("x\x1b[2Jadmin login", "pw", "", "1.2.3.4") // raw input never reaches the audit log
+	if tail, _ := a.Store.AuditTail(1); len(tail) != 1 || tail[0].Actor != "?" {
+		t.Fatalf("invalid username audited as %+v, want actor ?", tail)
+	}
 	if !Role(su.Role).Can(RoleOperator) || Role("readonly").Can(RoleAdmin) {
 		t.Fatal("rbac")
 	}
