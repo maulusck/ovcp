@@ -44,6 +44,10 @@ overrides:
         dst: /etc/init.d/ovcp
         file_info:
           mode: 0755
+      - src: deploy/selinux.sh # postinstall calls it everywhere; a no-op without SELinux
+        dst: /usr/lib/ovcp/selinux.sh
+        file_info:
+          mode: 0755
       # OpenWrt also installs .apk (apk-tools replaced opkg there), but runs
       # procd, not OpenRC — postinstall.sh swaps this in over the OpenRC
       # script above when /etc/rc.common (procd's marker) is present.

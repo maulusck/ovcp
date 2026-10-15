@@ -1,6 +1,7 @@
 #!/bin/bash
 # Live acceptance: `scripts/vm-acceptance.sh purge` resets both machines (rebooting
-# the client) and verifies the clean slate; plain `scripts/vm-acceptance.sh` then
+# the client) and verifies the clean slate; `apk` installs the .apk on the client
+# (OpenRC) and checks it; plain `scripts/vm-acceptance.sh` then
 # builds a .deb, installs it here (systemd) and drives the Alpine client
 # $OVCP_TEST_VM. Host uplink, address and gateway come from the default
 # route. Needs passwordless sudo. Purge again afterwards.
@@ -65,6 +66,15 @@ connected() { timeout 90 sh -c "until sudo -n ovcp status 2>/dev/null | grep -q 
 
 if [ "${1:-}" = purge ]; then
 	echo "== purge"; purge; echo "== RESULT: $PASSES passed, $FAILS failed"; rm -rf "$T"; [ $FAILS -eq 0 ]; exit
+fi
+
+if [ "${1:-}" = apk ]; then # the .apk on the Alpine client (OpenRC) instead of the .deb here; purge around it
+	echo "== apk (OpenRC, on the client)"
+	cd $SRC && rm -f dist/*.apk && make apk >$T/apk.log 2>&1 && scp -q dist/*.apk $VM:/root/ovcp.apk
+	t "apk add: postinstall finds every file it calls" "C 'modprobe tun; apk add -q dnsmasq && apk add --allow-untrusted /root/ovcp.apk' >$T/add.log 2>&1 && ! grep -qi 'not found' $T/add.log"
+	t "init, rc-service start" "C 'OVCP_CA_PASSPHRASE=$CA OVCP_USER_PASSWORD=$ADM ovcp init -server-cn vm3.example && rc-service ovcp start' && sleep 6"
+	t "serve + workers: ovcp, CapEff 0x1400, NoNewPrivs 0 (OpenRC)" "C \"\$(declare -f creds); creds 0\""
+	echo "== RESULT: $PASSES passed, $FAILS failed"; rm -rf "$T"; [ $FAILS -eq 0 ]; exit
 fi
 
 # forwarding is the operator's choice; neither ovcp nor this script sets it
