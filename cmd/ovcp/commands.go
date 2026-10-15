@@ -947,7 +947,7 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
 		}
-		die(controller.Kill(*ctrl, *cn))
+		die(controller.Kill(*ctrl, *cn, "HALT"))
 		s := ctx.openStore()
 		defer s.Close()
 		s.Audit("cli", "kill", "cn="+*cn)

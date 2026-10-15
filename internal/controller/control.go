@@ -128,8 +128,9 @@ func serveControlConn(c net.Conn, d ControlDeps) {
 
 	// clients/kill proxy mgmt's connection; their response shape doesn't fit
 	// the pid/changed trailer every Lifecycle op below shares, so they return directly.
-	if cn, ok := strings.CutPrefix(op, "kill "); ok {
-		replyOK(c, d.Mgmt.Kill(cn))
+	if arg, ok := strings.CutPrefix(op, "kill "); ok {
+		msg, cn, _ := strings.Cut(arg, " ")
+		replyOK(c, d.Mgmt.Kill(cn, msg))
 		return
 	}
 	if op == "clients" {
@@ -295,10 +296,9 @@ func Clients(sockPath string) ([]VPNClient, error) {
 	return cl, nil
 }
 
-// Kill disconnects a client by CN, via serve's own mgmt connection (same
-// reasoning as Clients).
-func Kill(sockPath, cn string) error {
-	_, err := controlRequest(sockPath, "kill "+cn)
+// Kill is Client.Kill via serve's own mgmt connection (same reasoning as Clients).
+func Kill(sockPath, cn, msg string) error {
+	_, err := controlRequest(sockPath, "kill "+msg+" "+cn)
 	return err
 }
 

@@ -413,13 +413,30 @@ func parseStatusFile(r *bufio.Reader) ([]VPNClient, error) {
 	}
 }
 
-// Kill disconnects all sessions for a CN (mgmt `kill`). cn is rejected if it
-// could smuggle extra lines into the newline-delimited mgmt protocol.
-func (c *Client) Kill(cn string) error {
-	if strings.ContainsAny(cn, "\r\n") {
-		return fmt.Errorf("controller: invalid cn %q", cn)
+// Kill sends msg to every session of cn via client-kill: HALT keeps the
+// client off, RESTART makes it reconnect.
+// ponytail: sessions from the status file miss one younger than its interval; go live once readLoop stops dropping multi-line replies.
+func (c *Client) Kill(cn, msg string) error {
+	if msg != "HALT" && msg != "RESTART" {
+		return fmt.Errorf("controller: invalid kill message %q", msg)
 	}
-	return c.simple("kill " + cn)
+	live, err := c.Status()
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, v := range live {
+		if v.CN == cn {
+			if err := c.simple("client-kill " + v.CID + " " + msg); err != nil {
+				return err
+			}
+			n++
+		}
+	}
+	if n == 0 {
+		return fmt.Errorf("controller: %s is not connected", cn)
+	}
+	return nil
 }
 
 func (c *Client) simple(cmd string) error {

@@ -146,7 +146,7 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request, u *store.Use
 		jsonErr(w, 400, "cn required")
 		return
 	}
-	if err := s.Mgmt.Kill(in.CN); err != nil {
+	if err := s.Mgmt.Kill(in.CN, "HALT"); err != nil {
 		jsonErr(w, 502, err.Error())
 		return
 	}

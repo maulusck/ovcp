@@ -14,7 +14,7 @@ import (
 
 // fakeMgmt emulates openvpn's mgmt interface on a unix socket, returning the
 // socket path and an accept counter so tests can assert reuse vs. reconnects.
-// Only "kill" is emulated — Status() no longer talks to this socket at all.
+// Only client-kill is emulated: CID 7 (alice) succeeds, any other (ghost's 99) errors.
 func fakeMgmt(t *testing.T) (string, *int32) {
 	t.Helper()
 	var accepts int32
@@ -43,10 +43,10 @@ func fakeMgmt(t *testing.T) (string, *int32) {
 					switch cmd := strings.TrimSpace(line); {
 					case cmd == "hold release":
 						c.Write([]byte("SUCCESS: hold release succeeded\r\n"))
-					case strings.HasPrefix(cmd, "kill alice"):
-						c.Write([]byte("SUCCESS: common name 'alice' found, 1 client(s) killed\r\n"))
-					case strings.HasPrefix(cmd, "kill "):
-						c.Write([]byte("ERROR: common name not found\r\n"))
+					case cmd == "client-kill 7 HALT", cmd == "client-kill 7 RESTART":
+						c.Write([]byte("SUCCESS: client-kill command succeeded\r\n"))
+					case strings.HasPrefix(cmd, "client-kill "):
+						c.Write([]byte("ERROR: client-kill command failed\r\n"))
 					}
 				}
 			}(c)
@@ -66,6 +66,10 @@ func writeStatus(t *testing.T, body string) string {
 	}
 	return p
 }
+
+// killStatus is oneClientStatus plus ghost (CID 99), whose client-kill fakeMgmt refuses.
+var killStatus = strings.Replace(oneClientStatus, "END\r\n",
+	"CLIENT_LIST\tghost\t203.0.113.9:1\t10.8.0.9\t\t0\t0\tSat Jul  5 11:00:00 2026\t1783080000\tUNDEF\t99\t0\tAES-256-GCM\r\nEND\r\n", 1)
 
 const oneClientStatus = "TITLE\tOpenVPN 2.6.12\r\n" +
 	"TIME\t2026-07-05 12:00:00\t1783000000\r\n" +
@@ -123,22 +127,21 @@ func TestStatusTornRead(t *testing.T) {
 	}
 }
 
+// TestKill: client-kill by the live session's CID, with either message;
+// the fake only accepts "client-kill 7 HALT|RESTART".
 func TestKill(t *testing.T) {
 	sock, _ := fakeMgmt(t)
-	c := NewClient(sock, "")
-	if err := c.Kill("alice"); err != nil {
-		t.Fatal(err)
+	c := NewClient(sock, writeStatus(t, killStatus))
+	for _, msg := range []string{"HALT", "RESTART"} {
+		if err := c.Kill("alice", msg); err != nil {
+			t.Fatalf("%s: %v", msg, err)
+		}
 	}
-	if err := c.Kill("nobody"); err == nil {
-		t.Fatal("want error for unknown cn")
+	if err := c.Kill("nobody", "HALT"); err == nil {
+		t.Fatal("want error for a cn with no session")
 	}
-}
-
-func TestKillRejectsInjection(t *testing.T) {
-	sock, _ := fakeMgmt(t)
-	c := NewClient(sock, "")
-	if err := c.Kill("alice\nsignal SIGTERM"); err == nil {
-		t.Fatal("want error for cn containing newline")
+	if err := c.Kill("alice", "SIGTERM"); err == nil {
+		t.Fatal("want error for an unknown message")
 	}
 }
 
@@ -146,11 +149,11 @@ func TestKillRejectsInjection(t *testing.T) {
 // doesn't trigger a reconnect — only actual connection failures should.
 func TestAppErrorKeepsConnection(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
-	c := NewClient(sock, "")
-	if err := c.Kill("nobody"); err == nil {
-		t.Fatal("want error for unknown cn")
+	c := NewClient(sock, writeStatus(t, killStatus))
+	if err := c.Kill("ghost", "HALT"); err == nil {
+		t.Fatal("want the fake's ERROR reply for ghost")
 	}
-	if err := c.Kill("alice"); err != nil {
+	if err := c.Kill("alice", "HALT"); err != nil {
 		t.Fatal(err)
 	}
 	if got := atomic.LoadInt32(accepts); got != 1 {
@@ -294,7 +297,7 @@ func TestClientDisconnectCallsHandler(t *testing.T) {
 // deadlock — the reader needs writeMu, not c.mu, to answer it.
 func TestClientConnectDuringKillDoesNotDeadlock(t *testing.T) {
 	sock, onConn := fakeMgmtNotify(t)
-	c := NewClient(sock, "")
+	c := NewClient(sock, writeStatus(t, killStatus))
 	if err := c.Connect(); err != nil {
 		t.Fatal(err)
 	}
@@ -302,11 +305,11 @@ func TestClientConnectDuringKillDoesNotDeadlock(t *testing.T) {
 	defer server.Close()
 
 	killDone := make(chan error, 1)
-	go func() { killDone <- c.Kill("alice") }()
+	go func() { killDone <- c.Kill("alice", "HALT") }()
 
 	r := bufio.NewReader(server)
-	if got := readLine(t, server, r); got != "kill alice" {
-		t.Fatalf("got %q, want kill alice", got)
+	if got := readLine(t, server, r); got != "client-kill 7 HALT" {
+		t.Fatalf("got %q, want client-kill 7 HALT", got)
 	}
 	// push the notification before answering kill — the reader must handle
 	// it (and write back) without Kill's own in-flight exec() blocking it.
@@ -314,7 +317,7 @@ func TestClientConnectDuringKillDoesNotDeadlock(t *testing.T) {
 	if got := readLine(t, server, r); got != "client-auth-nt 9 0" {
 		t.Fatalf("got %q, want client-auth-nt 9 0", got)
 	}
-	server.Write([]byte("SUCCESS: common name 'alice' found, 1 client(s) killed\r\n"))
+	server.Write([]byte("SUCCESS: client-kill command succeeded\r\n"))
 
 	select {
 	case err := <-killDone:
@@ -371,15 +374,15 @@ func readLine(t *testing.T, conn net.Conn, r *bufio.Reader) string {
 // next call transparently redials and succeeds.
 func TestReconnectsAfterDrop(t *testing.T) {
 	sock, accepts := fakeMgmt(t)
-	c := NewClient(sock, "")
-	if err := c.Kill("alice"); err != nil {
+	c := NewClient(sock, writeStatus(t, killStatus))
+	if err := c.Kill("alice", "HALT"); err != nil {
 		t.Fatal(err)
 	}
 	c.mu.Lock()
 	c.conn.Close() // simulate the peer going away
 	c.mu.Unlock()
 
-	if err := c.Kill("alice"); err != nil {
+	if err := c.Kill("alice", "HALT"); err != nil {
 		t.Fatalf("expected transparent reconnect, got error: %v", err)
 	}
 	if got := atomic.LoadInt32(accepts); got != 2 {

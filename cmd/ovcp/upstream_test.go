@@ -47,6 +47,7 @@ import (
 type netNS struct {
 	prefix []string
 	pid    string
+	exited <-chan struct{} // client namespaces only: closed when their openvpn exits
 }
 
 func (ns netNS) cmd(name string, args ...string) *exec.Cmd {
@@ -438,7 +439,10 @@ func (h *e2eHost) startClient(t *testing.T, cn, suffix, hostIP, clientIP string)
 	if err := c.Start(); err != nil {
 		t.Fatalf("start openvpn client %s: %v", cn, err)
 	}
-	t.Cleanup(func() { c.Process.Kill(); c.Wait() })
+	exited := make(chan struct{})
+	go func() { c.Wait(); close(exited) }()
+	t.Cleanup(func() { c.Process.Kill(); <-exited })
+	ns.exited = exited
 	return ns
 }
 
@@ -483,6 +487,22 @@ func TestE2ETransparent(t *testing.T) {
 	}
 	if got != "reached 10.90.1.2:9000\n" {
 		t.Fatalf("got %q, want the normal-route backend's own address", got)
+	}
+}
+
+// TestE2EKillHalts: `vpn kill` sends HALT, so a plain client's openvpn exits
+// at once instead of waiting out ping-restart and reconnecting.
+func TestE2EKillHalts(t *testing.T) {
+	outer := requireNetNS(t)
+	h := newE2EHost(t, outer)
+	client := h.newClient(t, "alice", "1", "10.90.10.1", "10.90.10.2")
+	if r := run(t, h.env, "vpn", "kill", "-cn", "alice"); r.code != 0 {
+		t.Fatalf("vpn kill: %s", r.stderr)
+	}
+	select {
+	case <-client.exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("client still running 10 s after vpn kill")
 	}
 }
 
