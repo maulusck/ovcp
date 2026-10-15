@@ -206,7 +206,7 @@ func (p *Poller) loop(ctx context.Context, b *bot, admin string) {
 			} else {
 				slog.Debug("telegram: getUpdates failed", "err", err)
 			}
-			time.Sleep(5 * time.Second) // ponytail: fixed backoff, fine for a single-admin poller
+			time.Sleep(5 * time.Second)
 			continue
 		}
 		failStreak = 0

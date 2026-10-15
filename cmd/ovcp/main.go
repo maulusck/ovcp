@@ -473,7 +473,6 @@ var dropCaps = []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_BIND_SERVICE}
 // dropRoot re-runs a root invocation as $OVCP_USER (default ovcp) in place,
 // holding only the dropCaps it was given; openvpn, dnsmasq and nft inherit
 // them. OVCP_USER=root stays root.
-// ponytail: one uid for ovcp and its workers; per-worker uids need a root spawner.
 func dropRoot(dataDir string) {
 	name := cmp.Or(os.Getenv("OVCP_USER"), "ovcp")
 	if os.Geteuid() != 0 || name == "root" {

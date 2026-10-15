@@ -1,7 +1,6 @@
 #!/sbin/openrc-run
 # shellcheck disable=SC2034  # name/description/command/... are read by openrc-run itself, not unused.
 # OVCP — OpenVPN control plane: started as root, ovcp drops to its own account; supervised/respawned.
-# ponytail: no systemd-grade sandboxing here (no short OpenRC equivalent); add hand-rolled namespaces if ever needed.
 
 name="ovcp"
 description="OVCP — OpenVPN control plane"

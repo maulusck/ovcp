@@ -23,7 +23,7 @@ type Client struct {
 
 	// OnClientEstablished/OnClientDisconnect, if set, handle each >CLIENT:
 	// ESTABLISHED/DISCONNECT — nil means no-op. Called synchronously, one at
-	// a time (ponytail: fine at VPN rates, not a web server's). Every
+	// a time, which keeps each CID's events in order. Every
 	// >CLIENT:CONNECT/REAUTH is auto-approved: ovcp never chooses or denies
 	// a client's address, only reacts once OpenVPN's own ifconfig-pool has
 	// already assigned one and ESTABLISHED reports it.
