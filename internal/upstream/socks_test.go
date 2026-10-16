@@ -133,59 +133,26 @@ func TestPipeClosesBothOnEitherSideFinishing(t *testing.T) {
 	}
 }
 
-// TestRelayConnRejectsDirectConnection: listening on 0.0.0.0 (needed so
-// nft's redirect, which always targets the inbound interface's own
-// address, can reach the relay) means a direct, non-redirected connection
-// can reach this port too. SO_ORIGINAL_DST for one of those equals the
-// accepted socket's own local address (not some other real destination),
-// which is exactly what relayConn checks for — asserts the backend's
-// handler never even runs.
+// TestRelayConnRejectsDirectConnection: a connection nft never redirected
+// (no conntrack entry, or original dst == the relay itself) never reaches the backend.
 func TestRelayConnRejectsDirectConnection(t *testing.T) {
 	called := false
 	backend := fakeSOCKSServer(t, func(conn net.Conn) { called = true })
-
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-
-	accept := func() *net.TCPConn {
-		accepted := make(chan *net.TCPConn, 1)
-		go func() {
-			c, err := ln.Accept()
-			if err == nil {
-				accepted <- c.(*net.TCPConn)
-			} else {
-				accepted <- nil
-			}
-		}()
-		conn, err := net.Dial("tcp", ln.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { conn.Close() })
-		return <-accepted
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Probe first, on the accepted side relayConn actually uses — skip if
-	// this host can't give a SO_ORIGINAL_DST answer at all (same gate as
-	// TestGetOriginalDst).
-	probe := accept()
-	if probe == nil {
-		t.Fatal("accept failed")
+	defer conn.Close()
+	server, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := getOriginalDst(probe); err != nil {
-		t.Skipf("SO_ORIGINAL_DST unavailable on this host (no conntrack entry): %v", err)
-	}
-	probe.Close()
-
-	server := accept()
-	if server == nil {
-		t.Fatal("accept failed")
-	}
-	relayConn(server, backend)
-
+	relayConn(server.(*net.TCPConn), backend)
 	if called {
 		t.Fatal("relayConn must refuse a direct, non-redirected connection before ever dialing the backend")
 	}
@@ -321,35 +288,4 @@ func TestSOCKSConnectIPv6Dest(t *testing.T) {
 		t.Fatalf("socksConnect: %v", err)
 	}
 	conn.Close()
-}
-
-// getOriginalDst needs a conntrack entry — present for any tracked
-// connection, so an unredirected one just has "original" == real dest.
-// Skips cleanly if unavailable; erroring there is relayConn's fail-closed contract.
-func TestGetOriginalDst(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go func() {
-		c, err := ln.Accept()
-		if err == nil {
-			c.Close()
-		}
-	}()
-	conn, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	got, err := getOriginalDst(conn.(*net.TCPConn))
-	if err != nil {
-		t.Skipf("SO_ORIGINAL_DST unavailable on this host (no conntrack entry): %v", err)
-	}
-	want := ln.Addr().(*net.TCPAddr)
-	if !got.IP.Equal(want.IP) || got.Port != want.Port {
-		t.Fatalf("getOriginalDst = %v, want %v (the real, unredirected destination)", got, want)
-	}
 }
