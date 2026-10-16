@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ovcp/ovcp/internal/api"
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/store"
 )
@@ -39,17 +40,6 @@ func logPaths(dataDir string) []string {
 		paths = append(paths, src.path)
 	}
 	return paths
-}
-
-// loadLogConfig/saveLogConfig round-trip controller.LogConfig through the
-// store's settings table under "log_config" — schema-free, so an install
-// without that key yet just gets DefaultLogConfig.
-func loadLogConfig(s *store.Store) controller.LogConfig {
-	return store.LoadJSON(s, "log_config", controller.DefaultLogConfig())
-}
-
-func saveLogConfig(s *store.Store, cfg controller.LogConfig) error {
-	return store.SaveJSON(s, "log_config", cfg)
 }
 
 var logConfigBodies = map[string]opBody{
@@ -93,7 +83,7 @@ func cmdLogsConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		output(loadLogConfig(s), printLogConfigText)
+		output(api.LoadLogConfig(s), printLogConfigText)
 	}
 }
 
@@ -107,7 +97,7 @@ func cmdLogsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		cfg := loadLogConfig(s)
+		cfg := api.LoadLogConfig(s)
 		if *enabled != "" {
 			on, err := parseBoolArg(*enabled)
 			die(err)
@@ -119,7 +109,7 @@ func cmdLogsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *keepUncompressed != -1 {
 			cfg.KeepUncompressed = *keepUncompressed
 		}
-		die(saveLogConfig(s, cfg))
+		die(api.SaveLogConfig(s, cfg))
 		s.Audit("cli", "log_config_change", "")
 		output(cfg, func(c controller.LogConfig) { printLogConfigText(c); fmt.Println("saved") })
 	}
@@ -131,7 +121,7 @@ func cmdLogsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 func cmdLogsRotate(ctx *cliContext) {
 	s := ctx.openStore()
 	defer s.Close()
-	die(controller.RotateLogs(logPaths(ctx.dataDir), loadLogConfig(s)))
+	die(controller.RotateLogs(logPaths(ctx.dataDir), api.LoadLogConfig(s)))
 	s.Audit("cli", "log_rotate", "")
 	output(msg("rotated"), printMsg)
 }
@@ -139,7 +129,7 @@ func cmdLogsRotate(ctx *cliContext) {
 func cmdLogsStatus(ctx *cliContext) {
 	s := ctx.openStore()
 	defer s.Close()
-	cfg := loadLogConfig(s)
+	cfg := api.LoadLogConfig(s)
 	var rows []controller.LogSourceStatus
 	for _, src := range logSources(ctx.dataDir) {
 		rows = append(rows, controller.LogStatusFor(src.name, src.path))
@@ -157,7 +147,7 @@ func runLogRotateTicker(s *store.Store, dataDir string, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			cfg := loadLogConfig(s)
+			cfg := api.LoadLogConfig(s)
 			if !cfg.Enabled {
 				continue
 			}

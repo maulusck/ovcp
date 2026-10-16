@@ -444,6 +444,9 @@ func TestLogsCommand(t *testing.T) {
 		!strings.Contains(r.stdout, "keep-uncompressed: 2") {
 		t.Fatalf("logs config get after set: %+v", r)
 	}
+	if r := run(t, env, "logs", "config", "set", "-keep-uncompressed", "-2"); r.code == 0 {
+		t.Fatalf("a negative keep-uncompressed must be refused: %+v", r)
+	}
 	if r := run(t, env, "logs", "rotate"); r.code != 0 || !strings.Contains(r.stdout, "rotated") {
 		t.Fatalf("logs rotate: %+v", r)
 	}

@@ -797,6 +797,9 @@ func TestStatsConfigEndpoint(t *testing.T) {
 	}
 
 	e.login("admin")
+	if r := e.req("PUT", "/api/logs/config", `{"RetentionDays":-1}`, true); r.StatusCode != 400 {
+		t.Fatalf("negative log retention: status %d, want 400", r.StatusCode)
+	}
 	if r := e.req("PUT", "/api/stats/config", `{"RetentionHours":0}`, true); r.StatusCode != 400 {
 		t.Fatal("zero retention must 400, got", r.Status)
 	}

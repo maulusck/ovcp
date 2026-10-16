@@ -887,19 +887,19 @@ func (s *Server) handleDNSConfigSet(w http.ResponseWriter, r *http.Request, u *s
 }
 
 func (s *Server) handleLogsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, store.LoadJSON(s.Store, "log_config", controller.DefaultLogConfig()))
+	jsonOK(w, LoadLogConfig(s.Store))
 }
 
 // handleLogsConfigSet merges the JSON body onto the current config — an
 // omitted field stays unchanged, same as PUT /api/vpn/config.
 func (s *Server) handleLogsConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cfg := store.LoadJSON(s.Store, "log_config", controller.DefaultLogConfig())
+	cfg := LoadLogConfig(s.Store)
 	if !decode(r, &cfg) {
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := store.SaveJSON(s.Store, "log_config", cfg); err != nil {
-		jsonErr(w, 500, err.Error())
+	if err := SaveLogConfig(s.Store, cfg); err != nil {
+		jsonErr(w, 400, err.Error())
 		return
 	}
 	s.Store.Audit(u.Username, "log_config_change", "")
@@ -913,7 +913,7 @@ func (s *Server) handleLogsRotate(w http.ResponseWriter, r *http.Request, u *sto
 	for i, name := range controller.LogNames {
 		paths[i] = filepath.Join(dir, name+".log")
 	}
-	cfg := store.LoadJSON(s.Store, "log_config", controller.DefaultLogConfig())
+	cfg := LoadLogConfig(s.Store)
 	if err := controller.RotateLogs(paths, cfg); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
@@ -934,12 +934,8 @@ func (s *Server) handleStatsConfigSet(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if cfg.SampleIntervalSec <= 0 || cfg.RetentionHours <= 0 {
-		jsonErr(w, 400, "sampleIntervalSec and retentionHours must be positive")
-		return
-	}
 	if err := SaveStatsConfig(s.Store, cfg); err != nil {
-		jsonErr(w, 500, err.Error())
+		jsonErr(w, 400, err.Error())
 		return
 	}
 	s.Store.Audit(u.Username, "stats_config_change", "")

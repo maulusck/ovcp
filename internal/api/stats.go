@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -34,13 +35,28 @@ func (c StatsConfig) Retention() time.Duration { return time.Duration(c.Retentio
 
 const statsConfigKey = "stats_config"
 
-// LoadStatsConfig/SaveStatsConfig: the one read/write path, shared by the
-// CLI (`ovcp stats config`) and Server.StatsConfig below.
+// LoadStatsConfig/SaveStatsConfig: the one read/write path, CLI and API alike;
+// Save refuses a config the sampler can't run.
 func LoadStatsConfig(s *store.Store) StatsConfig {
 	return store.LoadJSON(s, statsConfigKey, DefaultStatsConfig())
 }
 func SaveStatsConfig(s *store.Store, cfg StatsConfig) error {
+	if cfg.SampleIntervalSec <= 0 || cfg.RetentionHours <= 0 {
+		return errors.New("sample-interval-sec and retention-hours must be positive")
+	}
 	return store.SaveJSON(s, statsConfigKey, cfg)
+}
+
+// LoadLogConfig/SaveLogConfig: controller.LogConfig's one read/write path,
+// CLI and API alike; Save refuses negative counts.
+func LoadLogConfig(s *store.Store) controller.LogConfig {
+	return store.LoadJSON(s, "log_config", controller.DefaultLogConfig())
+}
+func SaveLogConfig(s *store.Store, cfg controller.LogConfig) error {
+	if cfg.RetentionDays < 0 || cfg.KeepUncompressed < 0 {
+		return errors.New("retention-days and keep-uncompressed must be 0 or more")
+	}
+	return store.SaveJSON(s, "log_config", cfg)
 }
 
 // StatsConfig reads the live persisted config — RunSampler re-reads it every

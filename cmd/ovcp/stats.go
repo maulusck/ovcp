@@ -99,11 +99,9 @@ func cmdStatsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		cfg := api.LoadStatsConfig(s)
 		if *sampleInterval != -1 {
-			requirePositive(*sampleInterval, "sample-interval-sec")
 			cfg.SampleIntervalSec = *sampleInterval
 		}
 		if *retentionHours != -1 {
-			requirePositive(*retentionHours, "retention-hours")
 			cfg.RetentionHours = *retentionHours
 		}
 		die(api.SaveStatsConfig(s, cfg))
