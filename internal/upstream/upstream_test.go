@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -978,11 +979,20 @@ func RequireRealNFT(t *testing.T) (nft string) {
 	prevIP, prevNft := ipBin, nftBin
 	t.Cleanup(func() { ipBin, nftBin = prevIP, prevNft })
 
-	holder := exec.Command("unshare", "--user", "--net", "--map-root-user", "--", "sleep", "3600")
-	if err := holder.Start(); err != nil {
+	// sh prints only once unshare has entered the new namespaces, so nsenter
+	// below never races into the parent's.
+	holder := exec.Command("unshare", "--user", "--net", "--map-root-user", "--", "sh", "-c", "echo; exec sleep 3600")
+	out, err := holder.StdoutPipe()
+	if err == nil {
+		err = holder.Start()
+	}
+	if err != nil {
 		t.Skipf("rootless netns unavailable (unshare): %v", err)
 	}
 	t.Cleanup(func() { holder.Process.Kill(); holder.Wait() })
+	if _, err := bufio.NewReader(out).ReadString('\n'); err != nil {
+		t.Skipf("rootless netns unavailable (unshare): %v", err)
+	}
 	pid := strconv.Itoa(holder.Process.Pid)
 
 	dir := t.TempDir()

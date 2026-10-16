@@ -74,25 +74,16 @@ func requireNetNS(t *testing.T) netNS {
 			t.Skipf("%s not on PATH", bin)
 		}
 	}
-	holder := exec.Command("unshare", "--user", "--net", "--map-root-user", "--", "sleep", "3600")
-	if err := holder.Start(); err != nil {
+	pid, err := holdNS(t, exec.Command("unshare", "--user", "--net", "--map-root-user", "--", "sh", "-c", holdScript))
+	if err != nil {
 		t.Skipf("rootless netns unavailable (unshare): %v", err)
 	}
-	t.Cleanup(func() { holder.Process.Kill(); holder.Wait() })
 	outer := netNS{
-		prefix: []string{"nsenter", "--target", strconv.Itoa(holder.Process.Pid), "--net", "--user", "--preserve-credentials", "--"},
-		pid:    strconv.Itoa(holder.Process.Pid),
+		prefix: []string{"nsenter", "--target", pid, "--net", "--user", "--preserve-credentials", "--"},
+		pid:    pid,
 	}
-	// holder needs a moment to finish unshare's own setup before nsenter
-	// can reassociate into it — poll instead of a fixed sleep.
-	if !retry(20, 50*time.Millisecond, func() error {
-		out, err := outer.cmd("ip", "link", "set", "lo", "up").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("%w\n%s", err, out)
-		}
-		return nil
-	}) {
-		t.Skip("rootless netns: lo up never succeeded (unprivileged user namespaces may be disabled on this host)")
+	if out, err := outer.cmd("ip", "link", "set", "lo", "up").CombinedOutput(); err != nil {
+		t.Skipf("rootless netns: lo up failed: %v\n%s", err, out)
 	}
 	if out, err := outer.cmd("nft", "list", "tables").CombinedOutput(); err != nil {
 		t.Skipf("rootless netns: nft probe failed: %v\n%s", err, out)
@@ -105,26 +96,38 @@ func requireNetNS(t *testing.T) netNS {
 // child creates a --net-only namespace nested inside outer.
 func (outer netNS) child(t *testing.T) netNS {
 	t.Helper()
-	holder := outer.cmd("unshare", "--net", "--", "sleep", "3600")
-	if err := holder.Start(); err != nil {
+	pid, err := holdNS(t, outer.cmd("unshare", "--net", "--", "sh", "-c", holdScript))
+	if err != nil {
 		t.Fatalf("inner netns: %v", err)
 	}
-	t.Cleanup(func() { holder.Process.Kill(); holder.Wait() })
-	pid := strconv.Itoa(holder.Process.Pid)
 	ns := netNS{
 		prefix: append(append([]string{}, outer.prefix...), "nsenter", "--target", pid, "--net", "--"),
 		pid:    pid,
 	}
-	if !retry(20, 50*time.Millisecond, func() error {
-		out, err := ns.cmd("ip", "link", "set", "lo", "up").CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("%w\n%s", err, out)
-		}
-		return nil
-	}) {
-		t.Fatal("inner netns: lo up never succeeded")
-	}
+	ns.run(t, "ip", "link", "set", "lo", "up")
 	return ns
+}
+
+// holdScript keeps a namespace alive; its first line proves unshare has
+// already entered the new namespaces, so nsenter never races into the parent's.
+const holdScript = "echo; exec sleep 3600"
+
+// holdNS starts holder (unshare ... sh -c holdScript), returning its pid once
+// the namespaces exist; t's cleanup kills it.
+func holdNS(t *testing.T, holder *exec.Cmd) (string, error) {
+	t.Helper()
+	out, err := holder.StdoutPipe()
+	if err == nil {
+		err = holder.Start()
+	}
+	if err != nil {
+		return "", err
+	}
+	t.Cleanup(func() { holder.Process.Kill(); holder.Wait() })
+	if _, err := bufio.NewReader(out).ReadString('\n'); err != nil {
+		return "", err
+	}
+	return strconv.Itoa(holder.Process.Pid), nil
 }
 
 // veth wires a<->b with a fresh point-to-point link — aIface/bIface must
