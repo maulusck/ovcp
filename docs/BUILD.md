@@ -334,17 +334,23 @@ owned by `ovcp`; remove it with `sudo rmdir data`.
 
 ### Tests
 
-`make test` runs every suite. Two suites exercise privileges rootless,
-inside user namespaces, and skip when their tools are missing:
+`make test` runs every suite. The gates, the same ones CI's `test` job
+runs, pass before every commit:
 
 ```sh
-go test ./cmd/ovcp -run TestDropRoot -v   # needs unshare --map-auto (an /etc/subuid entry)
-go test ./cmd/ovcp -run TestE2E -v        # needs unshare, nsenter, ip, nft, openvpn
-go test ./... -skip TestE2E               # everything else
+make ui                                     # web/dist, which the binary embeds
+go vet ./cmd/... ./internal/...
+test -z "$(gofmt -l cmd internal web)"
+mandoc -T lint -W warning docs/ovcp.8
+go test -v ./cmd/... ./internal/... | grep -- '--- SKIP'   # must print nothing
 ```
 
-On Debian, `ip`, `nft` and `openvpn` live in `/usr/sbin`; prefix the
-commands with `PATH=/usr/sbin:$PATH`.
+No test may skip. The privilege and network suites run rootless inside
+user namespaces and skip only when a tool is missing: `TestDropRoot`
+needs `unshare --map-auto` (an `/etc/subuid` entry), `TestE2E*` and the
+real-nft tests need `unshare`, `nsenter`, `ip`, `nft` and `openvpn`. On
+Debian those live in `/usr/sbin`; prefix the commands with
+`PATH=/usr/sbin:$PATH`.
 
 Live acceptance on real machines, this host plus an Alpine client VM:
 `scripts/vm-acceptance.sh` (usage in its header).
@@ -352,8 +358,7 @@ Live acceptance on real machines, this host plus an Alpine client VM:
 ## CI / the release pipeline
 
 One workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
-Its `test` job runs the gates above on every push and pull request; there,
-a skipped `TestE2E` or `TestDropRoot` fails the build. A `v*` tag push
+Its `test` job runs the gates above on every push and pull request. A `v*` tag push
 also runs three release stages, each only after `test` passes (toolchain
 versions live once, in the workflow's `env`):
 
