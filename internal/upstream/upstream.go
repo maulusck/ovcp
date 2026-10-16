@@ -280,19 +280,6 @@ func RedactSOCKS(raw string) string {
 	return u.String()
 }
 
-// Redacted returns cfg with every upstream's SOCKS password masked — the
-// shape REST responses return, so a stored credential never round-trips to
-// the browser in plain text.
-func (c Config) Redacted() Config {
-	out := c
-	out.Upstreams = make([]Upstream, len(c.Upstreams))
-	for i, u := range c.Upstreams {
-		u.SOCKS = RedactSOCKS(u.SOCKS)
-		out.Upstreams[i] = u
-	}
-	return out
-}
-
 // Validate checks syntax and internal references only — host state (does
 // Iface actually exist) is an Apply-time concern, not this one.
 func (c Config) Validate() error {

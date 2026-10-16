@@ -71,7 +71,7 @@
 
   async function loadDNS() {
     try {
-      blockInternet = (await api('GET', '/dns/config')).blockInternet
+      blockInternet = (await api('GET', '/dns/config')).BlockInternet
       dnsRecords = (await api('GET', '/dns/custom')).content
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }
@@ -79,7 +79,7 @@
 
   async function toggleBlockInternet(e) {
     const want = e.target.checked
-    try { blockInternet = (await api('PUT', '/dns/config', { BlockInternet: want })).blockInternet }
+    try { blockInternet = (await api('PUT', '/dns/config', { BlockInternet: want })).BlockInternet }
     catch (x) { flash(v => dnsErr = v, x.error); e.target.checked = !want }
   }
 
@@ -119,9 +119,9 @@
   let newID = $state(''), newIface = $state(''), newGateway = $state(''), newSocks = $state(''), newDesc = $state('')
   let newMode = $state('iface') // 'iface' | 'socks' — which fields the add form sends
   let upSort = $state({ key: null, desc: false })
-  const UP_SORT_GETTERS = { id: (u) => u.ID, iface: (u) => u.Iface, desc: (u) => u.Description }
+  const UP_SORT_GETTERS = { id: (u) => u.id, iface: (u) => u.iface, desc: (u) => u.description }
   const sortedUpstreams = $derived.by(() => {
-    const rows = upCfg?.Upstreams || []
+    const rows = upCfg?.upstreams || []
     return upSort.key ? sortRows(rows, UP_SORT_GETTERS[upSort.key], upSort.desc) : rows
   })
 
@@ -443,7 +443,7 @@
 
   <div class="card">
     <h2>Upstreams
-      {#if isAdmin && upCfg?.Upstreams?.length}
+      {#if isAdmin && upCfg?.upstreams?.length}
         <button type="button" class="ghost" onclick={reconcileUpstreams}
           title="Re-check reachability and re-apply routing/NAT for the saved config">Reconcile</button>
       {/if}
@@ -453,7 +453,7 @@
     <Msg type="ok" text={upOk} />
     {#if !upCfg}
       <p class="muted">Loading…</p>
-    {:else if !upCfg.Upstreams?.length}
+    {:else if !upCfg.upstreams?.length}
       <p class="muted small">No upstreams defined yet — clients exit through the host's own default route.</p>
     {:else}
       <table>
@@ -467,19 +467,19 @@
         <tbody>
           {#each sortedUpstreams as u}
             <tr>
-              <td>{u.ID}{u.ID === upCfg.Default ? ' (default)' : ''}</td>
-              <td>{u.Iface || (u.SOCKS ? '(socks)' : '')}</td>
-              <td>{u.SOCKS || u.Gateway || '(onlink)'}</td>
-              <td>{u.Description}</td>
-              <td>{#if isAdmin}<button type="button" class="ghost" onclick={() => delUpstream(u.ID)}>Remove</button>{/if}</td>
+              <td>{u.id}{u.id === upCfg.default ? ' (default)' : ''}</td>
+              <td>{u.iface || (u.socks ? '(socks)' : '')}</td>
+              <td>{u.socks || u.gateway || '(onlink)'}</td>
+              <td>{u.description}</td>
+              <td>{#if isAdmin}<button type="button" class="ghost" onclick={() => delUpstream(u.id)}>Remove</button>{/if}</td>
             </tr>
           {/each}
         </tbody>
       </table>
       <label>Active default
-        <select value={upCfg.Default || ''} disabled={!isAdmin} onchange={setDefaultUpstream}>
+        <select value={upCfg.default || ''} disabled={!isAdmin} onchange={setDefaultUpstream}>
           <option value="">off (host's own default route)</option>
-          {#each upCfg.Upstreams as u}<option value={u.ID}>{u.ID}</option>{/each}
+          {#each upCfg.upstreams as u}<option value={u.id}>{u.id}</option>{/each}
         </select>
       </label>
       {#if upstreams.warning}<p class="status-line warn">{upstreams.warning}</p>{/if}

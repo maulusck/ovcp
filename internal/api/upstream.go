@@ -76,16 +76,37 @@ func (s *Server) ReconcileUpstreams() (upstream.Config, string) {
 	return cfg, s.applyUpstreams(cfg)
 }
 
-// upstreamApplyResult adds applyUpstreams' warning to cfg's own JSON shape
-// — embedded, not wrapped, so Upstreams/Default/PerCN stay at the top level
-// for existing consumers (the web UI reads them directly).
-type upstreamApplyResult struct {
-	upstream.Config
-	Warning string `json:"warning,omitempty"`
+// UpstreamView is the upstream config as the CLI's -json and the API both
+// show it: SOCKS passwords redacted, each entry's live up/down.
+type UpstreamView struct {
+	Upstreams []UpstreamRow     `json:"upstreams"`
+	Default   string            `json:"default,omitempty"`
+	PerCN     map[string]string `json:"perCN,omitempty"`
+	Warning   string            `json:"warning,omitempty"` // API only: the CLI prints it to stderr
+}
+
+// UpstreamRow is one UpstreamView entry.
+type UpstreamRow struct {
+	ID          string `json:"id"`
+	Up          bool   `json:"up"`
+	Iface       string `json:"iface,omitempty"`
+	Gateway     string `json:"gateway,omitempty"`
+	SOCKS       string `json:"socks,omitempty"`
+	Table       int    `json:"table"`
+	Description string `json:"description,omitempty"`
+}
+
+// ViewUpstreams computes cfg's view, live up/down checked once.
+func ViewUpstreams(cfg upstream.Config, warning string) UpstreamView {
+	rows := make([]UpstreamRow, len(cfg.Upstreams))
+	for i, u := range cfg.Upstreams {
+		rows[i] = UpstreamRow{u.ID, u.IsUp(), u.Iface, u.Gateway, upstream.RedactSOCKS(u.SOCKS), u.Table, u.Description}
+	}
+	return UpstreamView{rows, cfg.Default, cfg.PerCN, warning}
 }
 
 func (s *Server) handleUpstreamsGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, LoadUpstreamConfig(s.Store).Redacted())
+	jsonOK(w, ViewUpstreams(LoadUpstreamConfig(s.Store), ""))
 }
 
 func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -128,7 +149,7 @@ func (s *Server) saveAndApplyUpstreams(w http.ResponseWriter, u *store.User, cfg
 	}
 	warning := s.applyUpstreams(cfg)
 	s.Store.Audit(u.Username, action, detail)
-	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
+	jsonOK(w, ViewUpstreams(cfg, warning))
 }
 
 // ApplyAssign persists an already-computed assign (cfg, from
@@ -199,7 +220,7 @@ func (s *Server) handleUpstreamAssign(w http.ResponseWriter, r *http.Request, u 
 		action = "upstream_unassign"
 	}
 	s.Store.Audit(u.Username, action, in.CN)
-	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
+	jsonOK(w, ViewUpstreams(cfg, warning))
 }
 
 // handleUpstreamSetDefault: the ad-hoc exit switch — id="" turns it off,
@@ -227,7 +248,7 @@ func (s *Server) handleUpstreamSetDefault(w http.ResponseWriter, r *http.Request
 func (s *Server) handleUpstreamReconcile(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cfg, warning := s.ReconcileUpstreams()
 	s.Store.Audit(u.Username, "upstream_reconcile", "")
-	jsonOK(w, upstreamApplyResult{cfg.Redacted(), warning})
+	jsonOK(w, ViewUpstreams(cfg, warning))
 }
 
 // OnClientEstablished wires directly to controller.Client.OnClientEstablished:

@@ -120,7 +120,7 @@
     err = ''; ok = ''
     try {
       const r = await api('PUT', '/upstreams/assign', { CN: cn, ID: id, Clear: !id })
-      if (upCfg) upCfg.PerCN = r.PerCN
+      if (upCfg) upCfg.perCN = r.perCN
       flash(v => ok = v, r.warning || `Upstream for ${cn}: ${id || 'default'}.`)
     } catch (x) { flash(v => err = v, x.error) }
   }
@@ -283,10 +283,10 @@
             {#if upstreamsAvailable}
               <td class="up-col">
                 {#if !c.Revoked && c.Kind !== 'server'}
-                  <select value={upCfg?.PerCN?.[c.CN] || ''} disabled={!isAdmin}
+                  <select value={upCfg?.perCN?.[c.CN] || ''} disabled={!isAdmin}
                     onchange={(e) => setUpstream(c.CN, e.target.value)}>
-                    <option value="">default{upCfg?.Default ? ` (${upCfg.Default})` : ''}</option>
-                    {#each upCfg?.Upstreams || [] as u}<option value={u.ID}>{u.ID}</option>{/each}
+                    <option value="">default{upCfg?.default ? ` (${upCfg.default})` : ''}</option>
+                    {#each upCfg?.upstreams || [] as u}<option value={u.id}>{u.id}</option>{/each}
                   </select>
                 {/if}
               </td>

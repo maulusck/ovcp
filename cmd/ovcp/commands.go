@@ -1090,35 +1090,6 @@ type upstreamStatusOut struct {
 	Default    string `json:"default,omitempty"`
 }
 
-// upstreamOut is one upstream row for both `list -json` and `reconcile
-// -json` — explicit, lowercase-tagged fields, this CLI's standard -json
-// shape (certOut/recordOut), not upstream.Config's own bare REST shape.
-type upstreamOut struct {
-	ID          string `json:"id"`
-	Up          bool   `json:"up"`
-	Iface       string `json:"iface,omitempty"`
-	Gateway     string `json:"gateway,omitempty"`
-	SOCKS       string `json:"socks,omitempty"`
-	Table       int    `json:"table"`
-	Description string `json:"description,omitempty"`
-}
-
-type upstreamListOut struct {
-	Upstreams []upstreamOut     `json:"upstreams"`
-	Default   string            `json:"default,omitempty"`
-	PerCN     map[string]string `json:"perCN,omitempty"`
-}
-
-// buildUpstreamListOut computes live up/down status once — the one place
-// list/reconcile derive both their -json payload and text table from.
-func buildUpstreamListOut(cfg upstream.Config) upstreamListOut {
-	rows := make([]upstreamOut, len(cfg.Upstreams))
-	for i, u := range cfg.Upstreams {
-		rows[i] = upstreamOut{u.ID, u.IsUp(), u.Iface, u.Gateway, upstream.RedactSOCKS(u.SOCKS), u.Table, u.Description}
-	}
-	return upstreamListOut{rows, cfg.Default, cfg.PerCN}
-}
-
 // upStatus is the "up"/"down" text coloredStatus keys off, shared by list/reconcile.
 func upStatus(up bool) string {
 	if up {
@@ -1156,7 +1127,7 @@ func cmdUpstreamList(_ *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		cfg := api.LoadUpstreamConfig(s)
-		output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
+		output(api.ViewUpstreams(cfg, ""), func(r api.UpstreamView) {
 			fmt.Println("Upstreams:")
 			trows := make([][]string, len(r.Upstreams))
 			for i, u := range r.Upstreams {
@@ -1305,7 +1276,7 @@ func cmdUpstreamReconcile(rfs *flag.FlagSet) func(ctx *cliContext) {
 		cfg := api.LoadUpstreamConfig(s)
 		warnUpstream(applyUpstreamsCLI(cfg, *ctrl))
 		s.Audit("cli", "upstream_reconcile", "")
-		output(buildUpstreamListOut(cfg), func(r upstreamListOut) {
+		output(api.ViewUpstreams(cfg, ""), func(r api.UpstreamView) {
 			inUse := make(map[string]bool, len(r.PerCN)+1)
 			if r.Default != "" {
 				inUse[r.Default] = true

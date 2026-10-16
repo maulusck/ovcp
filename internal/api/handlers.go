@@ -870,6 +870,12 @@ type DNSConfig struct {
 	BlockInternet bool // dnsmasq --no-resolv/--server=/#/ on next start/restart
 }
 
+// dnsView is DNSConfig as the CLI's -json shows it, plus the API's warning.
+type dnsView struct {
+	DNSConfig
+	Warning string `json:"warning,omitempty"`
+}
+
 // DefaultDNSConfig seeds from OVCP_DNS_BLOCK_INTERNET (container/unattended init).
 func DefaultDNSConfig() DNSConfig {
 	return DNSConfig{BlockInternet: os.Getenv("OVCP_DNS_BLOCK_INTERNET") == "true"}
@@ -899,7 +905,7 @@ func DNSLeakWarning(vpn ovpnconf.Config, dns DNSConfig) string {
 
 func (s *Server) handleDNSConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	dns := LoadDNSConfig(s.Store)
-	jsonOK(w, map[string]any{"blockInternet": dns.BlockInternet, "warning": DNSLeakWarning(s.LoadConfig(), dns)})
+	jsonOK(w, dnsView{dns, DNSLeakWarning(s.LoadConfig(), dns)})
 }
 
 // handleDNSConfigSet toggles whether dnsmasq forwards to upstream resolvers;
@@ -920,7 +926,7 @@ func (s *Server) handleDNSConfigSet(w http.ResponseWriter, r *http.Request, u *s
 		action = "on"
 	}
 	s.Store.Audit(u.Username, "dns_block_internet_"+action, "")
-	jsonOK(w, map[string]any{"blockInternet": in.BlockInternet, "warning": DNSLeakWarning(s.LoadConfig(), dns)})
+	jsonOK(w, dnsView{dns, DNSLeakWarning(s.LoadConfig(), dns)})
 }
 
 func (s *Server) handleLogsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {

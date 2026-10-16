@@ -39,21 +39,21 @@ func TestApplyUpstreamsNeverFails(t *testing.T) {
 	}
 }
 
-// TestUpstreamApplyResultJSONIsFlat guards the "don't break the web UI"
-// requirement: Upstreams/Default/PerCN must stay at the JSON top level
-// (embedded), not nested under a wrapper key.
-func TestUpstreamApplyResultJSONIsFlat(t *testing.T) {
-	cfg := upstream.Config{Default: "wan2"}
-	data, err := json.Marshal(upstreamApplyResult{cfg, "some warning"})
+// TestViewUpstreamsRedactsSOCKS: the one view the CLI and the API return
+// never carries a stored SOCKS password.
+func TestViewUpstreamsRedactsSOCKS(t *testing.T) {
+	cfg := upstream.Config{Default: "tor", Upstreams: []upstream.Upstream{
+		{ID: "tor", SOCKS: "socks5://user:s3cret@127.0.0.1:9050", Table: 100}}}
+	data, err := json.Marshal(ViewUpstreams(cfg, "some warning"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		t.Fatal(err)
+	if strings.Contains(string(data), "s3cret") {
+		t.Fatalf("view leaks the SOCKS password: %s", data)
 	}
-	if m["Default"] != "wan2" || m["warning"] != "some warning" {
-		t.Fatalf("got %s, want Default and warning both at top level", data)
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil || m["default"] != "tor" || m["warning"] != "some warning" {
+		t.Fatalf("got %s, want default and warning at the top level", data)
 	}
 }
 
