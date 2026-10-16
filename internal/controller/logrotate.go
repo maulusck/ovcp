@@ -19,6 +19,15 @@ import (
 // and the rotate-now button all build on this, never their own copy.
 var LogNames = []string{"openvpn", "ovcp", "dnsmasq"}
 
+// LogPaths is LogNames' files under logsDir, in LogNames' order.
+func LogPaths(logsDir string) []string {
+	paths := make([]string, len(LogNames))
+	for i, name := range LogNames {
+		paths[i] = filepath.Join(logsDir, name+".log")
+	}
+	return paths
+}
+
 // LogConfig is the admin-tunable rotation policy for LogNames — persisted
 // under "log_config" (see `ovcp logs config`).
 type LogConfig struct {

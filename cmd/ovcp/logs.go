@@ -33,15 +33,6 @@ func logSources(dataDir string) []logSource {
 	return out
 }
 
-// logPaths is logSources' paths alone — what RotateLogs takes.
-func logPaths(dataDir string) []string {
-	var paths []string
-	for _, src := range logSources(dataDir) {
-		paths = append(paths, src.path)
-	}
-	return paths
-}
-
 var logConfigBodies = map[string]opBody{
 	"get": cmdLogsConfigGet, "set": cmdLogsConfigSet,
 }
@@ -121,9 +112,7 @@ func cmdLogsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 func cmdLogsRotate(ctx *cliContext) {
 	s := ctx.openStore()
 	defer s.Close()
-	die(controller.RotateLogs(logPaths(ctx.dataDir), api.LoadLogConfig(s)))
-	s.Audit("cli", "log_rotate", "")
-	output(msg("rotated"), printMsg)
+	output(must(api.RotateLogs(s, "cli", ctx.dataDir)), printMsg)
 }
 
 func cmdLogsStatus(ctx *cliContext) {
@@ -151,7 +140,7 @@ func runLogRotateTicker(s *store.Store, dataDir string, stop <-chan struct{}) {
 			if !cfg.Enabled {
 				continue
 			}
-			if err := controller.RotateLogs(logPaths(dataDir), cfg); err != nil {
+			if err := controller.RotateLogs(controller.LogPaths(dataPaths(dataDir).LogsDir), cfg); err != nil {
 				slog.Warn("log rotation failed", "err", err)
 			}
 		}

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ovcp/ovcp/internal/api"
 	"github.com/ovcp/ovcp/internal/controller"
 	"github.com/ovcp/ovcp/internal/ovpnconf"
 	"github.com/ovcp/ovcp/internal/store"
@@ -208,7 +209,7 @@ func TestJSONFullAutomation(t *testing.T) {
 	assertCleanJSON(t, run(t, env, "certificate", "renew"), &renewOut{})
 
 	rotate := withEnv(env, "OVCP_CA_NEW_PASSPHRASE=a totally different passphrase")
-	assertCleanJSON(t, run(t, rotate, "ca", "rotate"), &outcome{})
+	assertCleanJSON(t, run(t, rotate, "ca", "rotate"), &api.Msg{})
 
 	create := withEnv(env, "OVCP_BACKUP_PASSPHRASE=backup-pass-123")
 	if r := run(t, create, "backup", "create"); r.code == 0 || !strings.Contains(r.stdout, `"error"`) {
@@ -216,7 +217,7 @@ func TestJSONFullAutomation(t *testing.T) {
 	}
 
 	addBob := withEnv(env, "OVCP_USER_PASSWORD=bobs-password-1")
-	assertCleanJSON(t, run(t, addBob, "user", "add", "-name", "bob", "-role", "operator"), &userAddOut{})
+	assertCleanJSON(t, run(t, addBob, "user", "add", "-name", "bob", "-role", "operator"), &api.Msg{})
 }
 
 // TestJSONMissingSecretNoTTY backs "no env var, no terminal: fails fast, on
@@ -1116,6 +1117,10 @@ func TestPasswordYOLOCLI(t *testing.T) {
 	}
 	if !strings.Contains(r.stderr, "OVCP_YOLO_PASSWORD") {
 		t.Fatalf("expected a warning naming OVCP_YOLO_PASSWORD on stderr, got: %+v", r)
+	}
+	// audited like the web API's: one implementation behind both
+	if r := run(t, env, "audit"); !strings.Contains(r.stdout, "weak_password_accepted") {
+		t.Fatalf("a weak password accepted on the CLI must be audited: %+v", r)
 	}
 }
 

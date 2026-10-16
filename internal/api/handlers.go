@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -147,17 +146,7 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request, u *store.Use
 		jsonErr(w, 400, "cn required")
 		return
 	}
-	n, err := s.Mgmt.Kill(in.CN, "HALT")
-	if err != nil {
-		jsonErr(w, 502, err.Error())
-		return
-	}
-	if n == 0 {
-		jsonErr(w, 404, in.CN+" is not connected")
-		return
-	}
-	s.Store.Audit(u.Username, "kill", "cn="+in.CN)
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(Kill(s.Store, u.Username, in.CN, s.Mgmt.Kill))
 }
 
 func (s *Server) handleCertList(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -605,27 +594,12 @@ func opStatus(err error) int {
 // handleCertDNS toggles whether a cert's CN gets a certs.hosts line while
 // connected, mirroring handleUserDisabled's shape.
 func (s *Server) handleCertDNS(w http.ResponseWriter, r *http.Request, u *store.User) {
-	serial := r.PathValue("serial")
 	var in struct{ IncludeDNS bool }
 	if !decode(r, &in) {
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	changed, err := s.Store.SetCertDNS(serial, in.IncludeDNS)
-	if err != nil {
-		jsonErr(w, 404, err.Error())
-		return
-	}
-	if !changed {
-		jsonOK(w, map[string]bool{"ok": true, "changed": false})
-		return
-	}
-	action := "cert_dns_exclude"
-	if in.IncludeDNS {
-		action = "cert_dns_include"
-	}
-	s.Store.Audit(u.Username, action, "serial="+serial)
-	jsonOK(w, map[string]bool{"ok": true, "changed": true})
+	act(w)(SetCertDNS(s.Store, u.Username, r.PathValue("serial"), in.IncludeDNS))
 }
 
 // handleCustomHostsGet/Put/Preview manage custom.hosts — the free-form,
@@ -646,12 +620,7 @@ func (s *Server) handleCustomHostsPut(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := WriteAtomicHosts(s.CustomHostsPath, []byte(in.Content)); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "dns_custom_change", "")
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(SetCustomHosts(s.Store, u.Username, s.CustomHostsPath, in.Content))
 }
 
 // handleCustomHostsPreview is handleCustomHostsPut's dry run, same shape as
@@ -712,40 +681,13 @@ func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request, u *stor
 	jsonOK(w, out)
 }
 
-// checkPassword enforces auth.SecretOK, unless auth.SecretYOLO() is set — in
-// which case it's let through, audited so the paper trail says so.
-func (s *Server) checkPassword(w http.ResponseWriter, actor, target, password string) bool {
-	if auth.SecretOK(password) {
-		return true
-	}
-	if !auth.SecretYOLO() {
-		jsonErr(w, 400, auth.SecretErr("password"))
-		return false
-	}
-	s.Store.Audit(actor, "weak_password_accepted", "target="+target+" reason="+auth.SecretYOLOEnv+" is set")
-	return true
-}
-
 func (s *Server) handleUserAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Username, Password, Role string }
-	if !decode(r, &in) || in.Username == "" || !auth.ValidRole(in.Role) {
-		jsonErr(w, 400, "username and valid role required")
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
 		return
 	}
-	if !s.checkPassword(w, u.Username, in.Username, in.Password) {
-		return
-	}
-	h, err := auth.HashPassword(in.Password)
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	if _, err := s.Store.AddUser(in.Username, h, in.Role); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "user_add", "name="+in.Username+" role="+in.Role)
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(AddUser(s.Store, u.Username, in.Username, in.Password, in.Role))
 }
 
 func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -754,12 +696,7 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request, u *sto
 		jsonErr(w, 400, "cannot delete your own account")
 		return
 	}
-	if err := s.Store.DeleteUser(name); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "user_del", "name="+name)
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(DeleteUser(s.Store, u.Username, name))
 }
 
 // handleUserDisabled toggles enable/disable (`ovcp user disable|enable` as one endpoint).
@@ -774,72 +711,26 @@ func (s *Server) handleUserDisabled(w http.ResponseWriter, r *http.Request, u *s
 		jsonErr(w, 400, "cannot disable your own account")
 		return
 	}
-	if err := s.Store.SetUserDisabled(name, in.Disabled); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	action := "user_enable"
-	if in.Disabled {
-		action = "user_disable"
-	}
-	s.Store.Audit(u.Username, action, "name="+name)
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(SetUserDisabled(s.Store, u.Username, name, in.Disabled))
 }
 
 func (s *Server) handleUserPassword(w http.ResponseWriter, r *http.Request, u *store.User) {
-	name := r.PathValue("name")
 	var in struct{ Password string }
 	if !decode(r, &in) {
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if !s.checkPassword(w, u.Username, name, in.Password) {
-		return
-	}
-	h, err := auth.HashPassword(in.Password)
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	if err := s.Store.SetUserPassword(name, h); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "user_passwd", "name="+name)
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(SetUserPassword(s.Store, u.Username, r.PathValue("name"), in.Password))
 }
 
 // handleUserTOTPEnroll mirrors `ovcp user totp`: generates+stores a fresh
 // secret immediately (no confirm step) and returns it with a QR code.
 func (s *Server) handleUserTOTPEnroll(w http.ResponseWriter, r *http.Request, u *store.User) {
-	name := r.PathValue("name")
-	sec, err := auth.TOTPGenerateSecret()
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	if err := s.Store.SetUserTOTP(name, sec); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	url := auth.TOTPProvisioningURL(sec, name, s.DefaultRemote())
-	qr, err := qrDataURI(url)
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "user_totp_enroll", "name="+name)
-	jsonOK(w, map[string]string{"secret": sec, "url": url, "qr": qr})
+	act(w)(EnrollTOTP(s.Store, u.Username, r.PathValue("name"), s.DefaultRemote()))
 }
 
 func (s *Server) handleUserTOTPOff(w http.ResponseWriter, r *http.Request, u *store.User) {
-	name := r.PathValue("name")
-	if err := s.Store.SetUserTOTP(name, ""); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "user_totp_off", "name="+name)
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(DisableTOTP(s.Store, u.Username, r.PathValue("name")))
 }
 
 func (s *Server) handleDebugGet(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -951,18 +842,7 @@ func (s *Server) handleLogsConfigSet(w http.ResponseWriter, r *http.Request, u *
 
 // handleLogsRotate is `ovcp logs rotate`'s API twin — same RotateLogs call.
 func (s *Server) handleLogsRotate(w http.ResponseWriter, r *http.Request, u *store.User) {
-	dir := filepath.Join(s.DataDir, "logs")
-	paths := make([]string, len(controller.LogNames))
-	for i, name := range controller.LogNames {
-		paths[i] = filepath.Join(dir, name+".log")
-	}
-	cfg := LoadLogConfig(s.Store)
-	if err := controller.RotateLogs(paths, cfg); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "log_rotate", "")
-	jsonOK(w, map[string]bool{"ok": true})
+	act(w)(RotateLogs(s.Store, u.Username, s.DataDir))
 }
 
 func (s *Server) handleStatsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {

@@ -470,17 +470,19 @@ func output[T any](rows T, text func(T)) {
 	text(rows)
 }
 
-// outcome is the generic {"message":"..."} JSON shape for commands with only
-// a confirmation line; commands with real data keep their own richer type.
-type outcome struct {
-	Message string `json:"message"`
+// msg is a CLI-only command's api.Msg; the shared actions build their own.
+func msg(format string, a ...any) api.Msg {
+	return api.Msg{Message: fmt.Sprintf(format, a...), Changed: true}
 }
 
-func msg(format string, a ...any) outcome { return outcome{fmt.Sprintf(format, a...)} }
+// must dies on an action's error, else hands back its result.
+func must[T any](v T, err error) T {
+	die(err)
+	return v
+}
 
-// printMsg is outcome's default text renderer — msg(...) + output() with no
-// custom formatting, the common case.
-func printMsg(o outcome) { fmt.Println(o.Message) }
+// printMsg is api.Msg's text rendering.
+func printMsg(o api.Msg) { fmt.Println(o.Message) }
 
 // progress prints a human-progress line, suppressed under -json so it never
 // interleaves with output()'s single JSON object.
@@ -908,15 +910,10 @@ func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
 		}
-		n, err := controller.Kill(*ctrl, *cn, "HALT")
-		die(err)
-		if n == 0 {
-			die(fmt.Errorf("%s is not connected", *cn))
-		}
 		s := ctx.openStore()
 		defer s.Close()
-		s.Audit("cli", "kill", "cn="+*cn)
-		output(msg("killed %s", *cn), printMsg)
+		kill := func(cn, verb string) (int, error) { return controller.Kill(*ctrl, cn, verb) }
+		output(must(api.Kill(s, "cli", *cn, kill)), printMsg)
 	}
 }
 
@@ -983,19 +980,12 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 func cmdRecordEdit(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		pp := dataPaths(ctx.dataDir)
-		ctx.openStore().Close() // guarantees dns/ (and everything else) exists before the read/write below
+		s := ctx.openStore() // guarantees dns/ exists before the read below
+		defer s.Close()
 		cur, _ := os.ReadFile(pp.CustomHosts)
 		out, err := editText(string(cur))
 		die(err)
-		if out == string(cur) {
-			output(msg("no change"), printMsg)
-			return
-		}
-		die(api.WriteAtomicHosts(pp.CustomHosts, []byte(out)))
-		s := ctx.openStore()
-		s.Audit("cli", "dns_custom_change", "")
-		s.Close()
-		output(msg("saved"), printMsg)
+		output(must(api.SetCustomHosts(s, "cli", pp.CustomHosts, out)), printMsg)
 	}
 }
 
@@ -1016,15 +1006,11 @@ func cmdRecordIncludeExclude(op string) opBody {
 			if !found {
 				die(fmt.Errorf("no active certificate for CN %q", *cn))
 			}
-			changed, err := s.SetCertDNS(c.Serial, op == "include")
-			die(err)
-			if !changed {
-				output(msg("%s is already %sd", *cn, op), printMsg)
-				return
+			m := must(api.SetCertDNS(s, "cli", c.Serial, op == "include"))
+			if m.Changed {
+				refreshCertsHostsCLI(ctx.dataDir, s)
 			}
-			refreshCertsHostsCLI(ctx.dataDir, s)
-			s.Audit("cli", "cert_dns_"+op, "cn="+*cn+" serial="+c.Serial)
-			output(msg("%sd: %s", op, *cn), printMsg)
+			output(m, printMsg)
 		}
 	}
 }
@@ -1832,7 +1818,7 @@ func cmdBackupRestore(rfs *flag.FlagSet) func(ctx *cliContext) {
 		die(backup.Restore(ctx.dataDir, os.Stdin, pass, *force))
 		output(msg("restored CA, CRL, tls-crypt key, config, and database into %s; "+
 			"next: OVCP_SERVER_CN=<host> ovcp certificate renew, then ovcp vpn start", ctx.dataDir),
-			func(o outcome) {
+			func(o api.Msg) {
 				fmt.Println("[1/2] restored CA, CRL, tls-crypt key, config, and database into", ctx.dataDir)
 				fmt.Println("[2/2] next: OVCP_SERVER_CN=<host> ovcp certificate renew   (issues the openvpn server cert)")
 				fmt.Println("      then: ovcp vpn start")
@@ -1989,20 +1975,10 @@ func cmdUserAdd(afs *flag.FlagSet) func(ctx *cliContext) {
 	name := afs.String("name", "", "username (required)")
 	role := afs.String("role", "operator", "admin|operator|readonly")
 	return func(ctx *cliContext) {
-		if *name == "" || !auth.ValidRole(*role) {
-			die(fmt.Errorf("-name required; role admin|operator|readonly"))
-		}
 		pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
-		h, err := auth.HashPassword(pw)
-		die(err)
 		s := ctx.openStore()
 		defer s.Close()
-		_, err = s.AddUser(*name, h, *role)
-		die(err)
-		s.Audit("cli", "user_add", "name="+*name+" role="+*role)
-		output(userAddOut{*name, *role}, func(o userAddOut) {
-			fmt.Println("user added:", o.Username, "("+o.Role+")")
-		})
+		output(must(api.AddUser(s, "cli", *name, pw, *role)), printMsg)
 	}
 }
 
@@ -2055,14 +2031,9 @@ func cmdUserList(lfs *flag.FlagSet) func(ctx *cliContext) {
 func cmdUserDel(dfs *flag.FlagSet) func(ctx *cliContext) {
 	name := dfs.String("name", "", "username (required)")
 	return func(ctx *cliContext) {
-		if *name == "" {
-			die(fmt.Errorf("-name required"))
-		}
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.DeleteUser(*name))
-		s.Audit("cli", "user_del", "name="+*name)
-		output(msg("deleted: %s", *name), printMsg)
+		output(must(api.DeleteUser(s, "cli", *name)), printMsg)
 	}
 }
 
@@ -2071,16 +2042,9 @@ func cmdUserEnableDisable(op string) opBody {
 	return func(efs *flag.FlagSet) func(ctx *cliContext) {
 		name := efs.String("name", "", "username (required)")
 		return func(ctx *cliContext) {
-			if *name == "" {
-				die(fmt.Errorf("-name required"))
-			}
 			s := ctx.openStore()
 			defer s.Close()
-			die(s.SetUserDisabled(*name, op == "disable"))
-			s.Audit("cli", "user_"+op, "name="+*name)
-			output(userDisabledOut{*name, op == "disable"}, func(o userDisabledOut) {
-				fmt.Println(op+"d:", o.Username)
-			})
+			output(must(api.SetUserDisabled(s, "cli", *name, op == "disable")), printMsg)
 		}
 	}
 }
@@ -2088,17 +2052,10 @@ func cmdUserEnableDisable(op string) opBody {
 func cmdUserPasswd(pfs *flag.FlagSet) func(ctx *cliContext) {
 	name := pfs.String("name", "", "username (required)")
 	return func(ctx *cliContext) {
-		if *name == "" {
-			die(fmt.Errorf("-name required"))
-		}
 		pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
-		h, err := auth.HashPassword(pw)
-		die(err)
 		s := ctx.openStore()
 		defer s.Close()
-		die(s.SetUserPassword(*name, h))
-		s.Audit("cli", "user_passwd", "name="+*name)
-		output(msg("password updated: %s", *name), printMsg)
+		output(must(api.SetUserPassword(s, "cli", *name, pw)), printMsg)
 	}
 }
 
@@ -2106,23 +2063,14 @@ func cmdUserTOTP(tfs *flag.FlagSet) func(ctx *cliContext) {
 	name := tfs.String("name", "", "username (required)")
 	off := tfs.Bool("off", false, "disable 2FA")
 	return func(ctx *cliContext) {
-		if *name == "" {
-			die(fmt.Errorf("-name required"))
-		}
 		s := ctx.openStore()
 		defer s.Close()
 		if *off {
-			die(s.SetUserTOTP(*name, ""))
-			s.Audit("cli", "user_totp_off", "name="+*name)
-			output(msg("2FA disabled: %s", *name), printMsg)
+			output(must(api.DisableTOTP(s, "cli", *name)), printMsg)
 			return
 		}
-		sec, err := auth.TOTPGenerateSecret()
-		die(err)
-		die(s.SetUserTOTP(*name, sec))
-		s.Audit("cli", "user_totp_enroll", "name="+*name)
-		url := auth.TOTPProvisioningURL(sec, *name, adminCertCN(ctx.dataDir))
-		output(totpOut{sec, url}, func(o totpOut) {
+		enr := must(api.EnrollTOTP(s, "cli", *name, adminCertCN(ctx.dataDir)))
+		output(enr, func(o api.TOTPEnrollment) {
 			printQR(o.URL)
 			fmt.Println("scan with your authenticator, or enter manually:")
 			fmt.Println("  secret:", o.Secret)
@@ -2142,21 +2090,6 @@ func cmdUser(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		opDispatch("user", userOps, userOpDesc, userBodies)(ctx, fs.Args())
 	}
-}
-
-type userAddOut struct {
-	Username string `json:"username"`
-	Role     string `json:"role"`
-}
-
-type userDisabledOut struct {
-	Username string `json:"username"`
-	Disabled bool   `json:"disabled"`
-}
-
-type totpOut struct {
-	Secret string `json:"secret"`
-	URL    string `json:"url"`
 }
 
 var auditSortGetters = map[string]func(store.AuditEntry) string{
