@@ -1371,6 +1371,10 @@ external traffic. Fix: set \fBservice.spec.externalTrafficPolicy: Local\fR.
 .PP
 \fBGET /healthz\fR is an unauthenticated, database\-ping health check \(en
 point a container/Kubernetes liveness or readiness probe at it.
+.PP
+Air\-gapped hosts need nothing extra: ovcp opens no outbound connection
+of its own except to Telegram's API, and only once a bot token is set.
+Install the package, or copy the binary or the image, and run as above.
 .SH NETWORKING
 Three independent listeners, three independent bind rules.
 .TP
