@@ -21,14 +21,14 @@ contributors and reviewers.
 | `internal/upstream` | Policy-routed egress: routing-table and nftables rules that steer client traffic out a chosen interface or into an in-process SOCKS5 relay. Per-client overrides are installed on OpenVPN's `>CLIENT:ESTABLISHED` management event (`internal/controller/mgmt.go`). |
 | `internal/auth` | Password hashing (argon2id), sessions, TOTP, login rate limiting, RBAC. |
 | `internal/telegram` | Optional notification bot: long-poller, command menu, expiry sweep. |
-| `internal/api` | REST/JSON handlers, the embedded web UI, HTTPS, CSRF, and the session and RBAC middleware. |
+| `internal/api` | The mutation core the CLI and the handlers share (see CLI and web API), the web API handlers, the embedded web UI, HTTPS, CSRF, and the session and RBAC middleware. |
 | `web/ui` | Svelte 5 sources for the admin UI, built to `web/dist`. |
 | `web` | Embeds `web/dist` and exposes it to `internal/api` as an `fs.FS`. |
 
 ## Process model
 
 `ovcp` is one binary with three roles: a CLI that performs one operation
-and exits, an HTTPS server (`serve`) hosting the REST API and the UI, and a
+and exits, an HTTPS server (`serve`) hosting the web API and the UI, and a
 supervisor for the OpenVPN and dnsmasq workers. `serve` composes all three
 in one process: it starts the workers through `internal/controller` and
 wires the handlers in `internal/api` to `internal/pki`, `internal/store`,
@@ -52,8 +52,20 @@ A running `serve` uses two Unix sockets:
   `start|stop|restart|status` drive their `Supervisor`, `vpn reconnect`
   sends `SIGUSR1` to the OpenVPN child, `telegram` drives the `Poller`,
   `debug` sets the log level, `upstream-assign` rewrites one connected
-  client's nftables rule (the CLI and REST paths share `api.ApplyAssign`),
+  client's nftables rule (the CLI and web API share `api.ApplyAssign`),
   and `upstream-reapply` re-applies the persisted upstream configuration.
+
+### CLI and web API
+
+Every mutation has one implementation, in `internal/api` or the package
+that owns the data (`store`, `pki`, `upstream`, `ovpnconf`), and that
+implementation enforces every rule: validation, ordering, what may change.
+The CLI command and the HTTP handler are adapters over it. They parse input,
+fill defaults, reach a running openvpn over their own transport (the
+control socket, or the management connection `serve` holds), render the
+result and name the audit actor. A rule enforced in only one adapter is a
+bug, because the other path skips it. Routes, roles and CLI twins:
+`man ovcp`, **WEB API**.
 
 `dns block-internet` is a stored setting, not a control-socket operation,
 and works without `serve`. Socket defaults and flags: `man ovcp`,

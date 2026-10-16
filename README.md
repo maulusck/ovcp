@@ -4,7 +4,6 @@
 </h1>
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8)
 
 **OVCP runs an OpenVPN server end to end** from one static Go binary: its
 own certificate authority, the server configuration, client certificate
@@ -13,8 +12,8 @@ issuance and the `openvpn` process itself. It needs no `easy-rsa`, no
 behaves the same on bare metal, under systemd and in a container.
 
 Internal DNS, policy-routed egress, per-client traffic statistics and
-notifications are built in and optional. The CLI and the web UI each cover
-every operation.
+notifications are built in and optional. The CLI covers every operation;
+the web UI covers all but setup, the CA and restore, which stay on the host.
 
 [Features](#features) · [Requirements](#requirements) ·
 [Install](#install) · [Quick start](#quick-start) · [CLI](#cli) ·
@@ -30,8 +29,9 @@ Always available, with no external tools.
   is encrypted at rest and its passphrase is never written to disk.
 - **One binary.** The web UI is embedded; no separate frontend or reverse
   proxy.
-- **Full CLI.** Every UI action has a CLI equivalent. `-json` switches any
-  command to machine-readable output. Completion for bash, zsh and fish.
+- **Full CLI.** Every UI action is a CLI command with the same
+  implementation. `-json` switches any command to machine-readable output.
+  Completion for bash, zsh and fish.
 - **Client export.** Ready-to-import `.ovpn` profiles, optionally
   key-encrypted, split- or full-tunnel, with per-client OpenVPN directives.
 - **Statistics and audit log.** Per-client traffic history, a live

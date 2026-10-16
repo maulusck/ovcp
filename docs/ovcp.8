@@ -1,4 +1,4 @@
-.TH OVCP 8 "2026-10-11" "ovcp" "System Administration"
+.TH OVCP 8 "2026-10-16" "ovcp" "System Administration"
 .SH NAME
 ovcp \- OpenVPN Control Plane: web UI, native PKI, and lifecycle management for an OpenVPN server
 .SH SYNOPSIS
@@ -83,7 +83,7 @@ The management socket is unix\-only, never TCP. The admin UI is HTTPS\-only
 (self\-signed certificate, regenerated automatically if it expires or the
 CN changes), loopback by default, with signed sessions (HttpOnly, Secure,
 SameSite=Strict cookies), CSRF tokens on every mutating request, RBAC
-(\fBadmin\fR / \fBoperator\fR / \fBreadonly\fR, see \fBuser\fR), optional
+(\fBadmin\fR / \fBoperator\fR / \fBreadonly\fR, see \fBWEB API\fR), optional
 TOTP 2FA, rate\-limited logins, and a full audit log (\fBaudit\fR). Failed
 logins lock out a username+IP pair after 5 attempts within 15 minutes,
 self\-clearing once the window passes; a separate, looser limit locks out
@@ -92,15 +92,12 @@ force spread across many source IPs. A password change (\fBuser passwd\fR
 or the web UI) ends every session of that user, and a deleted or disabled
 user's sessions stop working at once.
 .PP
-\fBvpn config set \-extra\fR (server config) and
-\fBcertificate issue \-export\fR's \fB\-custom\-opts\fR (one client's profile) both
-append raw openvpn directives verbatim, with no parsing or validation.
-Neither needs a role beyond what already gates that surface: server config
-is \fBadmin\fR\-only already (\fBPUT /api/vpn/config\fR, same gate \fBvpn
-config get|set|preview|edit\fR go through), and whichever role can export a
-profile at all already chooses its remote host, port, proto, and cipher. A
-bad directive just fails openvpn's next start (server) or that one
-client's next connection attempt (client) \(en never other clients.
+\fBvpn config set \-extra\fR accepts only an allowlist of directives (no
+scripts, plugins or file loading; see \fBvpn config set\fR), so server
+config can't run code as the \fIovcp\fR account. \fBcertificate issue
+\-export\fR's \fB\-custom\-opts\fR appends raw directives to one client's
+profile: that profile runs on the client's machine, and a bad line breaks
+only that client.
 .PP
 The Telegram bot token (see \fBtelegram\fR) is the one secret stored in
 plaintext, not hashed or encrypted \(en unlike the CA passphrase, \fBovcp\fR
@@ -120,7 +117,29 @@ operations are unreachable from Telegram (see \fBtelegram\fR in
 A client or server certificate CN, a username and an upstream ID are each 1
 to 64 (RFC 5280's CommonName limit) of \fBA\-Z a\-z 0\-9 . _ @ \-\fR, so a
 name is safe verbatim in OpenVPN's management commands, configs, hosts
-files, logs and tables.
+files, logs and tables. Further conventions every command shares:
+.IP \(bu 2
+A \fBset\fR flag left out keeps the current value. Booleans take
+\fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR or \fB1\fR/\fB0\fR,
+case\-insensitive.
+.IP \(bu 2
+\fB\-extra\fR and \fB\-custom\-opts\fR take a list of directive lines in
+three forms: one line per use, repeatable and verbatim (commas included); a
+bare \fB\-\fR, which opens the current lines in \fB$EDITOR\fR (default
+\fBvi\fR, run by the shell, so it may carry arguments such as \fBcode
+\-\-wait\fR); or a file by way of the shell, \fB"$(cat FILE)"\fR. Any use
+replaces the whole list; \fB""\fR clears it.
+.IP \(bu 2
+An \fBOVCP_*\fR variable that seeds a setting (see \fBENVIRONMENT\fR) only
+applies until that setting is first saved; after that, the command
+changes it.
+.IP \(bu 2
+openvpn reloads nothing in place: a server config, server certificate or
+CA certificate change takes effect on the next \fBvpn restart\fR. A
+revocation needs none; openvpn reads the CRL on every connection.
+.IP \(bu 2
+Every mutation also has a web API route with the same implementation (see
+\fBWEB API\fR); the web UI is built on those routes.
 .TP
 .B init \fB\-server\-cn\fR \fIHOST\fR [\fB\-ca\-cn\fR \fINAME\fR] [\fB\-ca\-years\fR \fIN\fR] [\fB\-server\-days\fR \fIN\fR] [\fB\-admin\fR \fINAME\fR] [\fB\-mgmt\fR \fIPATH\fR]
 One\-shot initialization. Creates the CA (prompting twice for a new
@@ -136,7 +155,7 @@ anytime, and what packaging scripts use instead of their own
 \fBmkdir\fR/\fBchown\fR/\fBchmod\fR (see \fBPRIVILEGES\fR).
 .TP
 .B serve [\fB\-listen\fR \fIADDR\fR] [\fB\-mgmt\fR \fIPATH\fR] [\fB\-ctrl\fR \fIPATH\fR]
-Run the HTTPS admin UI and REST API (default \fI127.0.0.1:8443\fR, self\-signed
+Run the HTTPS admin UI and web API (default \fI127.0.0.1:8443\fR, self\-signed
 certificate generated on first run). \fB\-mgmt\fR and \fB\-ctrl\fR override
 \fBOVCP_MGMT_SOCK\fR and \fBOVCP_CTRL_SOCK\fR for this invocation. Starts the
 .B openvpn
@@ -198,27 +217,14 @@ Adds a client\-side \fBpull\-filter\fR that ignores the server's pushed
 \fBredirect\-gateway\fR, so this one client keeps its own default route
 instead of tunneling all traffic; every other pushed option (DNS, explicit
 routes) still applies. Only accepted when the server itself redirects all
-traffic (\fBvpn config set \-redirect\-gw\fR / web UI Settings) \(en rejected
-otherwise, since there is nothing to opt out of. Also available from the
-web UI (Certs tab), shown only when the server redirects.
+traffic (\fBvpn config set \-redirect\-gw\fR) \(en rejected otherwise,
+before anything is issued, since there is nothing to opt out of.
 .TP
 \fB\-custom\-opts\fR
 Appends raw openvpn directives to this one client's profile, unvalidated
 \(en a bad line only breaks that one client's connection, never the
-server. Three equivalent forms, pick whichever fits:
-.RS
-.IP \(bu 2
-one directive per use, repeatable and taken verbatim (commas included):
-\fB\-custom\-opts\fR "keepalive 5 30" \fB\-custom\-opts\fR "verb 4"
-.IP \(bu 2
-a bare \fB\-\fR, which opens \fB$EDITOR\fR (default \fBvi\fR; run by the
-shell, so it may carry arguments such as \fBcode \-\-wait\fR) on a private
-temporary file
-.IP \(bu 2
-a file's contents by way of the shell:
-\fB\-custom\-opts\fR "$(cat FILE)", one directive per line
-.RE
-Also available from the web UI (Certs tab), a plain multi\-line field.
+server. Takes the list forms described at the top of \fBCOMMANDS\fR, e.g.
+\fB\-custom\-opts\fR "keepalive 5 30" \fB\-custom\-opts\fR "verb 4".
 .RE
 .TP
 .B certificate list [\fB\-status\fR all|active|revoked] [\fB\-kind\fR all|client|server] [\fB\-sort\fR cn|kind|expiry|serial|status] [\fB\-desc\fR]
@@ -226,7 +232,7 @@ List issued certificates with status (valid, expiring, REVOKED, expired;
 expiring is anything within 30 days of \fBNotAfter\fR, matching the web
 UI's Certs tab), colored accordingly (see \fB\-no\-color\fR).
 \fB\-status\fR/\fB\-kind\fR filter before
-printing (default \fBall\fR, today's behavior). \fB\-sort\fR reorders the
+printing (default \fBall\fR). \fB\-sort\fR reorders the
 filtered list (default: issued order); \fB\-desc\fR reverses it. Same
 filters/sort as the web UI's Certs tab. \fB\-json\fR prints the same rows
 as JSON instead (see \fBMACHINE\-READABLE OUTPUT\fR). Never includes the
@@ -235,7 +241,8 @@ CA \(en see \fBca status\fR.
 .B certificate revoke \fB\-serial\fR \fIHEX\fR
 Revoke a client certificate and regenerate the CRL, then restart the CN's live
 sessions (OpenVPN's RESTART, through a running \fBserve\fR) so their
-reconnect is refused by \fBcrl\-verify\fR, which is always configured.
+reconnect is refused by \fBcrl\-verify\fR, which is always configured. The
+CA passphrase is checked before anything changes.
 \fBissue \-renew\fR does the same for the outgoing cert: clients already
 on the new profile reconnect normally. The server cert is never revoked:
 \fBcertificate renew\fR replaces it.
@@ -244,9 +251,7 @@ on the new profile reconnect normally. The server cert is never revoked:
 Server\-only \(en a server has exactly one cert, at the fixed paths
 .B serve
 reads directly, so nothing is printed (see \fBcertificate issue\fR above). Reissues it in place \(en
-fresh keypair and serial, same paths \(en effective on the next
-.B ovcp vpn restart
-(openvpn does not hot\-reload its certificate). Omit \fB\-cn\fR to keep
+fresh keypair and serial, same paths. Omit \fB\-cn\fR to keep
 the current CN (routine renewal); pass a different one to rename it \(en
 server identity is kind\-only, not CN\-keyed like a client's (there is
 only ever one), so renew and rename are the same operation. A rename
@@ -258,31 +263,18 @@ the old CN until \fBovcp serve\fR itself is restarted (see
 defaults to the existing server cert's CN, falling back to
 \fBOVCP_SERVER_CN\fR if that file can't be read yet (e.g. right after a
 \fBbackup restore\fR, which never restores a server cert \(en see below).
-Also available from the web UI (Certificates tab, admin role, the server
-cert's own row: \fBPOST /api/certs/renew\fR) \(en renew only, no rename;
-a CN change is CLI\-only.
 .TP
 .B vpn config get
 Print the persisted server configuration \(en proto, port, subnet,
 cipher, pushed DNS/routes, push\-internal\-dns, redirect\-gateway, and the
-raw extra directives \(en the same values \fBGET /api/vpn/config\fR (web UI
-Settings tab) reads.
+extra directives.
 .TP
 .B vpn config set [\fB\-proto\fR udp|tcp] [\fB\-port\fR \fIN\fR] [\fB\-subnet\fR \fICIDR\fR] [\fB\-cipher\fR \fINAME\fR] [\fB\-dns\fR \fIIPS\fR] [\fB\-push\-internal\-dns\fR on|off] [\fB\-routes\fR \fICIDRS\fR] [\fB\-redirect\-gw\fR on|off] [\fB\-extra\fR \fIDIRECTIVE\fR ...|\fB\-\fR]
 Change one or more server settings and persist them, printing the same
-\fB+\fR/\fB\-\fR diff \fBpreview\fR below shows \(en the CLI/env\-var
-equivalent of the web UI's Settings tab \fBPUT /api/vpn/config\fR, for
-containers and non\-attended initialization where there is no browser to
-click Save. Every flag defaults to its zero value, meaning \(lqleave this
-setting unchanged\(rq: only the flags actually passed are applied, on top
-of whatever is currently persisted (or the built\-in/env\-seeded defaults,
-see \fBinit\fR and \fBOVCP_OPENVPN_PROTO\fR and friends below, if nothing
-has been saved yet). \fB\-dns\fR and \fB\-routes\fR take a comma\-separated
-list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
-appending to it. \fB\-extra\fR takes the same three forms as
-\fBcertificate issue \-export\fR's \fB\-custom\-opts\fR; a bare \fB\-\fR
-opens the current directives, and any use sets them, so \fB\-extra\fR ""
-clears them. Each extra line must name an allowed directive (comments and
+\fB+\fR/\fB\-\fR diff \fBpreview\fR below shows. \fB\-dns\fR and
+\fB\-routes\fR take a comma\-separated list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"),
+replacing the whole list, not appending to it. Each \fB\-extra\fR line must
+name an allowed directive (comments and
 blank lines aside): \fBlocal\fR, \fBpush\fR, \fBkeepalive\fR (overrides the
 built\-in \fIkeepalive 10 60\fR), \fBclient\-to\-client\fR, \fBmax\-clients\fR,
 \fBmax\-routes\-per\-client\fR, \fBinactive\fR, \fBsession\-timeout\fR,
@@ -291,18 +283,12 @@ built\-in \fIkeepalive 10 60\fR), \fBclient\-to\-client\fR, \fBmax\-clients\fR,
 \fBecdh\-curve\fR, \fBremote\-cert\-eku\fR/\fB\-ku\fR, \fBreneg\-bytes\fR/\fB\-pkts\fR/\fB\-sec\fR,
 \fBreplay\-window\fR, \fBmute\-replay\-warnings\fR, \fBmute\fR, \fBmssfix\fR,
 \fBfragment\fR, \fBtun\-mtu\fR, \fBtcp\-nodelay\fR. Scripts, plugins, file
-loading, inline blocks and what \fBovcp\fR renders itself are refused; the
-same rule applies to \fBPUT /api/vpn/config\fR and \fBOVCP_OPENVPN_EXTRA\fR.
-\fB\-redirect\-gw\fR and
-\fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
-or \fB1\fR/\fB0\fR, case\-insensitive \(en the same boolean vocabulary as
-\fBdns config set \-block\-internet\fR below. Rejects an invalid combination
-(bad CIDR, disallowed cipher or extra directive, port out of range, an unrecognized boolean
-value) without writing anything; an empty diff \(en no flags changed
-anything, including an \fB$EDITOR\fR session that saved unmodified \(en
-is reported but not written either. Takes effect on the next
-.B ovcp vpn restart
-\(en openvpn does not hot\-reload its configuration.
+loading, inline blocks and what \fBovcp\fR renders itself are refused, from
+\fBOVCP_OPENVPN_EXTRA\fR too. Rejects an invalid combination (bad CIDR,
+disallowed cipher or extra directive, port out of range, an unrecognized
+boolean) without writing anything; an empty diff \(en including an
+\fB$EDITOR\fR session that saved unmodified \(en is reported, never
+written or audited.
 .RS
 .TP
 \fBPush internal DNS\fR
@@ -333,8 +319,7 @@ resolver kept reachable for split\-DNS).
 .B vpn config preview [\fIsame flags as\fR \fBvpn config set\fR]
 Show what \fBvpn config set\fR with the same flags would change in
 \fIserver.conf\fR (unified \fB+\fR/\fB\-\fR diff lines), without persisting
-or writing anything \(en the CLI twin of the web UI's \fBPreview\fR
-button (\fBPOST /api/vpn/config/preview\fR). Safe to run anytime: nothing is
+or writing anything. Safe to run anytime: nothing is
 saved until the same flags are run through \fBvpn config set\fR instead \(en
 \fBvpn config get\fR right after a \fBpreview\fR still shows the old values.
 .TP
@@ -354,9 +339,6 @@ the CA's signing key, never which CA certificate happens to be on disk, so
 nothing needs reissuing. \fICLI\-only\fR, like \fBca rotate\fR: a mistake or a hijacked admin session
 on the CA affects every certificate, so CA operations require shell access.
 The web UI shows the CA status (Dashboard) only.
-Takes effect on the next
-.B ovcp vpn restart
-\(en openvpn does not hot\-reload the CA certificate either.
 .TP
 .B ca status
 Read\-only: CN, expiry, and status (valid, expiring, expired \(en the CA
@@ -369,8 +351,7 @@ Write an encrypted archive (argon2id + AES\-256\-GCM, prompts twice for a
 backup passphrase) of the CA, CRL, tls\-crypt key, TOTP key,
 \fIserver.conf\fR, and database to stdout: \fBovcp backup create >
 ovcp.bak\fR. Refuses a terminal stdout and \fB\-json\fR (the archive is
-the output). Also available from the web UI (Settings, admin role).
-Excludes the openvpn server certificate and private key:
+the output). Excludes the openvpn server certificate and private key:
 OpenVPN clients trust the CA chain and a CN match, never a pinned server
 cert, so a restore just issues a fresh one (\fBcertificate renew\fR)
 \(en the server's private key never has to leave the
@@ -414,13 +395,10 @@ view, not a single result) and needs \fBserve\fR running.
 manage the sampler that feeds all of the above, independently of
 \fB\-follow\fR/\fB\-interval\fR (which only control this one invocation's
 polling, not the sampler itself): \fB\-sample\-interval\-sec\fR (default
-60, seeded from \fBOVCP_STATS_SAMPLE_INTERVAL\fR) is how often a sample is
-written per connected client; \fB\-retention\-hours\fR (default 24, seeded
-from \fBOVCP_STATS_RETENTION_HOURS\fR) is how far back samples/sessions
-are kept and queried, by this command and \fBGET /api/stats\fR alike. Both
-must be positive. Same persisted values as \fBGET\fR/\fBPUT
-/api/stats/config\fR (web UI); picked up by the running sampler on its
-next tick, no restart needed.
+60) is how often a sample is written per connected client;
+\fB\-retention\-hours\fR (default 24) is how far back samples/sessions are
+kept and queried. Both must be positive. The running sampler picks them up
+on its next tick, no restart needed.
 .TP
 .B vpn start|stop|restart|reconnect|status [\fB\-ctrl\fR \fIPATH\fR]
 .TQ
@@ -435,8 +413,8 @@ sends SIGTERM,
 .B status
 reports whether it is running,
 .B restart
-is a full stop + fresh start \(en required for any configuration, key, or
-CRL change; \fBstart\fR/\fBrestart\fR also re\-apply the upstream
+is a full stop + fresh start, what any config or certificate change needs;
+\fBstart\fR/\fBrestart\fR also re\-apply the upstream
 configuration (see \fBupstream\fR below). And
 .B reconnect
 sends SIGUSR1 for a soft session reset (runtime recovery, no process
@@ -472,8 +450,7 @@ fails with a clear error.
 .B dns config set [\fB\-block\-internet\fR on|off]
 Whether dnsmasq also forwards to upstream resolvers, or answers only
 names it knows locally \(en the same persisted setting as the Records
-tab's \(lqBlock internet DNS\(rq toggle
-(\fBGET\fR/\fBPUT /api/dns/config\fR). Unlike
+tab's \(lqBlock internet DNS\(rq toggle. Unlike
 .BR start / stop / restart / status
 above, this is a stored setting, not a live control\-socket op \(en it
 works without a running
@@ -482,13 +459,10 @@ and takes effect on dnsmasq's next
 .B start
 or
 .BR restart .
-Default off, seeded from \fBOVCP_DNS_BLOCK_INTERNET\fR (\fBtrue\fR turns it
-on) only until the first save \(en see \fBvpn config set\fR above for the
-same seed\-once\-then\-persisted pattern.
+Default off.
 .B dns config get
-prints the current value; \fB\-block\-internet\fR on \fBdns config set\fR
-takes the same boolean values as \fBvpn config set \-redirect\-gw\fR;
-omitting it makes \fBset\fR a no\-op. See
+prints the current value; omitting \fB\-block\-internet\fR makes \fBset\fR
+a no\-op. See
 \fBPush internal DNS\fR under \fBvpn config set\fR above for how this
 interacts with that setting:
 turning this on without also pushing the internal resolver, or combining
@@ -507,7 +481,7 @@ prints every certificate (not just currently-connected ones) with its DNS
 include/exclude status, same filters/sort/coloring as \fBcertificate
 list\fR, plus \fIcustom.hosts\fR' raw content.
 .B edit
-opens the custom entries in \fB$EDITOR\fR (see \fB\-custom\-opts\fR).
+opens the custom entries in \fB$EDITOR\fR (default \fBvi\fR).
 .B include
 and
 .B exclude
@@ -557,7 +531,7 @@ default) uses the server\-wide default (see \fBOVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT\
 \fBOVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT\fR in \fBENVIRONMENT\fR). The URL's
 password never appears again in
 .B list/reconcile/status
-output or the REST API once saved, only \fB***\fR.
+output or the web API once saved, only \fB***\fR.
 .B add
 assigns the next free routing table (or, for socks\-mode, the derived local
 relay port) in ovcp's own reserved band automatically. \fBset\-default\fR is
@@ -598,9 +572,7 @@ Every op fails cleanly if nftables isn't on \fBPATH\fR, or if
 \fBOVCP_UPSTREAMS_ENABLED=false\fR (see \fBENVIRONMENT\fR) \(en same
 treatment
 .B dns
-gets without dnsmasq. Also available from the web UI's Upstreams tab (admin
-role for changes; hidden entirely if nftables isn't found), shown only when
-enabled.
+gets without dnsmasq; the web UI then hides the Upstreams tab.
 .TP
 .B logs config get
 .TQ
@@ -612,21 +584,17 @@ enabled.
 Manage rotation of \fIopenvpn.log\fR/\fIovcp.log\fR/\fIdnsmasq.log\fR (see
 \fBFILES\fR): internal copytruncate, safe with the worker's already\-open
 handle, no reopen or restart needed. Runs once a day by default while
-\fBserve\fR is up. Same persisted setting as \fBGET\fR/\fBPUT
-/api/logs/config\fR (\fBPOST /api/logs/rotate\fR for \fBrotate\fR).
+\fBserve\fR is up.
 .B logs config set \-enabled\fR
-(default on, seeded from \fBOVCP_LOG_ROTATE_ENABLED\fR \(en anything but
-\fBfalse\fR means on) toggles that daily pass \(en turn it off to hand
+(default on) toggles that daily pass \(en turn it off to hand
 rotation to an external \fBlogrotate\fR instead (see \fI/var/log/ovcp\fR in
 \fBFILES\fR).
 .B \-retention\-days
-(default 14, seeded from \fBOVCP_LOG_RETENTION_DAYS\fR; \fB0\fR keeps
-forever) deletes rotated generations older than that;
+(default 14; \fB0\fR keeps forever) deletes rotated generations older than
+that;
 .B \-keep\-uncompressed
-(default 2, seeded from \fBOVCP_LOG_KEEP_UNCOMPRESSED\fR) gzips anything
-older than the newest N. Like \fBvpn config\fR's and \fBdns config\fR's env
-vars, these only seed the first, never\-yet\-persisted default \(en once
-saved, \fBlogs config set\fR is the way to change it, not the environment.
+(default 2) gzips anything older than the newest N. Neither may be
+negative.
 .B rotate
 runs one pass immediately \(en point an external cron at this if
 \fB\-enabled\fR is off \(en and works whether or not \fBserve\fR is
@@ -642,19 +610,17 @@ rotation timestamp.
 .B user del|disable|enable|passwd \fB\-name\fR \fINAME\fR
 .TQ
 .B user totp \fB\-name\fR \fINAME\fR [\fB\-off\fR]
-Manage web UI users. Roles: \fBadmin\fR (everything), \fBoperator\fR
-(certificates, disconnects, default for \fBadd\fR), \fBreadonly\fR.
+Manage web UI users; what each role may do is listed under \fBWEB API\fR
+(\fBadd\fR defaults to \fBoperator\fR).
 \fBuser list\fR's \fB\-status\fR/\fB\-role\fR filter before printing (default
-\fBall\fR); \fB\-sort\fR reorders the filtered list (default: today's order);
+\fBall\fR); \fB\-sort\fR reorders the filtered list (default: creation order);
 \fB\-desc\fR reverses it, and its enabled/disabled status is colored (see
 \fB\-no\-color\fR). Same as the web UI's Users tab \(en see
 \fBMACHINE\-READABLE OUTPUT\fR for \fB\-json\fR's fields per subcommand.
 .B user totp
 prints an otpauth:// enrollment URL; \fB\-off\fR disables 2FA instead.
-\fBuser del\fR and \fBuser disable\fR have no self\-lockout guard on the
-CLI \(en unlike the REST API, which refuses to delete or disable the
-caller's own account. Take care when scripting either against the
-currently\-authenticated admin.
+The web API refuses to delete or disable the caller's own account; the
+CLI, run on the host, has no caller to protect and no such guard.
 .TP
 .B audit [\fB\-sort\fR ts|actor|action] [\fB\-desc\fR]
 Print the last 50 audit entries (logins, issues, revocations, kills,
@@ -682,8 +648,7 @@ messages the bot is ignored (no reply).
 \fBtelegram config get\fR prints whether a token is set, the current admin,
 and whether the chat is linked yet (a \fB@username\fR admin only links once
 they've messaged the bot; re\-saving the same token or admin never unlinks
-it) \(en never the token itself \(en same values as \fBGET\fR/\fBPUT
-/api/telegram/config\fR (web UI). Changing \fB\-admin\fR to a different
+it) \(en never the token itself. Changing \fB\-admin\fR to a different
 identity best\-effort warns the chat being replaced first, naming the
 incoming identity, before it's unlinked \(en the one defense against a
 hijacked reassignment; changing \fB\-token\fR has no equivalent, an
@@ -773,7 +738,7 @@ exits with a single result, so \fB\-json\fR there means JSON log lines
 instead (see \fB\-json\fR in \fBOPTIONS\fR).
 .PP
 Fatal errors are JSON too, on stdout, as \fB{"error": "..."}\fR \(en the
-same shape every failed HTTP request in the REST API already uses. A script
+same shape every failed web API request uses. A script
 can parse stdout unconditionally and check \fB.error\fR (or the process exit
 code, still 1 on failure) rather than branching on success vs. failure
 output. Flag\-parsing mistakes (an unknown or malformed flag) are the one
@@ -839,36 +804,26 @@ array of \fB{status, kind, cn, serial, expires}\fR.
 The full persisted server config: \fB{Proto, Port, Subnet, Cipher, DNS,
 PushInternalDNS, Routes, RedirectGW, Extra}\fR plus the \fBovcp\fR\-managed
 path/runtime fields (\fBCACert, ServerCert, ServerKey, CRL, TLSCrypt,
-MgmtSocket, StatusLog, StatusInterval, ServerCN\fR).
-Field names are the Go struct's, not this page's lowercase convention: it
-is the same untagged struct \fBGET\fR/\fBPUT /api/vpn/config\fR return, so
-the CLI and the REST API produce identical shapes.
+MgmtSocket, StatusLog, StatusInterval, ServerCN\fR). Settings objects
+(this one, \fBdns\fR, \fBlogs\fR and \fBstats config\fR) keep the Go field
+names, capitalized.
 .TP
 .B vpn config preview
 \fB{diff, changed}\fR: \fBdiff\fR an array of unified \fB+\fR/\fB\-\fR
 \fIserver.conf\fR lines (empty if \fBchanged\fR is \fBfalse\fR).
 .TP
 .B dns config get, dns config set
-\fB{BlockInternet}\fR \(en same untagged\-struct exception as \fBvpn
-config\fR above, for the CLI's own JSON. \fINote:\fR the REST API's
-\fBGET\fR/\fBPUT /api/dns/config\fR instead wrap the same value as
-\fB{"blockInternet": ...}\fR, lowercase \(en unlike \fBvpn config\fR, this
-is the one settings resource where the CLI and the web API don't share a
-byte\-identical shape.
+\fB{BlockInternet}\fR.
 .TP
 .B logs config get, logs config set
-\fB{Enabled, RetentionDays, KeepUncompressed}\fR, same untagged\-struct
-convention as \fBvpn config\fR above \(en \fBGET\fR/\fBPUT
-/api/logs/config\fR return the identical shape.
+\fB{Enabled, RetentionDays, KeepUncompressed}\fR.
 .TP
 .B logs status
 array of \fB{Name, Path, CurrentSize, Generations, Oldest, Newest}\fR, one
 row per log source (see \fBlogs\fR in \fBCOMMANDS\fR).
 .TP
 .B stats config get, stats config set
-\fB{SampleIntervalSec, RetentionHours}\fR, same untagged\-struct convention
-as \fBvpn config\fR above \(en \fBGET\fR/\fBPUT /api/stats/config\fR return
-the identical shape.
+\fB{SampleIntervalSec, RetentionHours}\fR.
 .TP
 .B status
 \fB{running, pid, uptime, ovcpUptime, error, clients, dnsRunning, dnsPid,
@@ -906,12 +861,6 @@ mutually exclusive per entry; \fBsocks\fR' password, if any, is always
 \fInet.InterfaceByName\fR check for \-iface mode, always true for \-socks
 mode (no cheap liveness check without dialing the backend) \(en same value
 the text table's STATUS column reads; \fBreconcile\fR re\-applies first.
-Same \fBdns config\fR exception as above: the REST API's \fBGET
-/api/upstreams\fR and \fBPOST /api/upstreams/reconcile\fR instead return
-the untagged \fBupstream.Config\fR (also \fBsocks\fR\-password\-redacted)
-plus a \fBwarning\fR string \(en the CLI needs the live per\-upstream
-\fBup\fR flag REST has no field for, so this is the one other upstream
-surface where the two shapes don't match.
 .TP
 .B upstream status
 \fB{enabled, nftVersion, nftPath, default}\fR \(en version/path pair omitted
@@ -946,6 +895,67 @@ array of the same entries as text.
 \fB{version, platform, buildTarget, openvpnVersion, openvpnPath,
 dnsmasqVersion, dnsmasqPath, nftVersion, nftPath}\fR \(en each pair omitted
 if that binary isn't on \fBPATH\fR (see \fBversion\fR in \fBCOMMANDS\fR).
+.SH WEB API
+\fBserve\fR's HTTPS listener serves the web UI and a JSON API under
+\fI/api\fR. \fBPOST /api/login\fR \fB{Username, Password, TOTP}\fR sets the
+session cookie and an \fIovcp_csrf\fR cookie; every mutating request echoes
+the latter in an \fBX\-OVCP\-CSRF\fR header. Each route below calls the same
+implementation as its CLI twin, with the same inputs, checks and audit
+line. Settings and upstream routes return the same object as the twin's
+\fB\-json\fR output, plus a \fBwarning\fR string where the CLI prints
+\fBwarning:\fR to stderr; actions return \fB{"ok": true}\fR or their result.
+Errors are \fB{"error": "..."}\fR with a 4xx/5xx status. Roles nest: \fBoperator\fR may do what
+\fBreadonly\fR may, \fBadmin\fR everything.
+.TS
+l l l.
+Route	Role	CLI twin
+_
+GET /healthz	none	\(em (liveness: database ping)
+GET /api/me	readonly	\(em (user, role, server CN)
+GET /api/status	readonly	status
+GET /api/stats	readonly	stats
+GET /api/audit	readonly	audit
+GET /api/certs	readonly	certificate list
+GET /api/certs/download?serial=	readonly	\(em (one certificate's PEM)
+GET /api/logs/{openvpn,ovcp,dnsmasq}	readonly	\(em (last lines of that log)
+GET /api/{vpn,dns,logs,stats,telegram}/config	readonly	\fIX\fR config get
+GET /api/dns/custom	readonly	record list (custom part)
+GET /api/upstreams	readonly	upstream list
+GET /api/debug	readonly	\(em (current level)
+POST /api/certs	operator	certificate issue
+POST /api/certs/export	operator	certificate issue \-export
+POST /api/certs/revoke	operator	certificate revoke
+PATCH /api/certs/{serial}/dns	operator	record include|exclude
+POST /api/clients/kill	operator	vpn kill
+GET /api/logs/download	operator	\(em (zip of logs/, audit, status.json; unencrypted)
+PUT /api/{vpn,dns,logs,stats,telegram}/config	admin	\fIX\fR config set
+POST /api/vpn/config/preview	admin	vpn config preview
+POST /api/vpn/{start,stop,restart,reconnect}	admin	vpn \fIop\fR
+POST /api/dns/{start,stop,restart}	admin	dns \fIop\fR
+POST /api/telegram/{start,stop,restart}	admin	telegram \fIop\fR
+PUT /api/dns/custom	admin	record edit
+POST /api/dns/custom/preview	admin	\(em (custom.hosts diff)
+POST /api/certs/renew	admin	certificate renew (no \fB\-cn\fR)
+POST /api/upstreams	admin	upstream add
+DELETE /api/upstreams/{id}	admin	upstream del
+PUT /api/upstreams/default	admin	upstream set\-default
+PUT /api/upstreams/assign	admin	upstream assign
+POST /api/upstreams/reconcile	admin	upstream reconcile
+POST /api/logs/rotate	admin	logs rotate
+POST /api/debug	admin	debug on|off
+POST /api/backup	admin	backup create
+GET|POST /api/users	admin	user list|add
+DELETE /api/users/{name}	admin	user del
+PATCH /api/users/{name}	admin	user enable|disable
+POST /api/users/{name}/password	admin	user passwd
+POST|DELETE /api/users/{name}/totp	admin	user totp [\fB\-off\fR]
+POST /api/logout	readonly	\(em
+.TE
+.PP
+CLI only, by design: \fBinit\fR, \fBserve\fR, \fBca\fR (a CA mistake
+affects every certificate), \fBbackup restore\fR (offline recovery),
+\fBcertificate renew \-cn\fR (a rename), \fBstats \-follow\fR,
+\fBcompletion\fR and \fBversion\fR.
 .SH TIMESTAMPS
 .TP
 .B CLI
@@ -1047,21 +1057,10 @@ disable), and empty by default, respectively. \fBOVCP_OPENVPN_DNS\fR and
 \fBOVCP_OPENVPN_ROUTES\fR take a comma\-separated list, same as \fBvpn
 config set\fR's \fB\-dns\fR/\fB\-routes\fR flags. There is no env var for
 \fB\-push\-internal\-dns\fR \(en it defaults to off, except that \fBinit\fR
-itself turns it on when it finds dnsmasq on \fBPATH\fR (see \fBinit\fR and
-\fBvpn config set\fR in \fBCOMMANDS\fR). The one\-shot, non\-attended
-path for containers and provisioning tools that need a non\-default
-protocol/port/subnet/etc. at \fBinit\fR time without a CLI flag or a
-browser: read once by \fBinit\fR (and any first config load before
-anything has been explicitly saved) \(en once a config is persisted,
-\fBvpn config set\fR is the way to change it, not re\-exporting these and
-restarting. See \fBvpn config set\fR in \fBCOMMANDS\fR for the flag
-equivalents and their exact defaults/validation.
+itself turns it on when it finds dnsmasq on \fBPATH\fR.
 .TP
 .B OVCP_DNS_BLOCK_INTERNET
-Seeds \fBdns config set \-block\-internet\fR's persisted default: set to
-\fItrue\fR to start with it on. Same one\-shot\-seed\-then\-persisted
-pattern as \fBOVCP_OPENVPN_*\fR above \(en see \fBdns config set\fR in
-\fBCOMMANDS\fR.
+Seeds \fBdns config set \-block\-internet\fR: \fItrue\fR starts with it on.
 .TP
 .B OVCP_UPSTREAMS_ENABLED
 Whether the
@@ -1074,9 +1073,8 @@ turn it off even when nftables is present. Same
 .B OVCP_UPSTREAM_SOCKS
 Seeds one SOCKS upstream (id \fBsocks\fR, set as the default) from a
 .I socks5://[user:pass@]host:port
-URL, same one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR
-above \(en see \fBupstream add \-socks\fR in \fBCOMMANDS\fR. Invalid or
-already superseded by a saved config: ignored, logged, never fatal.
+URL (see \fBupstream add \-socks\fR). Invalid or already superseded by a
+saved config: ignored, logged, never fatal.
 .TP
 .B OVCP_UPSTREAM_SOCKS_DIAL_TIMEOUT, OVCP_UPSTREAM_SOCKS_HANDSHAKE_TIMEOUT
 Seconds; server\-wide default for the SOCKS relay's connect timeout
@@ -1094,18 +1092,13 @@ out \(en its kill\-switch is an unreachable fallback route, not time\-based.
 .TP
 .B OVCP_STATS_SAMPLE_INTERVAL, OVCP_STATS_RETENTION_HOURS
 Seed \fBstats config set\fR's \fB\-sample\-interval\-sec\fR/
-\fB\-retention\-hours\fR (default \fB60\fR seconds, \fB24\fR hours). Same
-one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR above \(en
-see \fBstats\fR in \fBCOMMANDS\fR.
+\fB\-retention\-hours\fR (default \fB60\fR seconds, \fB24\fR hours).
 .TP
 .B OVCP_LOG_ROTATE_ENABLED, OVCP_LOG_RETENTION_DAYS, OVCP_LOG_KEEP_UNCOMPRESSED
 Seed \fBlogs config set\fR's \fB\-enabled\fR/\fB\-retention\-days\fR/
 \fB\-keep\-uncompressed\fR (default enabled, \fB14\fR days, \fB2\fR
-generations kept uncompressed). \fBOVCP_LOG_ROTATE_ENABLED\fR follows the
-same \(lqanything but \fBfalse\fR means on\(rq rule as
-\fBOVCP_OPENVPN_REDIRECT_GW\fR; the other two are plain integers. Same
-one\-shot\-seed\-then\-persisted pattern as \fBOVCP_OPENVPN_*\fR above \(en
-see \fBlogs\fR in \fBCOMMANDS\fR.
+generations kept uncompressed); for \fBOVCP_LOG_ROTATE_ENABLED\fR, anything
+but \fBfalse\fR means on.
 .TP
 .B OVCP_OPENVPN_AUTOSTART, OVCP_DNSMASQ_AUTOSTART
 Set to \fBfalse\fR to skip starting that worker automatically when
@@ -1145,7 +1138,7 @@ Generated openvpn configuration. Managed by ovcp; do not edit.
 .TP
 .I $OVCP_DATA/ovcp.db
 SQLite database: users, sessions, certificate metadata, audit log,
-connection stats (Stats tab; 24\-hour retention). Private keys are never
+connection stats (retention: \fBstats config\fR). Private keys are never
 stored in the database.
 .TP
 .I $OVCP_DATA/admin\-tls/
@@ -1185,13 +1178,6 @@ while they're online. Regenerated automatically; do not edit.
 Manually added hosts\-file entries, edited via \fBrecord edit\fR or the
 Records tab. Not touched by ovcp otherwise.
 .TP
-\fBGET /api/logs/download\fR
-Not a file, but reads from the ones above: an \fBoperator\fR\-or\-higher
-user can fetch a zip of every regular file under \fIlogs/\fR plus the
-audit trail and a \fIstatus.json\fR snapshot, unencrypted (unlike
-\fBbackup create\fR). Web UI only; \fBreadonly\fR sees the Logs tab but
-not this button.
-.TP
 .I /var/log/ovcp
 Symlink to \fI$OVCP_DATA/logs\fR (package/container installs), for a
 log\-shipper or an external \fBlogrotate\fR used instead of the internal one.
@@ -1209,7 +1195,7 @@ would log a line per poll). Live state, not a log: excluded from
 Issue and download a profile for a phone, valid two years:
 .nf
 .RS
-ovcp certificate issue \-cn dana\-phone \-export \-remote vpn.example.com > dana\-phone.ovpn
+ovcp certificate issue \-cn dana\-phone \-days 730 \-export \-remote vpn.example.com > dana\-phone.ovpn
 .RE
 .fi
 Revoke it later:
@@ -1250,7 +1236,7 @@ edit the server's own extra directives:
 .nf
 .RS
 ovcp certificate issue \-cn dana\-phone \-export \-remote vpn.example.com \e
-  \-custom\-opts "block\-outside\-dns,ping\-restart 30" > dana\-phone.ovpn
+  \-custom\-opts block\-outside\-dns \-custom\-opts "ping\-restart 30" > dana\-phone.ovpn
 ovcp vpn config set \-extra \-
 .RE
 .fi
