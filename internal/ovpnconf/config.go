@@ -29,7 +29,7 @@ type Config struct {
 	PushInternalDNS bool     // also push the server's own tun IP, first — see ServerTunIP
 	Routes          []string // pushed routes, CIDR
 	RedirectGW      bool     // push redirect-gateway
-	Extra           string   // raw directives, appended verbatim; unvalidated by design
+	Extra           string   // raw directives, appended verbatim; names from extraAllowed only
 
 	// paths (filled by the app from its data dir)
 	CACert, ServerCert, ServerKey, CRL, TLSCrypt, MgmtSocket, StatusLog string
@@ -134,6 +134,20 @@ var allowedCiphers = map[string]bool{
 	"AES-256-GCM": true, "AES-128-GCM": true, "CHACHA20-POLY1305": true,
 }
 
+// extraAllowed: the directives Extra may name. Anything else (scripts, plugins,
+// file loading, inline blocks, what Render owns) is refused; keepalive overrides.
+var extraAllowed = map[string]bool{
+	"local": true, "push": true, "keepalive": true, "client-to-client": true,
+	"max-clients": true, "max-routes-per-client": true, "inactive": true,
+	"session-timeout": true, "connect-freq": true, "hand-window": true,
+	"tls-version-min": true, "tls-version-max": true, "tls-cert-profile": true,
+	"tls-cipher": true, "tls-ciphersuites": true, "ecdh-curve": true,
+	"remote-cert-eku": true, "remote-cert-ku": true,
+	"reneg-bytes": true, "reneg-pkts": true, "reneg-sec": true,
+	"replay-window": true, "mute-replay-warnings": true, "mute": true,
+	"mssfix": true, "fragment": true, "tun-mtu": true, "tcp-nodelay": true,
+}
+
 func (c *Config) Validate() error {
 	if c.Proto != "udp" && c.Proto != "tcp" {
 		return fmt.Errorf("ovpnconf: proto must be udp or tcp")
@@ -155,6 +169,15 @@ func (c *Config) Validate() error {
 	for _, r := range c.Routes {
 		if _, _, err := net.ParseCIDR(r); err != nil {
 			return fmt.Errorf("ovpnconf: route %q: %w", r, err)
+		}
+	}
+	for _, line := range strings.Split(c.Extra, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0][0] == '#' || f[0][0] == ';' {
+			continue
+		}
+		if !extraAllowed[strings.TrimPrefix(f[0], "--")] {
+			return fmt.Errorf("ovpnconf: extra directive %q not allowed", f[0])
 		}
 	}
 	return nil

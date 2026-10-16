@@ -179,8 +179,11 @@ echo "== upstream: socks, per-client"
 ssh -o BatchMode=yes -f -N -D 127.0.0.1:1080 localhost
 t "socks upstream add" "O upstream add -id sox -socks socks5://127.0.0.1:1080"
 t "assign vm3 (asks for restart)" "O upstream assign -cn vm3 -id sox 2>&1 | grep -q 'vpn restart'"
+t "extra refuses a script directive" "! O vpn config set -extra 'up /bin/sh'"
+t "extra keepalive overrides the built-in one" "O vpn config set -extra 'keepalive 5 30'"
 t "vpn restart" "O vpn restart"
 t "vm3 reconnects" "connected"
+t "vm3 pushed the overridden keepalive" "sudo -n grep -q 'ping 5,ping-restart 30' /var/lib/ovcp/logs/openvpn.log"
 t "relay listener owned by ovcp" "sudo -n ss -ltnp | grep ':20001' | grep -q '\"ovcp\"'"
 t "client HTTPS via socks relay" "C 'curl -s -m 8 -o /dev/null https://1.1.1.1/'"
 pgrep -f '^ssh -o BatchMode=yes -f -N -D 127.0.0.1:1080' | xargs -r kill; sleep 1

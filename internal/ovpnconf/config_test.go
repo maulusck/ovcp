@@ -17,6 +17,7 @@ func valid() Config {
 
 func TestValidate(t *testing.T) {
 	c := valid()
+	c.Extra = "# note\nclient-to-client\n--keepalive 5 30\n\npush \"route 10.9.0.0 255.255.0.0\""
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +28,8 @@ func TestValidate(t *testing.T) {
 		func(c *Config) { c.Subnet = "10.8.0.0" },
 		func(c *Config) { c.DNS = []string{"nope"} },
 		func(c *Config) { c.Routes = []string{"bad/99"} },
+		func(c *Config) { c.Extra = "client-to-client\n--up /bin/sh" },
+		func(c *Config) { c.Extra = "<connection>" },
 	} {
 		bad := valid()
 		mut(&bad)

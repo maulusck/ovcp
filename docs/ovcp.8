@@ -279,11 +279,22 @@ list (\fB\-dns\fR "1.1.1.1, 9.9.9.9"), replacing the whole list, not
 appending to it. \fB\-extra\fR takes the same three forms as
 \fBcertificate issue \-export\fR's \fB\-custom\-opts\fR; a bare \fB\-\fR
 opens the current directives, and any use sets them, so \fB\-extra\fR ""
-clears them. \fB\-redirect\-gw\fR and
+clears them. Each extra line must name an allowed directive (comments and
+blank lines aside): \fBlocal\fR, \fBpush\fR, \fBkeepalive\fR (overrides the
+built\-in \fIkeepalive 10 60\fR), \fBclient\-to\-client\fR, \fBmax\-clients\fR,
+\fBmax\-routes\-per\-client\fR, \fBinactive\fR, \fBsession\-timeout\fR,
+\fBconnect\-freq\fR, \fBhand\-window\fR, \fBtls\-version\-min\fR/\fB\-max\fR,
+\fBtls\-cert\-profile\fR, \fBtls\-cipher\fR, \fBtls\-ciphersuites\fR,
+\fBecdh\-curve\fR, \fBremote\-cert\-eku\fR/\fB\-ku\fR, \fBreneg\-bytes\fR/\fB\-pkts\fR/\fB\-sec\fR,
+\fBreplay\-window\fR, \fBmute\-replay\-warnings\fR, \fBmute\fR, \fBmssfix\fR,
+\fBfragment\fR, \fBtun\-mtu\fR, \fBtcp\-nodelay\fR. Scripts, plugins, file
+loading, inline blocks and what \fBovcp\fR renders itself are refused; the
+same rule applies to \fBPUT /api/vpn/config\fR and \fBOVCP_OPENVPN_EXTRA\fR.
+\fB\-redirect\-gw\fR and
 \fB\-push\-internal\-dns\fR accept \fBon\fR/\fBoff\fR, \fBtrue\fR/\fBfalse\fR,
 or \fB1\fR/\fB0\fR, case\-insensitive \(en the same boolean vocabulary as
 \fBdns config set \-block\-internet\fR below. Rejects an invalid combination
-(bad CIDR, disallowed cipher, port out of range, an unrecognized boolean
+(bad CIDR, disallowed cipher or extra directive, port out of range, an unrecognized boolean
 value) without writing anything; an empty diff \(en no flags changed
 anything, including an \fB$EDITOR\fR session that saved unmodified \(en
 is reported but not written either. Takes effect on the next
