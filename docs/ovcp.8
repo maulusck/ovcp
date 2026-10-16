@@ -1423,26 +1423,28 @@ interfaces. See \fBDEPLOYMENT\fR's container section for the equivalent
 port\-mapping form of this same split.
 .PP
 \fBBaseline routing\fR: a client reaching the internet over the box's own
-default route \(en not through \fBupstream\fR (see \fBupstream\fR in
-\fBCOMMANDS\fR) \(en needs two host\-level settings ovcp neither sets nor
-requires at install. Own them yourself:
+default route needs IPv4 forwarding, which ovcp never sets, and outbound
+NAT. With \fBnft\fR(8) on \fBPATH\fR (the \fBupstream\fR feature enabled),
+ovcp NATs the tunnel itself: its own table masquerades traffic arriving
+on \fBovcp0\fR, installed on every \fBvpn start\fR and removed with the
+table. Without nft, NAT is yours too:
 .RS
 .nf
 sysctl \-w net.ipv4.ip_forward=1
-iptables \-t nat \-A POSTROUTING \-o eth0 \-j MASQUERADE
+iptables \-t nat \-A POSTROUTING \-o eth0 \-j MASQUERADE    # only without nft
 .fi
 .RE
 .B status
 and
 .B vpn start
-check both and print one
+check what ovcp doesn't provide and print one
 .B warning:
-line if either looks off; \fBserve\fR logs it at start and the web UI's
-dashboard shows it live \(en advisory, never fatal. The NAT half is
-best\-effort: it can confirm a rule via the standard iptables
+line if it looks off; \fBserve\fR logs it at start and the web UI's
+dashboard shows it live \(en advisory, never fatal. Without nft the NAT
+check reads the iptables
 .B nat
-table, but a host doing NAT through native nftables, firewalld, or a
-router upstream of this box is reported as unverifiable, not missing.
+table; NAT done elsewhere (firewalld, a router upstream) is reported as
+unverifiable, not missing.
 .SH SELINUX
 On SELinux systems the confined
 .BR openvpn (8)

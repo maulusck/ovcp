@@ -95,11 +95,12 @@ rules, as `upstream reconcile` does, and with per-client routing
 reattaches the management connection openvpn holds new clients for;
 `stop` and `reconnect` do neither.
 
-`RoutingPrereqsWarning` (`internal/controller`) checks two host settings
-ovcp does not manage: IPv4 forwarding and an outbound NAT rule for the
-default route. Both are required for clients without an upstream override
-to reach the internet; what is checked and reported: `man ovcp`,
-**NETWORKING**.
+Outbound NAT for the tunnel belongs to ovcp's own nft table (a catch-all
+`masquerade` for unmarked `ovcp0` traffic), so it is reconciled and purged
+with everything else. IPv4 forwarding stays the operator's.
+`RoutingPrereqsWarning` (`internal/controller`) reports what ovcp does not
+provide: forwarding, and NAT only when the upstream feature (nft) is off.
+What is checked and reported: `man ovcp`, **NETWORKING**.
 
 ## Privilege model
 

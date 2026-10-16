@@ -48,7 +48,6 @@ purge() { # clean slate on both machines, then verify it
 		sudo -n ip route flush table $((100+i)) 2>/dev/null
 	done
 	sudo -n ip link del ovcp0 2>/dev/null
-	while sudo -n iptables -t nat -D POSTROUTING -o $UPLINK -j MASQUERADE 2>/dev/null; do :; done
 	pgrep -f '^ssh -o BatchMode=yes -f -N -D' | xargs -r kill
 	C 'apk del -q ovcp 2>/dev/null; deluser ovcp 2>/dev/null; delgroup ovcp 2>/dev/null; rm -rf /var/lib/ovcp /run/ovcp /var/log/ovcp /root/vm3.ovpn /tmp/ovpn.log' >/dev/null 2>&1
 	boot=$(C cat /proc/sys/kernel/random/boot_id)
@@ -57,7 +56,7 @@ purge() { # clean slate on both machines, then verify it
 	t "purged: no package" "! dpkg -s ovcp"
 	t "purged: no account" "! id ovcp"
 	t "purged: no data, runtime, log or unit override" "! ls -d /var/lib/ovcp /run/ovcp /var/log/ovcp /etc/systemd/system/ovcp.service.d"
-	t "purged: no ovcp0, nft table or ovcp NAT rule" "! ip link show ovcp0 && ! sudo -n nft list table inet ovcp-upstreams && ! sudo -n iptables -t nat -S POSTROUTING | grep -q -- '-o $UPLINK -j MASQUERADE'"
+	t "purged: no ovcp0 or nft table" "! ip link show ovcp0 && ! sudo -n nft list table inet ovcp-upstreams"
 	t "purged: no rule or route in ovcp's band" "! ip rule | grep -qE '^200[0-6][0-9]:' && [ -z \"\$(for i in \$(seq 100 163); do ip route show table \$i; done)\" ]"
 	t "purged: client rebooted (new boot id)" "[ -n \"\$(C cat /proc/sys/kernel/random/boot_id)\" ] && [ \"\$(C cat /proc/sys/kernel/random/boot_id)\" != '$boot' ]"
 	t "purged: client has no openvpn, ovcp package, account or data" "! C 'pgrep openvpn || apk info -e ovcp || id ovcp || ls -d /var/lib/ovcp'"
@@ -109,10 +108,7 @@ t "tunnel interface ovcp0 10.8.0.1" "ip -br a show ovcp0 | grep -q 10.8.0.1/24"
 t "dnsmasq bound 10.8.0.1:53 (NET_BIND_SERVICE)" "ss -lun | grep -q '10.8.0.1:53 '"
 t "UI on loopback and tunnel" "ss -ltn | grep -q '127.0.0.1:8443' && ss -ltn | grep -q '10.8.0.1:8443'"
 t "sudo ovcp status reaches serve (CLI drop)" "O status | grep -q '^OpenVPN: running'"
-t "status warns: NAT missing" "O status 2>&1 | grep -q 'no outbound NAT'"
-t "serve logged the routing warning at start" "sudo -n journalctl --no-pager _PID=\$(pgrep -f '^/usr/bin/ovcp serve') | grep -q 'no outbound NAT'"
-sudo -n iptables -t nat -A POSTROUTING -o $UPLINK -j MASQUERADE
-t "status: NAT warning gone" "! O status 2>&1 | grep -q 'no outbound NAT'"
+t "ovcp NATs ovcp0 itself (nft), no routing warning" "sudo -n nft list table inet ovcp-upstreams | grep -q 'iifname \"ovcp0\" meta mark 0x00000000 masquerade' && ! O status 2>&1 | grep -q 'baseline routing'"
 t "IP server CN: no DOMAIN pushed" "! sudo -n grep -q DOMAIN /var/lib/ovcp/server.conf"
 
 echo "== client profile"

@@ -920,7 +920,7 @@ func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 				st.Telegram = &tg
 			}
 		}
-		st.RoutingWarn = controller.RoutingPrereqsWarning()
+		st.RoutingWarn = controller.RoutingPrereqsWarning(upstreamsEnabled())
 
 		output(st, printStatusText)
 	}
@@ -1068,10 +1068,16 @@ func cmdRecord(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
+// upstreamsEnabled: nft found and not opted out — upstream.Enabled for the CLI.
+func upstreamsEnabled() bool {
+	_, path, _ := controller.NftablesVersion()
+	return upstream.Enabled(path)
+}
+
 // upstreamsReady dies with a clear error if nftables isn't usable — same
 // "fails cleanly without it" treatment dns commands get without dnsmasq.
 func upstreamsReady() {
-	if _, path, _ := controller.NftablesVersion(); !upstream.Enabled(path) {
+	if !upstreamsEnabled() {
 		die(fmt.Errorf("upstreams disabled: nftables not found on PATH, or OVCP_UPSTREAMS_ENABLED=false"))
 	}
 }
@@ -1529,7 +1535,7 @@ func cmdVPN(fs *flag.FlagSet) func(ctx *cliContext) {
 		default:
 			runProcOp(ctx, "vpn", op, rest, "")
 			if op == "start" {
-				if w := controller.RoutingPrereqsWarning(); w != "" {
+				if w := controller.RoutingPrereqsWarning(upstreamsEnabled()); w != "" {
 					fmt.Fprintln(os.Stderr, "warning:", w)
 				}
 			}

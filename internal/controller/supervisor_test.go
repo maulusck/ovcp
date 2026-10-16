@@ -371,7 +371,7 @@ func TestNatConfiguredNoIptablesOnPath(t *testing.T) {
 func TestRoutingPrereqsWarningClean(t *testing.T) {
 	swapIPForwardPath(t, "1\n")
 	stubIptables(t, "-A POSTROUTING -o eth0 -j MASQUERADE")
-	if w := RoutingPrereqsWarning(); w != "" {
+	if w := RoutingPrereqsWarning(false); w != "" {
 		t.Fatalf("warning = %q, want none", w)
 	}
 }
@@ -379,9 +379,19 @@ func TestRoutingPrereqsWarningClean(t *testing.T) {
 func TestRoutingPrereqsWarningBothMissing(t *testing.T) {
 	swapIPForwardPath(t, "0\n")
 	stubIptables(t, "-P POSTROUTING ACCEPT")
-	w := RoutingPrereqsWarning()
+	w := RoutingPrereqsWarning(false)
 	if !strings.Contains(w, "IPv4 forwarding is off") || !strings.Contains(w, "no outbound NAT") {
 		t.Fatalf("warning = %q, want both forwarding and NAT flagged", w)
+	}
+}
+
+// TestRoutingPrereqsWarningOvcpNAT: with upstreams enabled ovcp NATs ovcp0
+// itself, so a host with no NAT rule of its own is not flagged.
+func TestRoutingPrereqsWarningOvcpNAT(t *testing.T) {
+	swapIPForwardPath(t, "1\n")
+	stubIptables(t, "-P POSTROUTING ACCEPT")
+	if w := RoutingPrereqsWarning(true); w != "" {
+		t.Fatalf("warning = %q, want none: ovcp's own table NATs the tunnel", w)
 	}
 }
 
@@ -391,7 +401,7 @@ func TestRoutingPrereqsWarningBothMissing(t *testing.T) {
 func TestRoutingPrereqsWarningNatUnchecked(t *testing.T) {
 	swapIPForwardPath(t, "0\n")
 	t.Setenv("PATH", t.TempDir())
-	w := RoutingPrereqsWarning()
+	w := RoutingPrereqsWarning(false)
 	if !strings.Contains(w, "IPv4 forwarding is off") || strings.Contains(w, "NAT") {
 		t.Fatalf("warning = %q, want forwarding flagged, NAT left unmentioned", w)
 	}

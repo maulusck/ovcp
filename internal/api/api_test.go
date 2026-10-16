@@ -404,7 +404,7 @@ func TestStatusVPNDown(t *testing.T) {
 	if out.Telegram.TokenSet {
 		t.Fatalf("telegram should read not-configured by default: %+v", out.Telegram)
 	}
-	if out.RoutingWarning == nil || *out.RoutingWarning != controller.RoutingPrereqsWarning() {
+	if out.RoutingWarning == nil || *out.RoutingWarning != controller.RoutingPrereqsWarning(false) {
 		t.Fatalf("routing_warning = %v, want the host's RoutingPrereqsWarning", out.RoutingWarning)
 	}
 }

@@ -81,17 +81,16 @@ func natConfigured() (found, checked bool) {
 	return strings.Contains(up, "MASQUERADE") || strings.Contains(up, "SNAT"), true
 }
 
-// RoutingPrereqsWarning flags baseline host routing ovcp needs to let VPN
-// clients reach the internet via the box's own default route, but never
-// manages itself (unlike the upstream feature's own reserved nftables
-// band) — outside ovcp's scope, so this is advisory, not a precondition.
+// RoutingPrereqsWarning flags host routing VPN clients need to reach the
+// internet that ovcp doesn't provide: forwarding always, NAT unless ovcpNAT
+// (upstreams enabled: ovcp's nft table masquerades ovcp0). Advisory only;
 // "" means clean, including "couldn't verify NAT" — see natConfigured.
-func RoutingPrereqsWarning() string {
+func RoutingPrereqsWarning(ovcpNAT bool) string {
 	var missing []string
 	if !ipForwardEnabled() {
 		missing = append(missing, "IPv4 forwarding is off (sysctl -w net.ipv4.ip_forward=1)")
 	}
-	if found, checked := natConfigured(); checked && !found {
+	if found, checked := natConfigured(); !ovcpNAT && checked && !found {
 		missing = append(missing, "no outbound NAT/masquerade rule found in iptables' nat table")
 	}
 	if len(missing) == 0 {
