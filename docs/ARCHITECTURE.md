@@ -57,15 +57,17 @@ A running `serve` uses two Unix sockets:
 
 ### CLI and web API
 
-Every mutation has one implementation, in `internal/api` or the package
-that owns the data (`store`, `pki`, `upstream`, `ovpnconf`), and that
-implementation enforces every rule: validation, ordering, what may change.
-The CLI command and the HTTP handler are adapters over it. They parse input,
-fill defaults, reach a running openvpn over their own transport (the
-control socket, or the management connection `serve` holds), render the
-result and name the audit actor. A rule enforced in only one adapter is a
-bug, because the other path skips it. Routes, roles and CLI twins:
-`man ovcp`, **WEB API**.
+Every action has one implementation, in `internal/api` (most in
+`results.go`) or the package that owns the data (`store`, `pki`,
+`upstream`, `ovpnconf`, `controller.RunOp` for worker lifecycles). It
+enforces every rule (validation, ordering, what may change), writes the
+audit line and returns the one result type both sides show. The CLI
+command and the HTTP handler are adapters: they parse input, fill
+defaults, pass in their transport to a running openvpn (the control
+socket, or the management connection `serve` holds; `api.StatusSource`,
+`api.Applier` and the kill/rewrite funcs are those seams), and print or
+encode the result. A rule or a shape kept in one adapter is a bug: the
+other path skips it. Routes, roles and CLI twins: `man ovcp`, **WEB API**.
 
 `dns block-internet` is a stored setting, not a control-socket operation,
 and works without `serve`. Socket defaults and flags: `man ovcp`,

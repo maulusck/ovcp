@@ -764,7 +764,9 @@ Prompts are read from the controlling terminal, never stdin, so stdin and
 stdout stay free for data (\fBbackup create\fR/\fBrestore\fR). No env var and
 no controlling terminal fails fast with \fB{"error": "..."}\fR instead of
 hanging on a prompt nobody can answer.
-Per\-command JSON shapes:
+Per\-command JSON shapes, the same objects the web API returns (see
+\fBWEB API\fR). A warning is printed to stderr in both modes and, where the
+object has a \fBwarning\fR field, carried there too.
 .TP
 .B init
 \fB{caCert, serverCert, tlsCrypt, serverConf, admin, adminUIURL}\fR. The
@@ -773,32 +775,39 @@ Per\-command JSON shapes:
 .TP
 .B certificate issue
 \fB{serial, cert, key}\fR, or with \fB\-export\fR \fB{serial, bundle}\fR
-(the \fI.ovpn\fR bundle instead of cert/key), as JSON strings.
-.TP
-.B certificate revoke
-\fB{serial, crlPath}\fR.
-.TP
-.B ca rotate, backup restore, user del,
-.B user passwd, user totp \-off, record edit|include|exclude, init \-skeleton,
-.B logs rotate, upstream add, upstream del, upstream set\-default,
-.B upstream assign
-\fB{message}\fR \(en a confirmation string, nothing structured beyond it.
-Any apply\-time warning (e.g. a down egress iface) prints to stderr in both
-output modes, same as \fB\-json\fR's \fB{error}\fR convention for failures
-\(en never silently dropped, never smuggled into the JSON payload either.
-.TP
-.B certificate renew
-\fB{cn, serial, notAfter}\fR \(en server\-only, nothing sensitive leaves
-the machine.
-.TP
-.B ca renew
-\fB{notAfter}\fR.
-.TP
-.B ca status
-\fB{cn, notAfter, status}\fR.
+(the \fI.ovpn\fR, key inline).
 .TP
 .B certificate list
-array of \fB{status, kind, cn, serial, expires}\fR.
+array of \fB{status, kind, cn, serial, issued, expires, includeDNS}\fR;
+\fBstatus\fR is \fBvalid\fR, \fBexpiring\fR, \fBexpired\fR or
+\fBrevoked\fR (text mode prints the last as \fBREVOKED\fR).
+.TP
+.B record list
+\fB{certs, custom}\fR: \fBcerts\fR the same rows plus \fBip\fR, set while
+that cert resolves (its CN connected, or the server's tun IP);
+\fBcustom\fR is \fIcustom.hosts\fR' content.
+.TP
+.B certificate revoke
+\fB{serial, cn, crlPath}\fR.
+.TP
+.B certificate renew
+\fB{cn, serial, notAfter}\fR.
+.TP
+.B ca renew, ca status
+\fB{notAfter}\fR; \fB{cn, notAfter, status}\fR.
+.TP
+.B vpn kill, record edit|include|exclude, logs rotate, user add|del|enable|disable|passwd,
+.B user totp \-off, ca rotate, backup restore, init \-skeleton
+\fB{message, changed}\fR: a confirmation, and \fBfalse\fR for a no\-op
+(e.g. an already included record).
+.TP
+.B user totp
+\fB{secret, url, qr}\fR: \fBqr\fR is \fBurl\fR as a PNG data URI (text
+mode draws it in the terminal instead).
+.TP
+.B user list
+array of \fB{Username, Role, Disabled, TOTP, CreatedAt}\fR \(en never the
+password hash or TOTP secret.
 .TP
 .B vpn config get, vpn config set
 The full persisted server config: \fB{Proto, Port, Subnet, Cipher, DNS,
@@ -809,102 +818,70 @@ MgmtSocket, StatusLog, StatusInterval, ServerCN\fR). Settings objects
 names, capitalized.
 .TP
 .B vpn config preview
-\fB{diff, changed}\fR: \fBdiff\fR an array of unified \fB+\fR/\fB\-\fR
-\fIserver.conf\fR lines (empty if \fBchanged\fR is \fBfalse\fR).
+\fB{diff, changed, warning}\fR: \fBdiff\fR the unified \fB+\fR/\fB\-\fR
+\fIserver.conf\fR lines.
 .TP
 .B dns config get, dns config set
-\fB{BlockInternet}\fR.
+\fB{BlockInternet, warning}\fR.
 .TP
-.B logs config get, logs config set
-\fB{Enabled, RetentionDays, KeepUncompressed}\fR.
-.TP
-.B logs status
-array of \fB{Name, Path, CurrentSize, Generations, Oldest, Newest}\fR, one
-row per log source (see \fBlogs\fR in \fBCOMMANDS\fR).
-.TP
-.B stats config get, stats config set
+.B logs config get|set, stats config get|set
+\fB{Enabled, RetentionDays, KeepUncompressed}\fR;
 \fB{SampleIntervalSec, RetentionHours}\fR.
 .TP
+.B logs status
+array of \fB{Name, Path, CurrentSize, Generations, Oldest, Newest}\fR.
+.TP
+.B vpn start|stop|restart|reconnect|status, dns start|stop|restart|status
+\fB{pid, changed, startedAt, serveStartedAt}\fR: \fBpid\fR 0 while
+stopped, \fBchanged\fR whether the op replaced the process.
+.TP
 .B status
-\fB{running, pid, uptime, ovcpUptime, error, clients, dnsRunning, dnsPid,
-dnsUptime, certsTotal, certsExpiring, telegram}\fR \(en \fBpid\fR,
-\fBuptime\fR, \fBovcpUptime\fR, \fBerror\fR, \fBdnsPid\fR, \fBdnsUptime\fR,
-and \fBtelegram\fR are omitted, not sent as empty/zero, when not applicable
-(e.g. \fBuptime\fR while stopped, \fBtelegram\fR if \fBserve\fR is
-unreachable).
+\fB{running, pid, startedAt, serveStartedAt, error, clients, dnsRunning,
+dnsPid, dnsStartedAt, certsTotal, certsExpiring, telegram, routingWarning,
+upstreamsEnabled, upstreamDefault, upstreamWarning}\fR. \fBerror\fR is set
+when \fBserve\fR or the client list can't be read; \fBtelegram\fR is left
+out when \fBserve\fR is unreachable. A zero \fBserveStartedAt\fR means
+unreachable.
 .TP
 .B stats
-\fB{samples, sessions}\fR (snapshot mode only \(en see \fB\-follow\fR
-above).
+\fB{samples, sessions}\fR, both for \fB\-cn\fR's client when given
+(snapshot mode only; see \fB\-follow\fR).
 .TP
-.B vpn kill
-\fB{message}\fR.
+.B debug on|off
+\fB{debug}\fR.
 .TP
-.B vpn (other ops), dns (excl. config), debug
-\fBvpn\fR/\fBdns\fR lifecycle ops (\fBstart|stop|restart|reconnect|status\fR):
-\fB{Pid, Changed, StartedAt, ServeStartedAt}\fR (untagged, like \fBvpn
-config\fR above) for every op including \fBstatus\fR \(en \fBdns config\fR
-is documented separately above. \fBdebug on\fR/\fBoff\fR: \fB{debug}\fR.
-.TP
-.B record list
-\fB{certs, custom}\fR: \fBcerts\fR an array of \fB{status, kind, cn,
-serial, expires, includeDNS, ip}\fR (same \fBstatus\fR values as
-\fBcertificate list\fR; \fBip\fR omitted unless that CN is resolving
-right now \(en connected, or the server's own always\-on address);
-\fBcustom\fR is \fIcustom.hosts\fR' raw content as one string.
-.TP
-.B upstream list, upstream reconcile
+.B upstream list|add|del|set\-default|assign|reconcile
 \fB{upstreams: [{id, up, iface, gateway, socks, table, description}],
-default, perCN}\fR \(en \fBiface\fR/\fBgateway\fR and \fBsocks\fR are
-mutually exclusive per entry; \fBsocks\fR' password, if any, is always
-\fB***\fR in this output, never the real value. \fBup\fR is a live
-\fInet.InterfaceByName\fR check for \-iface mode, always true for \-socks
-mode (no cheap liveness check without dialing the backend) \(en same value
-the text table's STATUS column reads; \fBreconcile\fR re\-applies first.
+default, perCN, message, warning}\fR \(en \fBiface\fR/\fBgateway\fR and
+\fBsocks\fR are mutually exclusive per entry; \fBsocks\fR' password, if
+any, is always \fB***\fR. \fBup\fR is a live interface check for \-iface
+mode, always true for \-socks mode (no cheap liveness check without
+dialing the backend). \fBmessage\fR confirms a change.
 .TP
 .B upstream status
 \fB{enabled, nftVersion, nftPath, default}\fR \(en version/path pair omitted
 if nftables isn't on \fBPATH\fR.
 .TP
-.B telegram config get, telegram config set, telegram start|stop|restart|status
-\fB{running, tokenSet, admin, chatLinked, changed}\fR \(en same shape from
-every one of these, whether or not \fB\-token\fR/\fB\-admin\fR were passed
-to \fBconfig set\fR. \fBchanged\fR is only meaningful for \fBstart\fR/
-\fBstop\fR/\fBrestart\fR (whether the op actually flipped \fBrunning\fR,
-same distinction \fBvpn\fR/\fBdns\fR's \fBChanged\fR makes above); always
-\fBfalse\fR from \fBconfig get\fR, \fBconfig set\fR, and \fBstatus\fR.
-.TP
-.B user add
-\fB{username, role}\fR.
-.TP
-.B user list
-array of \fB{Username, Role, Disabled, TOTP, CreatedAt}\fR \(en never the
-password hash or TOTP secret, in JSON any more than in text.
-.TP
-.B user disable|enable
-\fB{username, disabled}\fR.
-.TP
-.B user totp
-(enrollment) \fB{secret, url}\fR \(en the QR code itself is terminal art,
-skipped entirely under \fB\-json\fR.
+.B telegram config get|set, telegram start|stop|restart|status
+\fB{running, tokenSet, admin, chatLinked, changed}\fR: \fBchanged\fR
+whether a start/stop/restart flipped \fBrunning\fR.
 .TP
 .B audit
-array of the same entries as text.
+array of \fB{ID, TS, Actor, Action, Detail}\fR.
 .TP
 .B version
 \fB{version, platform, buildTarget, openvpnVersion, openvpnPath,
 dnsmasqVersion, dnsmasqPath, nftVersion, nftPath}\fR \(en each pair omitted
-if that binary isn't on \fBPATH\fR (see \fBversion\fR in \fBCOMMANDS\fR).
+if that binary isn't on \fBPATH\fR.
 .SH WEB API
 \fBserve\fR's HTTPS listener serves the web UI and a JSON API under
 \fI/api\fR. \fBPOST /api/login\fR \fB{Username, Password, TOTP}\fR sets the
 session cookie and an \fIovcp_csrf\fR cookie; every mutating request echoes
 the latter in an \fBX\-OVCP\-CSRF\fR header. Each route below calls the same
 implementation as its CLI twin, with the same inputs, checks and audit
-line. Settings and upstream routes return the same object as the twin's
-\fB\-json\fR output, plus a \fBwarning\fR string where the CLI prints
-\fBwarning:\fR to stderr; actions return \fB{"ok": true}\fR or their result.
-Errors are \fB{"error": "..."}\fR with a 4xx/5xx status. Roles nest: \fBoperator\fR may do what
+line, and returns the object that twin's \fB\-json\fR prints (see
+\fBMACHINE\-READABLE OUTPUT\fR). Errors are \fB{"error": "..."}\fR with a
+4xx/5xx status. Roles nest: \fBoperator\fR may do what
 \fBreadonly\fR may, \fBadmin\fR everything.
 .TS
 l l l.
@@ -919,7 +896,7 @@ GET /api/certs	readonly	certificate list
 GET /api/certs/download?serial=	readonly	\(em (one certificate's PEM)
 GET /api/logs/{openvpn,ovcp,dnsmasq}	readonly	\(em (last lines of that log)
 GET /api/{vpn,dns,logs,stats,telegram}/config	readonly	\fIX\fR config get
-GET /api/dns/custom	readonly	record list (custom part)
+GET /api/records	readonly	record list
 GET /api/upstreams	readonly	upstream list
 GET /api/debug	readonly	\(em (current level)
 POST /api/certs	operator	certificate issue
@@ -933,8 +910,8 @@ POST /api/vpn/config/preview	admin	vpn config preview
 POST /api/vpn/{start,stop,restart,reconnect}	admin	vpn \fIop\fR
 POST /api/dns/{start,stop,restart}	admin	dns \fIop\fR
 POST /api/telegram/{start,stop,restart}	admin	telegram \fIop\fR
-PUT /api/dns/custom	admin	record edit
-POST /api/dns/custom/preview	admin	\(em (custom.hosts diff)
+PUT /api/records/custom	admin	record edit
+POST /api/records/custom/preview	admin	\(em (custom.hosts diff)
 POST /api/certs/renew	admin	certificate renew (no \fB\-cn\fR)
 POST /api/upstreams	admin	upstream add
 DELETE /api/upstreams/{id}	admin	upstream del
