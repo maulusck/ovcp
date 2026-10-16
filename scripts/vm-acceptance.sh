@@ -231,6 +231,8 @@ t "restored dir owned by ovcp" "[ \"\$(sudo -n stat -c %U /tmp/ovcp-final-restor
 t "restore refuses a file argument" "! sudo -n env OVCP_BACKUP_PASSPHRASE=Test-backup-1 ovcp -data /tmp/ovcp-final-restore backup restore -force $T/final.bak < /dev/null"
 sudo -n rm -rf /tmp/ovcp-final-restore $T/final.bak
 t "certificate issue -out is gone" "! O certificate issue -cn x -out /tmp/x 2>&1 | grep -q serial"
+SSER=$(O -json certificate list | python3 -c 'import sys,json;print([c["serial"] for c in json.load(sys.stdin) if c["kind"]=="server"][0])')
+t "server cert not revocable" "[ -n '$SSER' ] && ! sudo -n env OVCP_CA_PASSPHRASE=$CA ovcp certificate revoke -serial $SSER"
 t "duplicate active CN refused (schema index)" "! sudo -n env OVCP_CA_PASSPHRASE=$CA ovcp certificate issue -cn vm3 >/dev/null 2>&1"
 t "logs rotate" "O logs rotate"
 t "user add operator" "sudo -n env OVCP_USER_PASSWORD=Ops-pass-12 ovcp user add -name ops -role operator"

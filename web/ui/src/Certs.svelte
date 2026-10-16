@@ -295,7 +295,7 @@
               <!-- plain td, same as Download beside it: this cell only ever holds
                    one button (or none, revoked) — .actions' flex/wrap exists for
                    Users' four-button row, not a fit here, don't force it. -->
-              <td>{#if !c.Revoked}
+              <td>{#if !c.Revoked && c.Kind !== 'server'}
                 <button class="ghost danger" onclick={() => revoke(c.Serial, c.CN)}
                   title="Revoke this certificate and regenerate the CRL">Revoke</button>
               {/if}</td>

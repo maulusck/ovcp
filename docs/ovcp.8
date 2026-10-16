@@ -231,11 +231,12 @@ as JSON instead (see \fBMACHINE\-READABLE OUTPUT\fR). Never includes the
 CA \(en see \fBca status\fR.
 .TP
 .B certificate revoke \fB\-serial\fR \fIHEX\fR
-Revoke a certificate and regenerate the CRL, then restart the CN's live
+Revoke a client certificate and regenerate the CRL, then restart the CN's live
 sessions (OpenVPN's RESTART, through a running \fBserve\fR) so their
 reconnect is refused by \fBcrl\-verify\fR, which is always configured.
 \fBissue \-renew\fR does the same for the outgoing cert: clients already
-on the new profile reconnect normally.
+on the new profile reconnect normally. The server cert is never revoked:
+\fBcertificate renew\fR replaces it.
 .TP
 .B certificate renew [\fB\-cn\fR \fINAME\fR] [\fB\-days\fR \fIN\fR]
 Server\-only \(en a server has exactly one cert, at the fixed paths

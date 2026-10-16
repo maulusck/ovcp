@@ -825,8 +825,8 @@ func TestRenewServer(t *testing.T) {
 
 // TestRenewRefusesNonexistentCert: renewing with nothing active to replace
 // must error, not silently issue a fresh cert — a guess-and-hope renewal
-// would otherwise create a phantom cert nobody asked for. Covers both
-// `certificate issue -renew` (client) and `certificate renew` (server).
+// would otherwise create a phantom cert nobody asked for. Covers
+// `certificate issue -renew`; the server cert can't be revoked away from `renew`.
 func TestRenewRefusesNonexistentCert(t *testing.T) {
 	env := baseEnv(t)
 	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
@@ -843,8 +843,7 @@ func TestRenewRefusesNonexistentCert(t *testing.T) {
 		}
 	}
 
-	// revoke the only server cert, then renewing must fail rather than
-	// silently issuing a fresh, disconnected one.
+	// the server cert is never revocable, so renew always has one to replace.
 	var serverSerial string
 	for _, c := range rows {
 		if c.Kind == "server" {
@@ -854,11 +853,11 @@ func TestRenewRefusesNonexistentCert(t *testing.T) {
 	if serverSerial == "" {
 		t.Fatal("server cert not found after init")
 	}
-	if r := run(t, env, "certificate", "revoke", "-serial", serverSerial); r.code != 0 {
-		t.Fatalf("revoke: %+v", r)
+	if r := run(t, env, "certificate", "revoke", "-serial", serverSerial); r.code == 0 {
+		t.Fatalf("revoking the server cert must be refused: %+v", r)
 	}
-	if r := run(t, env, "certificate", "renew"); r.code == 0 {
-		t.Fatalf("renewing with no active server cert should fail, got: %+v", r)
+	if r := run(t, env, "certificate", "renew"); r.code != 0 {
+		t.Fatalf("renew after a refused revoke: %+v", r)
 	}
 }
 

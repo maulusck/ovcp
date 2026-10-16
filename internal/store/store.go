@@ -273,10 +273,11 @@ func (s *Store) ListCerts() ([]Cert, error) {
 // Revoke marks a cert revoked and returns its CN; an unknown or already
 // revoked serial is an error (idempotence is the caller's policy call).
 func (s *Store) Revoke(serial string, at time.Time) (cn string, err error) {
-	err = s.db.QueryRow(`UPDATE certs SET revoked_at = ? WHERE serial = ? AND revoked_at IS NULL RETURNING cn`,
+	// clients only: the server cert is replaced by renew, never revoked out from under openvpn.
+	err = s.db.QueryRow(`UPDATE certs SET revoked_at = ? WHERE serial = ? AND kind = 'client' AND revoked_at IS NULL RETURNING cn`,
 		at.Unix(), serial).Scan(&cn)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("store: cert %s not found or already revoked", serial)
+		return "", fmt.Errorf("store: no active client cert %s", serial)
 	}
 	return cn, err
 }

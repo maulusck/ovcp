@@ -39,6 +39,13 @@ func TestCertLifecycle(t *testing.T) {
 	if len(all) != 1 {
 		t.Fatalf("list = %d", len(all))
 	}
+	srv := Cert{Serial: "srv1", CN: "vpn", Kind: "server", CertPEM: []byte("PEM"), IssuedAt: now, NotAfter: now.AddDate(1, 0, 0)}
+	if err := s.AddCert(srv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revoke("srv1", now); err == nil {
+		t.Fatal("the server cert must not be revocable")
+	}
 }
 
 // TestCertIncludeDNS: CertFrom defaults IncludeDNS true, and SetCertDNS
