@@ -387,30 +387,17 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		api.AuditClient(s, "cli", req, ic)
 
 		if *export {
-			output(exportOut{ic.SerialHex, string(bundle)}, func(o exportOut) {
+			output(api.ExportResult{Serial: ic.SerialHex, Bundle: string(bundle)}, func(o api.ExportResult) {
 				fmt.Print(o.Bundle)
 				fmt.Fprintln(os.Stderr, "serial:", o.Serial)
 			})
 			return
 		}
-		output(issueOut{ic.SerialHex, string(ic.CertPEM), string(ic.KeyPEM)}, func(o issueOut) {
-			fmt.Print(o.CertPEM, o.KeyPEM)
+		output(api.IssueResult{Serial: ic.SerialHex, Cert: string(ic.CertPEM), Key: string(ic.KeyPEM)}, func(o api.IssueResult) {
+			fmt.Print(o.Cert, o.Key)
 			fmt.Fprintln(os.Stderr, "serial:", o.Serial)
 		})
 	}
-}
-
-// issueOut / exportOut are `issue -json`'s shapes: the PEM pair, or with
-// -export the .ovpn bundle, inline — stdout is the only output.
-type issueOut struct {
-	Serial  string `json:"serial"`
-	CertPEM string `json:"cert"`
-	KeyPEM  string `json:"key"`
-}
-
-type exportOut struct {
-	Serial string `json:"serial"`
-	Bundle string `json:"bundle"`
 }
 
 // restartSessionsCLI is Server.restartSessions through a running serve.
@@ -429,20 +416,13 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
 		s := ctx.openStore()
 		defer s.Close()
-		cn, err := api.RevokeCert(s, ctx.p, *serial, pass)
-		die(err)
+		res := must(api.RevokeCert(s, ctx.p, "cli", *serial, pass))
 		refreshCertsHostsCLI(ctx.dataDir, s)
-		restartSessionsCLI(cn)
-		s.Audit("cli", "revoke", "serial="+*serial)
-		output(revokeOut{*serial, ctx.p.CRLPath()}, func(o revokeOut) {
+		restartSessionsCLI(res.CN)
+		output(res, func(o api.RevokeResult) {
 			fmt.Println("revoked; CRL regenerated:", o.CRLPath)
 		})
 	}
-}
-
-type revokeOut struct {
-	Serial  string `json:"serial"`
-	CRLPath string `json:"crlPath"`
 }
 
 // paint wraps s in ANSI color code (e.g. ansiGreen) unless colors are off;
@@ -533,32 +513,13 @@ var userSortGetters = map[string]func(store.User) string{
 	"2fa":      func(u store.User) string { return boolText(u.TOTPSecret != "") },
 }
 
-// certStatus renders c.Status() for the text/-json list output — same
-// classification store.Cert.Status() gives the API and the telegram bot,
-// just upper-cased for "revoked" to keep this command's existing look.
-func certStatus(c store.Cert) string {
-	st := c.Status()
-	if st == "revoked" {
-		return "REVOKED"
-	}
-	return st
-}
-
-// certOut is what `list -json` prints: the fields a script wants, none of
-// the raw PEM bytes store.Cert also carries.
-type certOut struct {
-	Status   string    `json:"status"`
-	Kind     string    `json:"kind"`
-	CN       string    `json:"cn"`
-	Serial   string    `json:"serial"`
-	NotAfter time.Time `json:"expires"`
-}
-
 // coloredStatus is every command's shared colored status cell. Padding is
 // printTable's job now, not this function's — it just colors the word.
 func coloredStatus(status string) string {
 	switch status {
-	case "REVOKED", "expired", "down", "disabled":
+	case "revoked":
+		return red("REVOKED")
+	case "expired", "down", "disabled":
 		return red(status)
 	case "expiring":
 		return yellow(status)
@@ -634,14 +595,14 @@ func cmdList(fs *flag.FlagSet) func(ctx *cliContext) {
 		die(err)
 		out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
 		die(err)
-		rows := []certOut{}
+		rows := []api.CertRow{}
 		for _, c := range out {
-			rows = append(rows, certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter})
+			rows = append(rows, api.NewCertRow(c))
 		}
-		output(rows, func(rows []certOut) {
+		output(rows, func(rows []api.CertRow) {
 			trows := make([][]string, len(rows))
 			for i, c := range rows {
-				trows[i] = []string{coloredStatus(c.Status), c.Kind, c.CN, c.NotAfter.Format("2006-01-02"), c.Serial}
+				trows[i] = []string{coloredStatus(c.Status), c.Kind, c.CN, c.Expires.Format("2006-01-02"), c.Serial}
 			}
 			printTable([]string{"STATUS", "KIND", "CN", "EXPIRES", "SERIAL"}, trows)
 		})
@@ -696,7 +657,7 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 		} else {
 			ic, err := ctx.p.Issue(pki.KindServer, *serverCN, *days, pass)
 			die(err)
-			die(writeServerCert(pp, s, ic))
+			die(api.WriteServerCert(s, pp.ServerCert, pp.ServerKey, ic))
 			s.Audit("system", "issue", "cn="+*serverCN+" kind=server (init)")
 			progress("[2/5] server cert issued: %s\n", pp.ServerCert)
 		}
@@ -932,28 +893,9 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 		out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
 		die(err)
 		customData, _ := os.ReadFile(pp.CustomHosts)
-		// liveIP: CN -> resolvable IP right now; only the CN's active cert holds it
-		// (the CRL refuses a revoked cert, and one client cert is active per CN).
-		liveIP := map[string]string{}
-		if live, err := controller.Clients(ctrlSock()); err == nil {
-			for _, cl := range live {
-				if cl.VirtualAddress != "" {
-					liveIP[cl.CN] = cl.VirtualAddress
-				}
-			}
-		}
-		if ip, err := cfg.ServerTunIP(); err == nil {
-			liveIP[adminCertCN(ctx.dataDir)] = ip.String()
-		}
-		rows := []recordOut{}
-		for _, c := range out {
-			ip := ""
-			if c.RevokedAt == nil {
-				ip = liveIP[c.CN]
-			}
-			rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS, ip})
-		}
-		output(recordListOut{rows, string(customData)}, func(o recordListOut) {
+		live, _ := controller.Clients(ctrlSock()) // serve down: nothing resolves live
+		ip, _ := cfg.ServerTunIP()
+		output(api.Records(out, live, adminCertCN(ctx.dataDir), ip, string(customData)), func(o api.RecordList) {
 			fmt.Println("Certificate records:")
 			trows := make([][]string, len(o.Certs))
 			for i, r := range o.Certs {
@@ -968,7 +910,7 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 				if r.IncludeDNS {
 					dns = green(text)
 				}
-				trows[i] = []string{coloredStatus(r.Status), r.Kind, r.CN, r.NotAfter.Format("2006-01-02"), dns, r.Serial}
+				trows[i] = []string{coloredStatus(r.Status), r.Kind, r.CN, r.Expires.Format("2006-01-02"), dns, r.Serial}
 			}
 			printTable([]string{"STATUS", "KIND", "CN", "EXPIRES", "DNS", "SERIAL"}, trows)
 			fmt.Println("Custom records:")
@@ -1296,18 +1238,6 @@ func cmdUpstream(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// recordOut is certOut plus the fields `list -json` needs beyond it.
-type recordOut struct {
-	certOut
-	IncludeDNS bool   `json:"includeDNS"`
-	IP         string `json:"ip,omitempty"`
-}
-
-type recordListOut struct {
-	Certs  []recordOut `json:"certs"`
-	Custom string      `json:"custom"`
-}
-
 // activeCertByCN finds cn's active client cert. Client-only: the server's
 // DNS line is unconditional, so its row acts not-found here too.
 func activeCertByCN(certs []store.Cert, cn string) (store.Cert, bool) {
@@ -1501,24 +1431,14 @@ func cmdRenew(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		// renew replaces the current server cert; nothing active would
-		// otherwise silently fall through to a plain issue instead of erroring.
-		if err := s.RequireActiveCert("", "server"); err != nil {
-			die(fmt.Errorf("%w — run `ovcp init` first", err))
-		}
-		targetCN := *cn
-		if targetCN == "" {
-			targetCN = adminCertCN(ctx.dataDir)
-		}
-		if targetCN == "" {
-			die(fmt.Errorf("can't auto-detect the current server CN (e.g. right after a backup restore) — pass -cn"))
-		}
+		pp := dataPaths(ctx.dataDir)
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := ctx.p.Issue(pki.KindServer, targetCN, *days, pass)
+		res, err := api.RenewServer(s, ctx.p, pp.ServerCert, pp.ServerKey, "cli", cmp.Or(*cn, adminCertCN(ctx.dataDir)), *days, pass)
+		if errors.Is(err, store.ErrNoActiveCert) {
+			err = fmt.Errorf("%w — run `ovcp init` first", err)
+		}
 		die(err)
-		die(writeServerCert(dataPaths(ctx.dataDir), s, ic))
-		s.Audit("cli", "renew", fmt.Sprintf("kind=server cn=%s serial=%s", targetCN, ic.SerialHex))
-		output(renewOut{CN: targetCN, Serial: ic.SerialHex, NotAfter: ic.NotAfter}, func(o renewOut) {
+		output(res, func(o api.RenewResult) {
 			fmt.Printf("server cert renewed: %s (cn %s, expires %s)\n", o.Serial, o.CN, o.NotAfter.Format("2006-01-02"))
 			fmt.Println("run `ovcp vpn restart` to apply")
 			if *cn != "" {
@@ -1526,13 +1446,6 @@ func cmdRenew(fs *flag.FlagSet) func(ctx *cliContext) {
 			}
 		})
 	}
-}
-
-// renewOut is `certificate renew -json`'s shape.
-type renewOut struct {
-	CN       string    `json:"cn"`
-	Serial   string    `json:"serial"`
-	NotAfter time.Time `json:"notAfter"`
 }
 
 // linesFlag is a repeatable flag: each use adds one line, taken verbatim.

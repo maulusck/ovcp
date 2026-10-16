@@ -603,13 +603,6 @@ func ensureSkeleton(dataDir string) error {
 	return nil
 }
 
-// writeServerCert persists a freshly issued server cert+key; shared by init
-// and `certificate renew` (CLI), takes effect on next `vpn restart`.
-// Delegates to api.Server.WriteServerCert via a bare, HTTP-less instance.
-func writeServerCert(pp paths, s *store.Store, ic *pki.IssuedCert) error {
-	return (&api.Server{ServerCert: pp.ServerCert, ServerKey: pp.ServerKey, Store: s}).WriteServerCert(ic)
-}
-
 // fillPaths sets the server-owned path fields on a config.
 func fillPaths(cfg *ovpnconf.Config, dataDir, sock string) {
 	pp := dataPaths(dataDir)

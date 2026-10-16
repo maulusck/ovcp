@@ -1,7 +1,7 @@
 <script>
   import { tick } from 'svelte'
   import {
-    api, apiBlob, downloadBlob, copyToClipboard, sortRows, matchesQuery,
+    api, downloadBlob, copyToClipboard, sortRows, matchesQuery,
     toggleSort, sortMark, toggleSearch, autofocus, autosize, flash, fmtDate,
   } from './api.js'
   import { vpn } from './status.svelte.js'
@@ -25,23 +25,23 @@
   let search = $state({ open: false, query: '' })
   let sort = $state({ key: null, desc: false })
   const SORT_GETTERS = {
-    cn: (c) => c.CN, kind: (c) => c.Kind, expiry: (c) => new Date(c.NotAfter).getTime(),
-    status: (c) => c.Status, serial: (c) => c.Serial, dns: (c) => c.IncludeDNS,
+    cn: (c) => c.cn, kind: (c) => c.kind, expiry: (c) => new Date(c.expires).getTime(),
+    status: (c) => c.status, serial: (c) => c.serial, dns: (c) => c.includeDNS,
   }
 
   const filtered = $derived.by(() => {
     let out = certs
-    if (statusFilter === 'active') out = out.filter((c) => !c.Revoked)
-    else if (statusFilter === 'revoked') out = out.filter((c) => c.Revoked)
-    if (kindFilter !== 'all') out = out.filter((c) => c.Kind === kindFilter)
-    out = out.filter((c) => matchesQuery(c, search.query, (x) => x.CN, (x) => x.Serial))
+    if (statusFilter === 'active') out = out.filter((c) => c.status !== 'revoked')
+    else if (statusFilter === 'revoked') out = out.filter((c) => c.status === 'revoked')
+    if (kindFilter !== 'all') out = out.filter((c) => c.kind === kindFilter)
+    out = out.filter((c) => matchesQuery(c, search.query, (x) => x.cn, (x) => x.serial))
     return sort.key ? sortRows(out, SORT_GETTERS[sort.key], sort.desc) : out
   })
 
   // The one signal for "this submit renews instead of issuing": does the
   // typed/pre-filled CN already match a live client cert — no separate flag,
   // same rule AddCert enforces (one active row per CN+kind), so a revoked-only CN reissues, an active one renews.
-  const hasActiveClient = (cn) => certs.some((c) => c.CN === cn && c.Kind === 'client' && !c.Revoked)
+  const hasActiveClient = (cn) => certs.some((c) => c.cn === cn && c.kind === 'client' && c.status !== 'revoked')
   const willRenew = $derived(hasActiveClient(form.cn))
 
   async function refresh() {
@@ -73,10 +73,10 @@
     err = ''; ok = ''
     const renewing = willRenew
     try {
-      const { blob } = await apiBlob('POST', '/certs/export', { CN: form.cn, Remote: form.remote,
+      const { bundle } = await api('POST', '/certs/export', { CN: form.cn, Remote: form.remote,
         Passphrase: form.passphrase, Days: +form.days, KeyPassphrase: form.keypass,
         SplitTunnel: form.splitTunnel, Extra: form.customOpts, Renew: renewing })
-      downloadBlob(blob, form.cn + '.ovpn')
+      downloadBlob(new Blob([bundle], { type: 'application/x-openvpn-profile' }), form.cn + '.ovpn')
       flash(v => ok = v, `${renewing ? 'Renewed' : 'Issued'} ${form.cn} and downloaded the profile.`)
       form.cn = ''; form.passphrase = ''; form.keypass = ''
       refresh()
@@ -125,13 +125,13 @@
     } catch (x) { flash(v => err = v, x.error) }
   }
 
-  // c.Status is the API's classification (store.Cert.Status(), the one
+  // c.status is the API's classification (store.Cert.Status(), the one
   // place the expiry threshold lives) — this only turns it into display text.
   function status(c) {
-    if (c.Status === 'revoked') return { text: 'revoked', cls: 'rv' }
-    if (c.Status === 'expired') return { text: 'expired', cls: 'rv' }
-    if (c.Status === 'expiring') {
-      const days = Math.ceil((new Date(c.NotAfter) - Date.now()) / 86400000)
+    if (c.status === 'revoked') return { text: 'revoked', cls: 'rv' }
+    if (c.status === 'expired') return { text: 'expired', cls: 'rv' }
+    if (c.status === 'expiring') {
+      const days = Math.ceil((new Date(c.expires) - Date.now()) / 86400000)
       return { text: `expires in ${days}d`, cls: 'soon' }
     }
     return { text: 'valid', cls: '' }
@@ -242,38 +242,38 @@
       </tr></thead>
       <tbody>
         {#each filtered as c}
-          <tr data-cn={c.CN}>
+          <tr data-cn={c.cn}>
             <td>
-              {#if canOperate && c.Kind === 'client' && (!c.Revoked || !hasActiveClient(c.CN))}
-                <button type="button" class="cn-link" onclick={() => prefillRenew(c.CN)}
-                  title={c.Revoked ? 'Reissue: previous certificate was revoked, this issues a new one'
-                                    : 'Renew: revokes the current cert, issues a fresh one'}>{c.CN}</button>
-              {:else if !c.Revoked && canOperate && isAdmin && c.Kind === 'server'}
-                <button type="button" class="cn-link" onclick={() => renewServer(c.CN)}
-                  title="Renew: revokes the current cert, issues a fresh one (needs a restart to apply)">{c.CN}</button>
+              {#if canOperate && c.kind === 'client' && (c.status !== 'revoked' || !hasActiveClient(c.cn))}
+                <button type="button" class="cn-link" onclick={() => prefillRenew(c.cn)}
+                  title={c.status === 'revoked' ? 'Reissue: previous certificate was revoked, this issues a new one'
+                                    : 'Renew: revokes the current cert, issues a fresh one'}>{c.cn}</button>
+              {:else if c.status !== 'revoked' && canOperate && isAdmin && c.kind === 'server'}
+                <button type="button" class="cn-link" onclick={() => renewServer(c.cn)}
+                  title="Renew: revokes the current cert, issues a fresh one (needs a restart to apply)">{c.cn}</button>
               {:else}
-                {c.CN}
+                {c.cn}
               {/if}
             </td>
-            <td>{c.Kind}</td>
+            <td>{c.kind}</td>
             <td class={status(c).cls}>{status(c).text}</td>
-            <td>{fmtDate(new Date(c.NotAfter))}</td>
+            <td>{fmtDate(new Date(c.expires))}</td>
             <td>
-              <button class="mono serial" title={c.Serial + ' — click to copy'}
-                onclick={() => copySerial(c.Serial)}>
-                {copied === c.Serial ? 'copied' : c.Serial.slice(0, 12) + '…'}
+              <button class="mono serial" title={c.serial + ' — click to copy'}
+                onclick={() => copySerial(c.serial)}>
+                {copied === c.serial ? 'copied' : c.serial.slice(0, 12) + '…'}
               </button>
             </td>
-            <td><a class="dl" href={'/api/certs/download?serial=' + c.Serial}
-              download={c.CN + '.crt'}>Download</a></td>
+            <td><a class="dl" href={'/api/certs/download?serial=' + c.serial}
+              download={c.cn + '.crt'}>Download</a></td>
             <td class="dns-col">
-              {#if !c.Revoked && c.Kind !== 'server'}
+              {#if c.status !== 'revoked' && c.kind !== 'server'}
                 <span class="dns-cell">
-                  <input type="checkbox" checked={c.IncludeDNS} disabled={!canOperate}
-                    onchange={() => toggleDNS(c.Serial, !c.IncludeDNS)} />
-                  {#if c.IncludeDNS && liveIP(c.CN)}
-                    <button type="button" class="dns-live" onclick={() => copyIP(liveIP(c.CN))}
-                      title={(copied === liveIP(c.CN) ? 'copied: ' : 'resolving at ') + liveIP(c.CN)}>
+                  <input type="checkbox" checked={c.includeDNS} disabled={!canOperate}
+                    onchange={() => toggleDNS(c.serial, !c.includeDNS)} />
+                  {#if c.includeDNS && liveIP(c.cn)}
+                    <button type="button" class="dns-live" onclick={() => copyIP(liveIP(c.cn))}
+                      title={(copied === liveIP(c.cn) ? 'copied: ' : 'resolving at ') + liveIP(c.cn)}>
                       <span class="status-dot ok"></span>
                     </button>
                   {/if}
@@ -282,9 +282,9 @@
             </td>
             {#if upstreamsAvailable}
               <td class="up-col">
-                {#if !c.Revoked && c.Kind !== 'server'}
-                  <select value={upCfg?.perCN?.[c.CN] || ''} disabled={!isAdmin}
-                    onchange={(e) => setUpstream(c.CN, e.target.value)}>
+                {#if c.status !== 'revoked' && c.kind !== 'server'}
+                  <select value={upCfg?.perCN?.[c.cn] || ''} disabled={!isAdmin}
+                    onchange={(e) => setUpstream(c.cn, e.target.value)}>
                     <option value="">default{upCfg?.default ? ` (${upCfg.default})` : ''}</option>
                     {#each upCfg?.upstreams || [] as u}<option value={u.id}>{u.id}</option>{/each}
                   </select>
@@ -295,8 +295,8 @@
               <!-- plain td, same as Download beside it: this cell only ever holds
                    one button (or none, revoked) — .actions' flex/wrap exists for
                    Users' four-button row, not a fit here, don't force it. -->
-              <td>{#if !c.Revoked && c.Kind !== 'server'}
-                <button class="ghost danger" onclick={() => revoke(c.Serial, c.CN)}
+              <td>{#if c.status !== 'revoked' && c.kind !== 'server'}
+                <button class="ghost danger" onclick={() => revoke(c.serial, c.cn)}
                   title="Revoke this certificate and regenerate the CRL">Revoke</button>
               {/if}</td>
             {/if}

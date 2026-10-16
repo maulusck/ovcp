@@ -41,7 +41,7 @@
       const [d, certs] = await Promise.all([api('GET', '/stats'), api('GET', '/certs')])
       globalSamples = d.samples || []
       sessions = d.sessions || []
-      revokedCNs = new Set(certs.filter(c => c.Revoked).map(c => c.CN))
+      revokedCNs = new Set(certs.filter(c => c.status === 'revoked').map(c => c.cn))
       err = ''
     } catch (x) { flash(v => err = v, x.error) }
   }

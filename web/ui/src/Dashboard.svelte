@@ -10,7 +10,7 @@
   // (status.svelte.js), which are already polled app-wide.
   let certSummary = $state({ total: 0, warn: 0 })
   api('GET', '/certs').then((certs) => {
-    certSummary = { total: certs.length, warn: certs.filter((c) => c.Status === 'expiring' || c.Status === 'expired').length }
+    certSummary = { total: certs.length, warn: certs.filter((c) => c.status === 'expiring' || c.status === 'expired').length }
   }).catch(() => {})
 
   let dnsWarning = $state('')

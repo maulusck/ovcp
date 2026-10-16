@@ -72,7 +72,7 @@
   async function loadDNS() {
     try {
       blockInternet = (await api('GET', '/dns/config')).BlockInternet
-      dnsRecords = (await api('GET', '/dns/custom')).content
+      dnsRecords = (await api('GET', '/records')).custom
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }
   $effect(() => { if (dnsAvailable) loadDNS() })
@@ -85,7 +85,7 @@
 
   async function previewDNS() {
     dnsErr = ''; dnsOk = ''
-    try { dnsPreview = await api('POST', '/dns/custom/preview', { Content: dnsRecords }) }
+    try { dnsPreview = await api('POST', '/records/custom/preview', { Content: dnsRecords }) }
     catch (x) { flash(v => dnsErr = v, x.error) }
   }
 
@@ -93,7 +93,7 @@
     e.preventDefault()
     dnsErr = ''; dnsOk = ''; dnsPreview = null
     try {
-      await api('PUT', '/dns/custom', { Content: dnsRecords })
+      await api('PUT', '/records/custom', { Content: dnsRecords })
       flash(v => dnsOk = v, 'Saved. Use Restart to apply configuration changes.')
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }

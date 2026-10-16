@@ -155,16 +155,9 @@ func (s *Server) handleCertList(w http.ResponseWriter, r *http.Request, u *store
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	type row struct {
-		Serial, CN, Kind, Status string
-		IssuedAt                 time.Time
-		NotAfter                 time.Time
-		Revoked                  bool
-		IncludeDNS               bool
-	}
-	out := []row{}
+	out := []CertRow{}
 	for _, c := range certs {
-		out = append(out, row{c.Serial, c.CN, c.Kind, c.Status(), c.IssuedAt, c.NotAfter, c.RevokedAt != nil, c.IncludeDNS})
+		out = append(out, NewCertRow(c))
 	}
 	jsonOK(w, out)
 }
@@ -178,15 +171,45 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 		jsonErr(w, 400, "cn and passphrase required")
 		return
 	}
-	req := ClientRequest{CN: in.CN, Days: defaultDays(in.Days), Passphrase: []byte(in.Passphrase), KeyPass: in.KeyPassphrase}
+	req := ClientRequest{CN: in.CN, Days: defaultDays(in.Days, 365), Passphrase: []byte(in.Passphrase), KeyPass: in.KeyPassphrase}
 	ic, err := IssueClient(s.Store, s.PKI, req)
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
 	AuditClient(s.Store, u.Username, req, ic)
-	jsonOK(w, map[string]string{"serial": ic.SerialHex,
-		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
+	jsonOK(w, IssueResult{ic.SerialHex, string(ic.CertPEM), string(ic.KeyPEM)})
+}
+
+// IssueResult is a client issue's result: the key appears here once, never stored.
+type IssueResult struct {
+	Serial string `json:"serial"`
+	Cert   string `json:"cert"`
+	Key    string `json:"key"`
+}
+
+// ExportResult is a client export's result: the .ovpn, key inline.
+type ExportResult struct {
+	Serial string `json:"serial"`
+	Bundle string `json:"bundle"`
+}
+
+// CertRow is one certificate as certificate list, record list (with IP) and
+// GET /api/certs show it.
+type CertRow struct {
+	Status     string    `json:"status"`
+	Kind       string    `json:"kind"`
+	CN         string    `json:"cn"`
+	Serial     string    `json:"serial"`
+	Issued     time.Time `json:"issued"`
+	Expires    time.Time `json:"expires"`
+	IncludeDNS bool      `json:"includeDNS"`
+	IP         string    `json:"ip,omitempty"` // record list: where it resolves right now
+}
+
+// NewCertRow is c's CertRow, IP unset.
+func NewCertRow(c store.Cert) CertRow {
+	return CertRow{c.Status(), c.Kind, c.CN, c.Serial, c.IssuedAt, c.NotAfter, c.IncludeDNS, ""}
 }
 
 // ClientRequest is one client issue or renewal, CLI or API alike.
@@ -273,10 +296,10 @@ func ExportClient(st *store.Store, p *pki.PKI, tlsCryptPath string, r ClientRequ
 	return ic, bundle, err
 }
 
-// defaultDays is the API's reading of an omitted Days: a year.
-func defaultDays(d int) int {
+// defaultDays is the API's reading of an omitted Days: the CLI flag's default.
+func defaultDays(d, def int) int {
 	if d == 0 {
-		return 365
+		return def
 	}
 	return d
 }
@@ -312,68 +335,89 @@ func (s *Server) restartSessions(cn string) {
 	}
 }
 
+// RevokeResult is a revocation's result.
+type RevokeResult struct {
+	Serial  string `json:"serial"`
+	CN      string `json:"cn"`
+	CRLPath string `json:"crlPath"`
+}
+
 // RevokeCert is every revoke, CLI or API: the passphrase is checked before
-// the store changes, so a revoked row always reaches the CRL.
-func RevokeCert(st *store.Store, p *pki.PKI, serial string, passphrase []byte) (cn string, err error) {
+// the store changes, so a revoked row always reaches the CRL. Restarting the
+// CN's sessions is the caller's, over its own transport.
+func RevokeCert(st *store.Store, p *pki.PKI, actor, serial string, passphrase []byte) (RevokeResult, error) {
 	if err := p.CheckPassphrase(passphrase); err != nil {
-		return "", err
+		return RevokeResult{}, err
 	}
-	if cn, err = st.Revoke(serial, time.Now()); err != nil {
-		return "", err
+	cn, err := st.Revoke(serial, time.Now())
+	if err != nil {
+		return RevokeResult{}, err
 	}
-	return cn, RegenCRL(st, p, passphrase)
+	if err := RegenCRL(st, p, passphrase); err != nil {
+		return RevokeResult{}, err
+	}
+	st.Audit(actor, "revoke", "serial="+serial)
+	return RevokeResult{serial, cn, p.CRLPath()}, nil
 }
 
 // WriteServerCert persists a freshly issued server cert+key to the paths
-// `serve` reads and records it in the store — shared by handleRenew below
-// and the CLI (init, certificate renew) via cmd/ovcp's writeServerCert.
-func (s *Server) WriteServerCert(ic *pki.IssuedCert) error {
-	if err := pki.WriteFileAtomic(s.ServerCert, ic.CertPEM, 0o644); err != nil {
+// `serve` reads and records it in the store: init and RenewServer.
+func WriteServerCert(st *store.Store, certPath, keyPath string, ic *pki.IssuedCert) error {
+	if err := pki.WriteFileAtomic(certPath, ic.CertPEM, 0o644); err != nil {
 		return err
 	}
-	if err := pki.WriteFileAtomic(s.ServerKey, ic.KeyPEM, 0o600); err != nil {
+	if err := pki.WriteFileAtomic(keyPath, ic.KeyPEM, 0o600); err != nil {
 		return err
 	}
-	return s.Store.ReplaceCert(store.CertFrom(ic, "server"))
+	return st.ReplaceCert(store.CertFrom(ic, "server"))
 }
 
-// handleRenew reissues the server cert in place (same CN, new serial) at the
-// paths `serve` reads. Admin-only; needs a `vpn restart` to take effect.
-// Client renewal is a separate path — handleExport's Renew flag.
+// RenewResult is a server-cert renewal's result.
+type RenewResult struct {
+	CN       string    `json:"cn"`
+	Serial   string    `json:"serial"`
+	NotAfter time.Time `json:"notAfter"`
+}
+
+// ErrNoServerCN: nothing names the server (e.g. right after a backup restore).
+var ErrNoServerCN = errors.New("no server CN known (e.g. right after a backup restore): name one")
+
+// RenewServer reissues the active server cert as cn (the current CN, or a
+// rename) at the paths serve reads; it applies on the next vpn restart.
+func RenewServer(st *store.Store, p *pki.PKI, certPath, keyPath, actor, cn string, days int, passphrase []byte) (RenewResult, error) {
+	if err := st.RequireActiveCert("", "server"); err != nil {
+		return RenewResult{}, err
+	}
+	if cn == "" {
+		return RenewResult{}, ErrNoServerCN
+	}
+	ic, err := p.Issue(pki.KindServer, cn, days, passphrase)
+	if err != nil {
+		return RenewResult{}, err
+	}
+	if err := WriteServerCert(st, certPath, keyPath, ic); err != nil {
+		return RenewResult{}, err
+	}
+	st.Audit(actor, "renew", "kind=server cn="+cn+" serial="+ic.SerialHex)
+	return RenewResult{cn, ic.SerialHex, ic.NotAfter}, nil
+}
+
+// handleRenew reissues the server cert in place, same CN (a rename is CLI-only).
 func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct {
 		Passphrase string
 		Days       int
 	}
-	if !decode(r, &in) || in.Passphrase == "" {
-		jsonErr(w, 400, "passphrase required")
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
 		return
 	}
-	if in.Days <= 0 {
-		in.Days = 825
-	}
-	remote := s.DefaultRemote()
-	if remote == "" {
-		jsonErr(w, 400, "no server CN configured")
-		return
-	}
-	// fail fast if there's nothing active to replace; pkiErr maps
-	// ErrNoActiveCert to 400, same as export's Renew path.
-	if err := s.Store.RequireActiveCert("", "server"); err != nil {
-		s.pkiErr(w, err)
-		return
-	}
-	ic, err := s.PKI.Issue(pki.KindServer, remote, in.Days, []byte(in.Passphrase))
+	res, err := RenewServer(s.Store, s.PKI, s.ServerCert, s.ServerKey, u.Username, s.DefaultRemote(), defaultDays(in.Days, 825), []byte(in.Passphrase))
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
-	if err := s.WriteServerCert(ic); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "renew", "kind=server cn="+remote+" serial="+ic.SerialHex)
-	jsonOK(w, map[string]string{"serial": ic.SerialHex, "notAfter": ic.NotAfter.Format(time.RFC3339)})
+	jsonOK(w, res)
 }
 
 // handleBackup streams an encrypted backup download; admin-only. No restore endpoint here — `ovcp backup restore` is CLI-only, offline.
@@ -399,14 +443,13 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, u *store.U
 		jsonErr(w, 400, "serial and passphrase required")
 		return
 	}
-	cn, err := RevokeCert(s.Store, s.PKI, in.Serial, []byte(in.Passphrase))
+	res, err := RevokeCert(s.Store, s.PKI, u.Username, in.Serial, []byte(in.Passphrase))
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
-	s.restartSessions(cn)
-	s.Store.Audit(u.Username, "revoke", "serial="+in.Serial)
-	jsonOK(w, map[string]bool{"ok": true})
+	s.restartSessions(res.CN)
+	jsonOK(w, res)
 }
 
 // handleExport issues a fresh client cert and streams an inline .ovpn.
@@ -423,7 +466,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 	if in.Remote == "" {
 		in.Remote = s.DefaultRemote()
 	}
-	req := ClientRequest{CN: in.CN, Days: defaultDays(in.Days), Passphrase: []byte(in.Passphrase),
+	req := ClientRequest{CN: in.CN, Days: defaultDays(in.Days, 365), Passphrase: []byte(in.Passphrase),
 		KeyPass: in.KeyPassphrase, Renew: in.Renew}
 	ic, bundle, err := ExportClient(s.Store, s.PKI, s.TLSCrypt, req,
 		ExportOpts{Remote: in.Remote, ServerCN: s.DefaultRemote(), Extra: in.Extra, SplitTunnel: in.SplitTunnel})
@@ -435,10 +478,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 		s.restartSessions(in.CN)
 	}
 	AuditClient(s.Store, u.Username, req, ic)
-	w.Header().Set("Content-Type", "application/x-openvpn-profile")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="%s.ovpn"`, in.CN))
-	w.Write(bundle)
+	jsonOK(w, ExportResult{ic.SerialHex, string(bundle)})
 }
 
 func (s *Server) handleVPNConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -600,18 +640,6 @@ func (s *Server) handleCertDNS(w http.ResponseWriter, r *http.Request, u *store.
 		return
 	}
 	act(w)(SetCertDNS(s.Store, u.Username, r.PathValue("serial"), in.IncludeDNS))
-}
-
-// handleCustomHostsGet/Put/Preview manage custom.hosts — the free-form,
-// user-authored hosts file, edited as one blob (same "whole-file, no
-// per-line CRUD" shape custom-opts already uses for server.conf's Extra).
-func (s *Server) handleCustomHostsGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	data, err := os.ReadFile(s.CustomHostsPath)
-	if err != nil && !os.IsNotExist(err) {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	jsonOK(w, map[string]string{"content": string(data)})
 }
 
 func (s *Server) handleCustomHostsPut(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -880,7 +908,7 @@ func (s *Server) pkiErr(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, store.ErrDuplicateCN) || errors.Is(err, store.ErrNoActiveCert) ||
-		errors.Is(err, ovpnconf.ErrNoRedirect) || errors.Is(err, ErrNoRemote) {
+		errors.Is(err, ovpnconf.ErrNoRedirect) || errors.Is(err, ErrNoRemote) || errors.Is(err, ErrNoServerCN) {
 		jsonErr(w, 400, err.Error())
 		return
 	}

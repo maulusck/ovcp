@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -58,6 +59,48 @@ func CertsHostsContent(certs []store.Cert, live []controller.VPNClient, serverCN
 		b.WriteString(l)
 	}
 	return []byte(b.String())
+}
+
+// RecordList is the internal DNS records: every cert with where it resolves
+// right now, and custom.hosts' content (record list, GET /api/records).
+type RecordList struct {
+	Certs  []CertRow `json:"certs"`
+	Custom string    `json:"custom"`
+}
+
+// Records builds a RecordList. A cert resolves at its CN's live address (the
+// server at its tun IP); a revoked one never does, it holds no session.
+func Records(certs []store.Cert, live []controller.VPNClient, serverCN string, serverIP net.IP, custom string) RecordList {
+	ip := map[string]string{}
+	for _, cl := range live {
+		if cl.VirtualAddress != "" {
+			ip[cl.CN] = cl.VirtualAddress
+		}
+	}
+	if serverIP != nil {
+		ip[serverCN] = serverIP.String()
+	}
+	rows := make([]CertRow, 0, len(certs))
+	for _, c := range certs {
+		r := NewCertRow(c)
+		if c.RevokedAt == nil {
+			r.IP = ip[c.CN]
+		}
+		rows = append(rows, r)
+	}
+	return RecordList{rows, custom}
+}
+
+func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request, u *store.User) {
+	certs, err := s.Store.ListCerts()
+	if err != nil {
+		jsonErr(w, 500, err.Error())
+		return
+	}
+	live, _ := s.Mgmt.Status() // openvpn down: nothing resolves live
+	ip, _ := s.LoadConfig().ServerTunIP()
+	custom, _ := os.ReadFile(s.CustomHostsPath)
+	jsonOK(w, Records(certs, live, s.DefaultRemote(), ip, string(custom)))
 }
 
 // RefreshCertsHosts regenerates certs.hosts from live. RunSampler's ticker

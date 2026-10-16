@@ -77,7 +77,7 @@ func setup(t *testing.T) *env {
 		CertsHostsPath:  filepath.Join(dir, "dns", "certs.hosts"),
 		CustomHostsPath: filepath.Join(dir, "dns", "custom.hosts"),
 	}
-	if err := srv.WriteServerCert(serverIC); err != nil {
+	if err := WriteServerCert(srv.Store, srv.ServerCert, srv.ServerKey, serverIC); err != nil {
 		t.Fatal(err)
 	}
 	return &env{ts: httptest.NewServer(srv.Handler()), t: t, dir: dir}
@@ -175,8 +175,8 @@ func TestRBAC(t *testing.T) {
 		{"POST", "/api/vpn/restart"},
 		{"POST", "/api/dns/restart"},
 		{"PATCH", "/api/certs/x/dns"},
-		{"PUT", "/api/dns/custom"},
-		{"POST", "/api/dns/custom/preview"},
+		{"PUT", "/api/records/custom"},
+		{"POST", "/api/records/custom/preview"},
 		{"PUT", "/api/dns/config"},
 		{"PUT", "/api/logs/config"},
 		{"POST", "/api/logs/rotate"},
@@ -341,10 +341,7 @@ func TestExportRenew(t *testing.T) {
 	}
 
 	rows := e.req("GET", "/api/certs", "", false)
-	var certs []struct {
-		CN, Serial string
-		Revoked    bool
-	}
+	var certs []struct{ CN, Serial, Status string }
 	json.NewDecoder(rows.Body).Decode(&certs)
 	var outgoingRevoked, replacementActive bool
 	for _, c := range certs {
@@ -352,9 +349,9 @@ func TestExportRenew(t *testing.T) {
 			continue
 		}
 		if c.Serial == issued.Serial {
-			outgoingRevoked = c.Revoked
+			outgoingRevoked = c.Status == "revoked"
 		} else {
-			replacementActive = !c.Revoked
+			replacementActive = c.Status != "revoked"
 		}
 	}
 	if !outgoingRevoked {
@@ -592,14 +589,14 @@ func TestCustomHosts(t *testing.T) {
 	e := setup(t)
 	e.login("admin")
 
-	r := e.req("GET", "/api/dns/custom", "", false)
-	var got struct{ Content string }
+	r := e.req("GET", "/api/records", "", false)
+	var got struct{ Custom string }
 	json.NewDecoder(r.Body).Decode(&got)
-	if r.StatusCode != 200 || got.Content != "" {
+	if r.StatusCode != 200 || got.Custom != "" {
 		t.Fatalf("initial custom.hosts should be empty: status=%d %+v", r.StatusCode, got)
 	}
 
-	r = e.req("POST", "/api/dns/custom/preview", `{"Content":"10.8.0.50 pihole\n"}`, true)
+	r = e.req("POST", "/api/records/custom/preview", `{"Content":"10.8.0.50 pihole\n"}`, true)
 	var pv struct {
 		Diff    []string
 		Changed bool
@@ -609,13 +606,13 @@ func TestCustomHosts(t *testing.T) {
 		t.Fatalf("preview: status=%d %+v", r.StatusCode, pv)
 	}
 
-	if r := e.req("PUT", "/api/dns/custom", `{"Content":"10.8.0.50 pihole\n"}`, true); r.StatusCode != 200 {
+	if r := e.req("PUT", "/api/records/custom", `{"Content":"10.8.0.50 pihole\n"}`, true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
-	r = e.req("GET", "/api/dns/custom", "", false)
+	r = e.req("GET", "/api/records", "", false)
 	json.NewDecoder(r.Body).Decode(&got)
-	if got.Content != "10.8.0.50 pihole\n" {
-		t.Fatalf("custom.hosts not persisted, got %q", got.Content)
+	if got.Custom != "10.8.0.50 pihole\n" {
+		t.Fatalf("custom.hosts not persisted, got %q", got.Custom)
 	}
 }
 
@@ -704,15 +701,14 @@ func TestExportBundle(t *testing.T) {
 	if r.StatusCode != 200 {
 		t.Fatal("export:", r.Status)
 	}
-	if cd := r.Header.Get("Content-Disposition"); !strings.Contains(cd, "alice.ovpn") {
-		t.Fatalf("Content-Disposition = %q, want the CN in it", cd)
-	}
-	body, _ := io.ReadAll(r.Body)
+	var out ExportResult
+	json.NewDecoder(r.Body).Decode(&out)
+	body := out.Bundle
 	for _, want := range []string{
 		"remote vpn.example.com 443", "proto tcp", "data-ciphers CHACHA20-POLY1305",
 		"verify-x509-name vpn.example.com name", "<cert>", "<key>", "<tls-crypt>",
 	} {
-		if !strings.Contains(string(body), want) {
+		if !strings.Contains(body, want) {
 			t.Fatalf("bundle missing %q:\n%s", want, body)
 		}
 	}
@@ -726,8 +722,9 @@ func TestExportSplitTunnel(t *testing.T) {
 	if r.StatusCode != 200 {
 		t.Fatal("export:", r.Status)
 	}
-	body, _ := io.ReadAll(r.Body)
-	if !strings.Contains(string(body), `pull-filter ignore "redirect-gateway"`) {
+	var out ExportResult
+	json.NewDecoder(r.Body).Decode(&out)
+	if body := out.Bundle; !strings.Contains(body, `pull-filter ignore "redirect-gateway"`) {
 		t.Fatalf("bundle missing pull-filter:\n%s", body)
 	}
 }

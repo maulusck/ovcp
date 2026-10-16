@@ -28,6 +28,8 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+
+	"github.com/ovcp/ovcp/internal/api"
 	"strings"
 	"testing"
 	"time"
@@ -517,7 +519,7 @@ func TestE2ERevokeDisconnects(t *testing.T) {
 	outer := requireNetNS(t)
 	h := newE2EHost(t, outer)
 	h.newClient(t, "alice", "1", "10.90.10.1", "10.90.10.2")
-	var rows []certOut
+	var rows []api.CertRow
 	if r := run(t, h.env, "-json", "certificate", "list"); r.code != 0 || json.Unmarshal([]byte(r.stdout), &rows) != nil {
 		t.Fatalf("certificate list: %s", r.stderr)
 	}

@@ -192,9 +192,9 @@ func TestJSONFullAutomation(t *testing.T) {
 	env := withEnv(baseEnv(t), "OVCP_JSON=1")
 
 	assertCleanJSON(t, run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", "admin"), &initOut{})
-	assertCleanJSON(t, run(t, env, "certificate", "issue", "-cn", "alice"), &issueOut{})
+	assertCleanJSON(t, run(t, env, "certificate", "issue", "-cn", "alice"), &api.IssueResult{})
 
-	var rows []certOut
+	var rows []api.CertRow
 	assertCleanJSON(t, run(t, env, "certificate", "list"), &rows)
 	var serial string
 	for _, c := range rows {
@@ -205,8 +205,8 @@ func TestJSONFullAutomation(t *testing.T) {
 	if serial == "" {
 		t.Fatalf("alice not found in list output: %+v", rows)
 	}
-	assertCleanJSON(t, run(t, env, "certificate", "revoke", "-serial", serial), &revokeOut{})
-	assertCleanJSON(t, run(t, env, "certificate", "renew"), &renewOut{})
+	assertCleanJSON(t, run(t, env, "certificate", "revoke", "-serial", serial), &api.RevokeResult{})
+	assertCleanJSON(t, run(t, env, "certificate", "renew"), &api.RenewResult{})
 
 	rotate := withEnv(env, "OVCP_CA_NEW_PASSPHRASE=a totally different passphrase")
 	assertCleanJSON(t, run(t, rotate, "ca", "rotate"), &api.Msg{})
@@ -565,7 +565,7 @@ func TestListExpiring(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("-json list: %+v", r)
 	}
-	var rows []certOut
+	var rows []api.CertRow
 	if err := json.Unmarshal([]byte(r.stdout), &rows); err != nil {
 		t.Fatalf("-json list unmarshal: %v: %+v", err, r)
 	}
@@ -842,7 +842,7 @@ func TestRenewRefusesNonexistentCert(t *testing.T) {
 	if r := run(t, env, "certificate", "issue", "-cn", "ghost", "-renew"); r.code == 0 {
 		t.Fatalf("renewing a never-issued client CN should fail, got: %+v", r)
 	}
-	var rows []certOut
+	var rows []api.CertRow
 	assertCleanJSON(t, run(t, withEnv(env, "OVCP_JSON=1"), "certificate", "list"), &rows)
 	for _, c := range rows {
 		if c.CN == "ghost" {
@@ -878,7 +878,7 @@ func TestRevokeWrongPassphraseKeepsCert(t *testing.T) {
 	if r := run(t, env, "certificate", "issue", "-cn", "alice"); r.code != 0 {
 		t.Fatalf("issue: %+v", r)
 	}
-	var rows []certOut
+	var rows []api.CertRow
 	assertCleanJSON(t, run(t, withEnv(env, "OVCP_JSON=1"), "certificate", "list"), &rows)
 	var serial string
 	for _, c := range rows {
@@ -905,7 +905,7 @@ func TestRenewClient(t *testing.T) {
 	if r := run(t, env, "certificate", "issue", "-cn", "alice"); r.code != 0 {
 		t.Fatalf("issue: %+v", r)
 	}
-	var rows []certOut
+	var rows []api.CertRow
 	assertCleanJSON(t, run(t, withEnv(env, "OVCP_JSON=1"), "certificate", "list"), &rows)
 	var oldSerial string
 	for _, c := range rows {
@@ -942,7 +942,7 @@ func TestRenewClient(t *testing.T) {
 	if aliceCount != 2 {
 		t.Fatalf("expected outgoing + renewed alice rows (2), got %d: %+v", aliceCount, rows)
 	}
-	if oldStatus != "REVOKED" {
+	if oldStatus != "revoked" {
 		t.Fatalf("outgoing cert should be revoked, got status %q", oldStatus)
 	}
 	if newSerial == "" {
@@ -998,7 +998,7 @@ func TestCAStatus(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.CN != "Test CA" || out.Status != "valid" {
 		t.Fatalf("ca status -json unmarshal: %v: %+v", err, r)
 	}
-	var rows []certOut
+	var rows []api.CertRow
 	assertCleanJSON(t, run(t, withEnv(env, "OVCP_JSON=1"), "certificate", "list"), &rows)
 	for _, c := range rows {
 		if c.Kind == "ca" {
@@ -1599,7 +1599,7 @@ func TestRecordCommand(t *testing.T) {
 	}
 
 	rj := run(t, withEnv(env, "OVCP_JSON=1"), "record", "list")
-	var out recordListOut
+	var out api.RecordList
 	if err := json.Unmarshal([]byte(rj.stdout), &out); err != nil {
 		t.Fatalf("record list -json: %v (%+v)", err, rj)
 	}
@@ -1621,12 +1621,12 @@ func TestRecordCommand(t *testing.T) {
 		t.Fatalf("renew: %+v", r)
 	}
 	rj = run(t, withEnv(env, "OVCP_JSON=1"), "record", "list")
-	out = recordListOut{}
+	out = api.RecordList{}
 	if err := json.Unmarshal([]byte(rj.stdout), &out); err != nil {
 		t.Fatalf("record list -json: %v (%+v)", err, rj)
 	}
 	for _, c := range out.Certs {
-		if c.Kind == "server" && (c.IP != "") == (c.Status == "REVOKED") {
+		if c.Kind == "server" && (c.IP != "") == (c.Status == "revoked") {
 			t.Fatalf("server row %+v: the IP belongs to the active cert only", c)
 		}
 	}
