@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,5 +236,29 @@ func TestRewriteConnectedClientRuleFindsLiveClient(t *testing.T) {
 	err := srv.RewriteConnectedClientRule("alice")
 	if err == nil || !strings.Contains(err.Error(), "no longer exists") {
 		t.Fatalf("got %v, want the assigned-upstream-missing error from Reassign", err)
+	}
+}
+
+// TestVPNStartRunsAfterStart: a web API start or restart re-applies upstreams
+// and reattaches mgmt (AfterVPNStart) exactly as the control socket does.
+func TestVPNStartRunsAfterStart(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "ovcp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	calls := 0
+	srv := &Server{Store: s, VPN: &fakeVPN{}, AfterVPNStart: func() error { calls++; return nil }}
+	for _, op := range []string{"start", "restart", "stop", "reconnect"} {
+		r := httptest.NewRequest("POST", "/api/vpn/"+op, nil)
+		r.SetPathValue("op", op)
+		w := httptest.NewRecorder()
+		srv.handleProc("vpn", srv.VPN, true)(w, r, &store.User{Username: "admin"})
+		if w.Code != 200 {
+			t.Fatalf("%s: %d %s", op, w.Code, w.Body)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("AfterVPNStart ran %d times, want 2 (start, restart)", calls)
 	}
 }

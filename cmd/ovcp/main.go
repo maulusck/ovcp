@@ -301,16 +301,17 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 
 	// bring the worker up as a reaped foreground child, and expose the control
 	// socket so vpn/status/kill/stats -follow can drive/query us — see ServeControl.
+	srv.AfterVPNStart = func() error {
+		srv.ReconcileUpstreams()
+		if upstreamsEnabled && api.UpstreamAuthActive(s) {
+			return mgmt.ConnectRetry(mgmt.Timeout)
+		}
+		return nil
+	}
 	ctl, err := controller.ServeControl(ctrl, controller.ControlDeps{
 		VPN: sup, DNS: dnsSup, Mgmt: mgmt, Level: logLevel, Telegram: tg,
 		UpstreamRewrite: srv.RewriteConnectedClientRule,
-		UpstreamReapply: func() error {
-			srv.ReconcileUpstreams()
-			if upstreamsEnabled && api.UpstreamAuthActive(s) {
-				return mgmt.ConnectRetry(mgmt.Timeout)
-			}
-			return nil
-		},
+		UpstreamReapply: srv.AfterVPNStart,
 	})
 	die(err)
 	defer ctl.Close()

@@ -16,7 +16,6 @@ import (
 	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
 	"github.com/ovcp/ovcp/internal/telegram"
-	"github.com/ovcp/ovcp/internal/upstream"
 )
 
 // handleHealthz is unauthenticated (probes have no session); a DB ping is
@@ -88,55 +87,6 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User)
 		out["caNotAfter"] = ca.NotAfter
 		out["caStatus"] = store.Cert{NotAfter: ca.NotAfter}.Status()
 	}
-	jsonOK(w, out)
-}
-
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {
-	// ovcp's own uptime is always known here — this handler only runs
-	// inside a live serve process.
-	out := map[string]any{"ovcp_uptime_seconds": int64(time.Since(controller.ProcessStartedAt).Seconds())}
-
-	clients, err := s.Mgmt.Status()
-	// Both signals required: Pid()!=0 catches a stale status file surviving a
-	// crash (it wouldn't error — it just wouldn't be rewritten again),
-	// err==nil catches a not-yet-running or torn-read status file.
-	if up := s.VPN.Pid() != 0 && err == nil; !up {
-		// VPN down/restarting is a normal state for the panel, not a 500.
-		out["vpn_up"], out["clients"] = false, []any{}
-	} else {
-		if clients == nil {
-			clients = []controller.VPNClient{}
-		}
-		out["vpn_up"], out["clients"] = true, clients
-		out["vpn_uptime_seconds"] = int64(time.Since(s.VPN.StartedAt()).Seconds())
-	}
-
-	// s.DNS is nil in a bare/test Server; dnsmasq itself being merely
-	// unconfigured still leaves a real Supervisor with Pid()==0 (not running).
-	if s.DNS != nil {
-		if pid := s.DNS.Pid(); pid != 0 {
-			out["dns_up"] = true
-			out["dns_uptime_seconds"] = int64(time.Since(s.DNS.StartedAt()).Seconds())
-		} else {
-			out["dns_up"] = false
-		}
-	}
-
-	// Telegram's status is a mutex-guarded bool plus two indexed settings
-	// reads — cheap enough for this cadence, unlike cert counts (a table
-	// scan over data that only changes on issue/revoke/renew, not on a timer).
-	out["telegram"] = s.Telegram.Status()
-	out["routing_warning"] = controller.RoutingPrereqsWarning(s.UpstreamsEnabled)
-	out["upstreams_enabled"] = s.UpstreamsEnabled
-	if s.UpstreamsEnabled {
-		cfg := LoadUpstreamConfig(s.Store)
-		out["upstream_default"] = cfg.Default
-		// read-only liveness check (iface exists?) — not a reconcile, doesn't
-		// touch nft. Piggybacks the existing status poll instead of a second
-		// poller, same as telegram's own status a few lines up.
-		out["upstream_warning"] = upstream.Warning(cfg.Upstreams)
-	}
-
 	jsonOK(w, out)
 }
 
@@ -524,46 +474,27 @@ func (s *Server) handleVPNConfigPreview(w http.ResponseWriter, r *http.Request, 
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	diff, err := PreviewVPNConfig(s.Store, in)
-	if err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	warning := DNSLeakWarning(in, LoadDNSConfig(s.Store))
-	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0, "warning": warning})
+	act(w)(PreviewVPNConfig(s.Store, in))
 }
 
 // handleProc drives a supervised worker's lifecycle (start|stop|restart,
 // optionally reconnect) — shared by /api/vpn/{op} and /api/dns/{op}, name
 // prefixes the audit action and unknown-op message per worker.
-func (s *Server) handleProc(name string, target controller.Lifecycle, allowReconnect bool) handler {
+func (s *Server) handleProc(name string, target controller.Lifecycle, isVPN bool) handler {
 	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
-		op := r.PathValue("op")
-		before := target.Pid()
-		var err error
-		switch op {
-		case "start":
-			err = target.Start()
-		case "stop":
-			err = target.Stop()
-		case "restart":
-			err = target.Restart()
-		case "reconnect":
-			if !allowReconnect {
-				jsonErr(w, 404, "unknown "+name+" operation")
-				return
-			}
-			err = target.Reconnect()
-		default:
-			jsonErr(w, 404, "unknown "+name+" operation")
-			return
+		var after func() error
+		if isVPN {
+			after = s.AfterVPNStart
 		}
+		res, err := controller.RunOp(target, r.PathValue("op"), isVPN, after)
 		if err != nil {
 			jsonErr(w, opStatus(err), err.Error())
 			return
 		}
-		s.Store.Audit(u.Username, name+"_"+op, "")
-		jsonOK(w, map[string]any{"op": op, "pid": target.Pid(), "changed": target.Pid() != before})
+		if op := r.PathValue("op"); op != "status" { // a read, never audited
+			s.Store.Audit(u.Username, name+"_"+op, fmt.Sprintf("pid=%d", res.Pid))
+		}
+		jsonOK(w, res)
 	}
 }
 
@@ -598,35 +529,23 @@ func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *store.User) {
-	op := r.PathValue("op")
-	before := s.Telegram.Status().Running
-	var err error
-	switch op {
-	case "start":
-		err = s.Telegram.Start()
-	case "stop":
-		err = s.Telegram.Stop()
-	case "restart":
-		err = s.Telegram.Restart()
-	default:
-		jsonErr(w, 404, "unknown telegram operation")
-		return
-	}
+	st, err := controller.RunTelegramOp(s.Telegram, r.PathValue("op"))
 	if err != nil {
 		jsonErr(w, opStatus(err), err.Error())
 		return
 	}
-	s.Store.Audit(u.Username, "telegram_"+op, "")
-	st := s.Telegram.Status()
-	st.Changed = st.Running != before
+	s.Store.Audit(u.Username, "telegram_"+r.PathValue("op"), "")
 	jsonOK(w, st)
 }
 
 // opStatus: an op already in flight is a client retry situation, not a
 // server failure — 409 instead of the generic 502.
 func opStatus(err error) int {
-	if errors.Is(err, controller.ErrBusy) {
+	switch {
+	case errors.Is(err, controller.ErrBusy):
 		return 409
+	case errors.Is(err, controller.ErrUnknownOp):
+		return 404
 	}
 	return 502
 }
@@ -789,10 +708,30 @@ type DNSConfig struct {
 	BlockInternet bool // dnsmasq --no-resolv/--server=/#/ on next start/restart
 }
 
-// dnsView is DNSConfig as the CLI's -json shows it, plus the API's warning.
-type dnsView struct {
+// DNSView is the dns config as dns config get|set and the web API show it,
+// with the leak warning (the CLI also prints it to stderr).
+type DNSView struct {
 	DNSConfig
 	Warning string `json:"warning,omitempty"`
+}
+
+// ViewDNS is the persisted dns config's view.
+func ViewDNS(st *store.Store) DNSView {
+	dns := LoadDNSConfig(st)
+	return DNSView{dns, DNSLeakWarning(LoadConfig(st), dns)}
+}
+
+// SetDNSConfig persists cfg.
+func SetDNSConfig(st *store.Store, actor string, cfg DNSConfig) (DNSView, error) {
+	if err := SaveDNSConfig(st, cfg); err != nil {
+		return DNSView{}, err
+	}
+	action := "off"
+	if cfg.BlockInternet {
+		action = "on"
+	}
+	st.Audit(actor, "dns_block_internet_"+action, "")
+	return ViewDNS(st), nil
 }
 
 // DefaultDNSConfig seeds from OVCP_DNS_BLOCK_INTERNET (container/unattended init).
@@ -823,8 +762,7 @@ func DNSLeakWarning(vpn ovpnconf.Config, dns DNSConfig) string {
 }
 
 func (s *Server) handleDNSConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	dns := LoadDNSConfig(s.Store)
-	jsonOK(w, dnsView{dns, DNSLeakWarning(s.LoadConfig(), dns)})
+	jsonOK(w, ViewDNS(s.Store))
 }
 
 // handleDNSConfigSet toggles whether dnsmasq forwards to upstream resolvers;
@@ -835,17 +773,7 @@ func (s *Server) handleDNSConfigSet(w http.ResponseWriter, r *http.Request, u *s
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	dns := DNSConfig{BlockInternet: in.BlockInternet}
-	if err := SaveDNSConfig(s.Store, dns); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	action := "off"
-	if in.BlockInternet {
-		action = "on"
-	}
-	s.Store.Audit(u.Username, "dns_block_internet_"+action, "")
-	jsonOK(w, dnsView{dns, DNSLeakWarning(s.LoadConfig(), dns)})
+	act(w)(SetDNSConfig(s.Store, u.Username, DNSConfig{BlockInternet: in.BlockInternet}))
 }
 
 func (s *Server) handleLogsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {

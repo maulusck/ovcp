@@ -57,10 +57,76 @@ type TelegramController interface {
 // the op actually changed the process vs. a no-op, when the (possibly
 // still-running) child started, and when the answering serve process started.
 type ControlResult struct {
-	Pid            int
-	Changed        bool
-	StartedAt      time.Time
-	ServeStartedAt time.Time
+	Pid            int       `json:"pid"`
+	Changed        bool      `json:"changed"`
+	StartedAt      time.Time `json:"startedAt"`
+	ServeStartedAt time.Time `json:"serveStartedAt"`
+}
+
+// ErrUnknownOp: a verb the target has no such operation for.
+var ErrUnknownOp = errors.New("unknown operation")
+
+// RunOp is every vpn/dns lifecycle op, control socket or web API alike:
+// verb on target (reconnect only where canReconnect), then afterStart once a
+// start or restart succeeds (nil: nothing to do).
+func RunOp(target Lifecycle, verb string, canReconnect bool, afterStart func() error) (ControlResult, error) {
+	before := target.Pid()
+	var err error
+	switch verb {
+	case "status": // read-only
+	case "start":
+		err = target.Start()
+	case "stop":
+		err = target.Stop()
+	case "restart":
+		err = target.Restart()
+	case "reconnect":
+		if !canReconnect {
+			return ControlResult{}, ErrUnknownOp
+		}
+		err = target.Reconnect()
+	default:
+		return ControlResult{}, ErrUnknownOp
+	}
+	if err != nil {
+		return ControlResult{}, err
+	}
+	// A (re)started openvpn needs the upstream rules re-applied and, with
+	// per-CN routing, the management connection reattached.
+	if afterStart != nil && (verb == "start" || verb == "restart") {
+		if err := afterStart(); err != nil {
+			return ControlResult{}, fmt.Errorf("upstream reapply: %w", err)
+		}
+	}
+	r := ControlResult{Pid: target.Pid(), ServeStartedAt: ProcessStartedAt}
+	r.Changed = r.Pid != before
+	if r.Pid != 0 {
+		r.StartedAt = target.StartedAt()
+	}
+	return r, nil
+}
+
+// RunTelegramOp is every telegram poller op, control socket or web API alike.
+func RunTelegramOp(t TelegramController, verb string) (TelegramStatus, error) {
+	before := t.Status().Running
+	var err error
+	switch verb {
+	case "status":
+	case "start":
+		err = t.Start()
+	case "stop":
+		err = t.Stop()
+	case "restart":
+		err = t.Restart()
+	default:
+		err = ErrUnknownOp
+	}
+	if err != nil {
+		return TelegramStatus{}, err
+	}
+	st := t.Status()
+	st.Changed = st.Running != before
+	return st, nil
 }
 
 // ControlDeps bundles everything ServeControl proxies over the socket — one
@@ -157,89 +223,39 @@ func serveControlConn(c net.Conn, d ControlDeps) {
 		replyOK(c, d.UpstreamReapply())
 		return
 	}
-	if op == "telegram-status" {
-		data, _ := json.Marshal(d.Telegram.Status())
-		fmt.Fprintf(c, "OK %s\n", data)
+	if verb, ok := strings.CutPrefix(op, "telegram-"); ok {
+		replyJSON(c)(RunTelegramOp(d.Telegram, verb))
 		return
 	}
-	if op == "telegram-start" || op == "telegram-stop" || op == "telegram-restart" {
-		before := d.Telegram.Status().Running
-		var opErr error
-		switch op {
-		case "telegram-start":
-			opErr = d.Telegram.Start()
-		case "telegram-stop":
-			opErr = d.Telegram.Stop()
-		case "telegram-restart":
-			opErr = d.Telegram.Restart()
-		}
-		if opErr != nil {
-			fmt.Fprintf(c, "ERR %s\n", opErr)
-			return
-		}
-		st := d.Telegram.Status()
-		st.Changed = st.Running != before
-		data, _ := json.Marshal(st)
-		fmt.Fprintf(c, "OK %s\n", data)
-		return
-	}
-
-	// dns- prefixed ops target dnsmasq's own Lifecycle instead of vpn's;
-	// same switch body runs against whichever target, not a parallel copy.
-	target, verb := d.VPN, op
-	if rest, ok := strings.CutPrefix(op, "dns-"); ok {
-		target, verb = d.DNS, rest
-	}
-	if verb == "reconnect" && target == d.DNS {
-		fmt.Fprintln(c, "ERR unknown operation")
-		return
-	}
-
-	before := target.Pid()
-	var opErr error
-	switch verb {
-	case "status": // read-only
-	case "start":
-		opErr = target.Start()
-	case "stop":
-		opErr = target.Stop()
-	case "restart":
-		opErr = target.Restart()
-	case "reconnect":
-		opErr = target.Reconnect()
+	switch op {
 	case "debug on":
 		d.Level.Set(slog.LevelDebug)
 		slog.Info("debug logging enabled")
+		replyOK(c, nil)
+		return
 	case "debug off":
 		slog.Info("debug logging disabled")
 		d.Level.Set(slog.LevelInfo)
-	default:
-		fmt.Fprintln(c, "ERR unknown operation")
+		replyOK(c, nil)
 		return
 	}
-	if opErr != nil {
-		fmt.Fprintf(c, "ERR %s\n", opErr)
+	if verb, ok := strings.CutPrefix(op, "dns-"); ok {
+		replyJSON(c)(RunOp(d.DNS, verb, false, nil))
 		return
 	}
-	// A (re)started openvpn needs the upstream rules re-applied and, with
-	// per-CN routing, the management connection reattached. Loud on failure:
-	// per-CN routing active means openvpn stays holding until this reconnects.
-	if target == d.VPN && (verb == "start" || verb == "restart") && d.UpstreamReapply != nil {
-		if err := d.UpstreamReapply(); err != nil {
-			fmt.Fprintf(c, "ERR upstream reapply: %s\n", err)
+	replyJSON(c)(RunOp(d.VPN, op, true, d.UpstreamReapply))
+}
+
+// replyJSON answers with v as one JSON line, or the error.
+func replyJSON(c net.Conn) func(any, error) {
+	return func(v any, err error) {
+		if err != nil {
+			fmt.Fprintf(c, "ERR %s\n", err)
 			return
 		}
+		data, _ := json.Marshal(v)
+		fmt.Fprintf(c, "OK %s\n", data)
 	}
-	after := target.Pid()
-	changed := "nochange"
-	if before != after {
-		changed = "changed"
-	}
-	var startedAtUnix int64
-	if after != 0 {
-		startedAtUnix = target.StartedAt().Unix()
-	}
-	fmt.Fprintf(c, "OK %d %s %d %d\n", after, changed, startedAtUnix, ProcessStartedAt.Unix())
 }
 
 // controlRequest sends one op to a running serve process and returns the raw
@@ -278,16 +294,9 @@ func Control(sockPath, op string) (ControlResult, error) {
 	if err != nil {
 		return r, err
 	}
-	var changed string
-	var startedAtUnix, serveStartedAtUnix int64
-	if _, err := fmt.Sscanf(payload, "%d %s %d %d", &r.Pid, &changed, &startedAtUnix, &serveStartedAtUnix); err != nil {
+	if err := json.Unmarshal([]byte(payload), &r); err != nil {
 		return r, fmt.Errorf("controller: unexpected control response %q", payload)
 	}
-	r.Changed = changed == "changed"
-	if startedAtUnix != 0 {
-		r.StartedAt = time.Unix(startedAtUnix, 0)
-	}
-	r.ServeStartedAt = time.Unix(serveStartedAtUnix, 0)
 	return r, nil
 }
 
@@ -342,6 +351,17 @@ func TelegramStop(sockPath string) (TelegramStatus, error) {
 func TelegramRestart(sockPath string) (TelegramStatus, error) {
 	return telegramOp(sockPath, "telegram-restart")
 }
+
+// Debug switches a running serve's log level.
+func Debug(sockPath string, on bool) error {
+	op := "debug off"
+	if on {
+		op = "debug on"
+	}
+	_, err := controlRequest(sockPath, op)
+	return err
+}
+
 func TelegramGetStatus(sockPath string) (TelegramStatus, error) {
 	return telegramOp(sockPath, "telegram-status")
 }

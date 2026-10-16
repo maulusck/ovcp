@@ -46,6 +46,7 @@ type Server struct {
 	CustomHostsPath  string               // Records tab: user-authored custom.hosts, edited as one blob
 	UI               fs.FS                // built frontend; nil = API only
 	DebugLevel       *slog.LevelVar       // shared with `ovcp debug on|off`'s control-socket handler
+	AfterVPNStart    func() error         // after a vpn start/restart, both transports: upstream re-apply, mgmt reattach
 	PollInterval     time.Duration        // RunSampler's ticker; set from OVCP_STATUS_INTERVAL, same cadence OpenVPN writes its status file at
 }
 
@@ -253,22 +254,32 @@ func SaveConfig(st *store.Store, cfg ovpnconf.Config) error {
 	return st.SetSetting("vpn_config", string(raw))
 }
 
-// PreviewVPNConfig validates cfg and returns the server.conf change it makes.
-func PreviewVPNConfig(st *store.Store, cfg ovpnconf.Config) ([]string, error) {
+// Preview is a would-be change: server.conf's diff lines, and the DNS leak
+// warning the change would leave (the CLI also prints it to stderr).
+type Preview struct {
+	Diff    []string `json:"diff"`
+	Changed bool     `json:"changed"`
+	Warning string   `json:"warning,omitempty"`
+}
+
+// PreviewVPNConfig validates cfg and returns the change it makes.
+func PreviewVPNConfig(st *store.Store, cfg ovpnconf.Config) (Preview, error) {
 	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return Preview{}, err
 	}
 	cur := LoadConfig(st)
-	return ovpnconf.Diff(cur.Render(), cfg.Render()), nil
+	diff := ovpnconf.Diff(cur.Render(), cfg.Render())
+	return Preview{diff, len(diff) > 0, DNSLeakWarning(cfg, LoadDNSConfig(st))}, nil
 }
 
 // SetVPNConfig is every server-config change, CLI or API: PreviewVPNConfig,
 // then persisted with server.conf, only when that diff isn't empty.
 func SetVPNConfig(st *store.Store, confPath string, cfg ovpnconf.Config) ([]string, error) {
-	diff, err := PreviewVPNConfig(st, cfg)
-	if err != nil || len(diff) == 0 {
+	pv, err := PreviewVPNConfig(st, cfg)
+	if err != nil || !pv.Changed {
 		return nil, err
 	}
+	diff := pv.Diff
 	if err := SaveConfig(st, cfg); err != nil {
 		return nil, err
 	}

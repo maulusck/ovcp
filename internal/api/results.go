@@ -6,10 +6,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ovcp/ovcp/internal/auth"
 	"github.com/ovcp/ovcp/internal/controller"
+	"github.com/ovcp/ovcp/internal/pki"
 	"github.com/ovcp/ovcp/internal/store"
+	"github.com/ovcp/ovcp/internal/upstream"
 )
 
 // The actions below are each the one implementation behind a CLI command and
@@ -187,10 +190,97 @@ func act(w http.ResponseWriter) func(any, error) {
 		switch {
 		case err == nil:
 			jsonOK(w, v)
-		case errors.Is(err, ErrNotConnected), errors.Is(err, store.ErrNoActiveCert):
+		case errors.Is(err, ErrNotConnected), errors.Is(err, store.ErrNoActiveCert), errors.Is(err, ErrNoUpstream):
 			jsonErr(w, 404, err.Error())
 		default:
 			jsonErr(w, 400, err.Error())
 		}
 	}
+}
+
+// Status is status and GET /api/status: the workers, their clients, cert
+// counts, the bot and the host routing ovcp doesn't own.
+type Status struct {
+	Running          bool                       `json:"running"`
+	Pid              int                        `json:"pid"`
+	StartedAt        time.Time                  `json:"startedAt"`
+	ServeStartedAt   time.Time                  `json:"serveStartedAt"` // zero: serve unreachable
+	Error            string                     `json:"error,omitempty"`
+	Clients          []controller.VPNClient     `json:"clients"`
+	DNSRunning       bool                       `json:"dnsRunning"`
+	DNSPid           int                        `json:"dnsPid"`
+	DNSStartedAt     time.Time                  `json:"dnsStartedAt"`
+	CertsTotal       int                        `json:"certsTotal"`
+	CertsExpiring    int                        `json:"certsExpiring"`
+	Telegram         *controller.TelegramStatus `json:"telegram,omitempty"` // nil: serve unreachable
+	RoutingWarning   string                     `json:"routingWarning,omitempty"`
+	UpstreamsEnabled bool                       `json:"upstreamsEnabled"`
+	UpstreamDefault  string                     `json:"upstreamDefault,omitempty"`
+	UpstreamWarning  string                     `json:"upstreamWarning,omitempty"`
+}
+
+// StatusSource is where Status reads live state: serve's own workers, or a
+// running serve over the control socket.
+type StatusSource interface {
+	VPN() (controller.ControlResult, error)
+	DNS() (controller.ControlResult, error)
+	Clients() ([]controller.VPNClient, error)
+	Telegram() (controller.TelegramStatus, error)
+}
+
+// BuildStatus reads src once. An unreachable serve leaves the dns and bot
+// fields unasked: they travel the same socket and would fail the same way.
+func BuildStatus(st *store.Store, p *pki.PKI, src StatusSource, upstreams bool) Status {
+	out := Status{Clients: []controller.VPNClient{}}
+	r, err := src.VPN()
+	if err != nil {
+		out.Error = err.Error()
+	} else {
+		out.ServeStartedAt = r.ServeStartedAt
+		if r.Pid != 0 {
+			out.Running, out.Pid, out.StartedAt = true, r.Pid, r.StartedAt
+			if cl, err := src.Clients(); err != nil {
+				out.Error = err.Error()
+			} else if cl != nil {
+				out.Clients = cl
+			}
+		}
+		if d, err := src.DNS(); err == nil && d.Pid != 0 {
+			out.DNSRunning, out.DNSPid, out.DNSStartedAt = true, d.Pid, d.StartedAt
+		}
+		if tg, err := src.Telegram(); err == nil {
+			out.Telegram = &tg
+		}
+	}
+	if certs, err := st.AllCerts(p); err == nil {
+		out.CertsTotal, out.CertsExpiring = store.CertCounts(certs)
+	}
+	out.RoutingWarning = controller.RoutingPrereqsWarning(upstreams)
+	out.UpstreamsEnabled = upstreams
+	if upstreams {
+		cfg := LoadUpstreamConfig(st)
+		out.UpstreamDefault, out.UpstreamWarning = cfg.Default, upstream.Warning(cfg.Upstreams)
+	}
+	return out
+}
+
+// liveSource is StatusSource inside serve.
+type liveSource struct{ s *Server }
+
+func (l liveSource) VPN() (controller.ControlResult, error) {
+	return controller.RunOp(l.s.VPN, "status", true, nil)
+}
+func (l liveSource) DNS() (controller.ControlResult, error) {
+	if l.s.DNS == nil {
+		return controller.ControlResult{}, nil
+	}
+	return controller.RunOp(l.s.DNS, "status", false, nil)
+}
+func (l liveSource) Clients() ([]controller.VPNClient, error) { return l.s.Mgmt.Status() }
+func (l liveSource) Telegram() (controller.TelegramStatus, error) {
+	return l.s.Telegram.Status(), nil
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {
+	jsonOK(w, BuildStatus(s.Store, s.PKI, liveSource{s}, s.UpstreamsEnabled))
 }

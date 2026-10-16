@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -82,7 +84,8 @@ type UpstreamView struct {
 	Upstreams []UpstreamRow     `json:"upstreams"`
 	Default   string            `json:"default,omitempty"`
 	PerCN     map[string]string `json:"perCN,omitempty"`
-	Warning   string            `json:"warning,omitempty"` // API only: the CLI prints it to stderr
+	Message   string            `json:"message,omitempty"` // a mutation's confirmation
+	Warning   string            `json:"warning,omitempty"` // the CLI also prints it to stderr
 }
 
 // UpstreamRow is one UpstreamView entry.
@@ -102,54 +105,11 @@ func ViewUpstreams(cfg upstream.Config, warning string) UpstreamView {
 	for i, u := range cfg.Upstreams {
 		rows[i] = UpstreamRow{u.ID, u.IsUp(), u.Iface, u.Gateway, upstream.RedactSOCKS(u.SOCKS), u.Table, u.Description}
 	}
-	return UpstreamView{rows, cfg.Default, cfg.PerCN, warning}
+	return UpstreamView{Upstreams: rows, Default: cfg.Default, PerCN: cfg.PerCN, Warning: warning}
 }
 
 func (s *Server) handleUpstreamsGet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	jsonOK(w, ViewUpstreams(LoadUpstreamConfig(s.Store), ""))
-}
-
-func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if !s.UpstreamsEnabled {
-		jsonErr(w, 400, "upstreams disabled: nftables not found or turned off")
-		return
-	}
-	var in struct{ ID, Iface, Gateway, SOCKS, Description string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	cfg, _, err := LoadUpstreamConfig(s.Store).WithAdded(upstream.Upstream{
-		ID: in.ID, Iface: in.Iface, Gateway: in.Gateway, SOCKS: in.SOCKS, Description: in.Description,
-	})
-	if err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	s.saveAndApplyUpstreams(w, u, cfg, "upstream_add", in.ID)
-}
-
-func (s *Server) handleUpstreamDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
-	id := r.PathValue("id")
-	cfg, found := LoadUpstreamConfig(s.Store).Without(id)
-	if !found {
-		jsonErr(w, 404, "upstream not found")
-		return
-	}
-	s.saveAndApplyUpstreams(w, u, cfg, "upstream_del", id)
-}
-
-// saveAndApplyUpstreams persists cfg, re-applies routing/NAT, audits, and
-// writes the standard upstream response — the one tail handleUpstreamAdd,
-// handleUpstreamDelete and handleUpstreamSetDefault all share.
-func (s *Server) saveAndApplyUpstreams(w http.ResponseWriter, u *store.User, cfg upstream.Config, action, detail string) {
-	if err := SaveUpstreamConfig(s.Store, cfg); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	warning := s.applyUpstreams(cfg)
-	s.Store.Audit(u.Username, action, detail)
-	jsonOK(w, ViewUpstreams(cfg, warning))
 }
 
 // ApplyAssign persists an already-computed assign (cfg, from
@@ -186,69 +146,6 @@ func ApplyAssign(s *store.Store, confPath string, enabled, before bool, cfg upst
 		warnings = append(warnings, upstream.Warning([]upstream.Upstream{u}))
 	}
 	return strings.Join(warnings, "; "), nil
-}
-
-// handleUpstreamAssign sets or clears a CN's per-upstream override, rewrites
-// server.conf if that flips management-client-auth on/off, and instantly
-// updates an already-connected client's live rule.
-func (s *Server) handleUpstreamAssign(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct {
-		CN, ID string
-		Clear  bool
-	}
-	if !decode(r, &in) || in.CN == "" {
-		jsonErr(w, 400, "cn required")
-		return
-	}
-	before := s.UpstreamsEnabled && UpstreamAuthActive(s.Store)
-	cfg, err := LoadUpstreamConfig(s.Store).Assign(in.CN, in.ID, in.Clear)
-	if err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	warning, err := ApplyAssign(s.Store, s.ConfigPath, s.UpstreamsEnabled, before, cfg, in.ID)
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	if err := s.RewriteConnectedClientRule(in.CN); err != nil {
-		jsonErr(w, opStatus(err), err.Error())
-		return
-	}
-	action := "upstream_assign"
-	if in.Clear {
-		action = "upstream_unassign"
-	}
-	s.Store.Audit(u.Username, action, in.CN)
-	jsonOK(w, ViewUpstreams(cfg, warning))
-}
-
-// handleUpstreamSetDefault: the ad-hoc exit switch — id="" turns it off,
-// back to the host's own default route.
-func (s *Server) handleUpstreamSetDefault(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ ID string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	cfg, err := LoadUpstreamConfig(s.Store).SetDefault(in.ID)
-	if err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	action := "upstream_default_set"
-	if in.ID == "" {
-		action = "upstream_default_off"
-	}
-	s.saveAndApplyUpstreams(w, u, cfg, action, in.ID)
-}
-
-// handleUpstreamReconcile is the explicit "situation's stable now" trigger
-// — re-applies and reports what's still down. Not on any timer.
-func (s *Server) handleUpstreamReconcile(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cfg, warning := s.ReconcileUpstreams()
-	s.Store.Audit(u.Username, "upstream_reconcile", "")
-	jsonOK(w, ViewUpstreams(cfg, warning))
 }
 
 // OnClientEstablished wires directly to controller.Client.OnClientEstablished:
@@ -291,4 +188,143 @@ func (s *Server) RewriteConnectedClientRule(cn string) error {
 // OnExit) — every session it held is gone unconditionally, no poll lag.
 func (s *Server) OnVPNExit() {
 	upstream.ClearAll()
+}
+
+// ErrUpstreamsDisabled: no nft on PATH, or OVCP_UPSTREAMS_ENABLED=false.
+var ErrUpstreamsDisabled = errors.New("upstreams disabled: nftables not found on PATH, or OVCP_UPSTREAMS_ENABLED=false")
+
+// ErrNoUpstream: an upstream id that isn't configured.
+var ErrNoUpstream = errors.New("no such upstream")
+
+// Applier programs cfg over the caller's transport (serve in process, or the
+// CLI through a running serve) and returns the warning for down upstreams.
+type Applier func(cfg upstream.Config) string
+
+// The upstream actions below are each the one implementation behind a CLI
+// command and its web API route; enabled is whether nft is usable.
+
+func saveApplyUpstreams(st *store.Store, actor string, cfg upstream.Config, apply Applier, msg, action, detail string) (UpstreamView, error) {
+	if err := SaveUpstreamConfig(st, cfg); err != nil {
+		return UpstreamView{}, err
+	}
+	v := ViewUpstreams(cfg, apply(cfg))
+	v.Message = msg
+	st.Audit(actor, action, detail)
+	return v, nil
+}
+
+// AddUpstream defines u; its routing table is assigned here.
+func AddUpstream(st *store.Store, actor string, enabled bool, u upstream.Upstream, apply Applier) (UpstreamView, error) {
+	if !enabled {
+		return UpstreamView{}, ErrUpstreamsDisabled
+	}
+	cfg, added, err := LoadUpstreamConfig(st).WithAdded(u)
+	if err != nil {
+		return UpstreamView{}, err
+	}
+	return saveApplyUpstreams(st, actor, cfg, apply, fmt.Sprintf("added: %s (table %d)", u.ID, added.Table), "upstream_add", u.ID)
+}
+
+// DeleteUpstream removes id and every default or per-CN reference to it.
+func DeleteUpstream(st *store.Store, actor string, enabled bool, id string, apply Applier) (UpstreamView, error) {
+	if !enabled {
+		return UpstreamView{}, ErrUpstreamsDisabled
+	}
+	cfg, found := LoadUpstreamConfig(st).Without(id)
+	if !found {
+		return UpstreamView{}, fmt.Errorf("%q: %w", id, ErrNoUpstream)
+	}
+	return saveApplyUpstreams(st, actor, cfg, apply, "deleted: "+id, "upstream_del", id)
+}
+
+// SetDefaultUpstream routes every client without an override out id; "" turns it off.
+func SetDefaultUpstream(st *store.Store, actor string, enabled bool, id string, apply Applier) (UpstreamView, error) {
+	if !enabled {
+		return UpstreamView{}, ErrUpstreamsDisabled
+	}
+	cfg, err := LoadUpstreamConfig(st).SetDefault(id)
+	if err != nil {
+		return UpstreamView{}, err
+	}
+	if id == "" {
+		return saveApplyUpstreams(st, actor, cfg, apply, "default: off (host's own default route)", "upstream_default_off", "")
+	}
+	return saveApplyUpstreams(st, actor, cfg, apply, "default: "+id, "upstream_default_set", id)
+}
+
+// AssignUpstream overrides cn's egress (clear: back to the default), then
+// rewrites cn's live rule over the caller's transport.
+func AssignUpstream(st *store.Store, actor string, enabled bool, confPath, cn, id string, clear bool, rewrite func(cn string) error) (UpstreamView, error) {
+	if !enabled {
+		return UpstreamView{}, ErrUpstreamsDisabled
+	}
+	before := UpstreamAuthActive(st)
+	cfg, err := LoadUpstreamConfig(st).Assign(cn, id, clear)
+	if err != nil {
+		return UpstreamView{}, err
+	}
+	warning, err := ApplyAssign(st, confPath, enabled, before, cfg, id)
+	if err != nil {
+		return UpstreamView{}, err
+	}
+	if err := rewrite(cn); err != nil {
+		return UpstreamView{}, err
+	}
+	v := ViewUpstreams(cfg, warning)
+	action := "upstream_assign"
+	v.Message = fmt.Sprintf("assigned: %s -> %s", cn, id)
+	if clear {
+		action, v.Message = "upstream_unassign", "cleared: "+cn
+	}
+	st.Audit(actor, action, cn)
+	return v, nil
+}
+
+// ReconcileUpstreams re-applies the persisted config and reports what's down.
+func ReconcileUpstreams(st *store.Store, actor string, enabled bool, apply Applier) (UpstreamView, error) {
+	if !enabled {
+		return UpstreamView{}, ErrUpstreamsDisabled
+	}
+	cfg := LoadUpstreamConfig(st)
+	v := ViewUpstreams(cfg, apply(cfg))
+	st.Audit(actor, "upstream_reconcile", "")
+	return v, nil
+}
+
+func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in upstream.Upstream
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	act(w)(AddUpstream(s.Store, u.Username, s.UpstreamsEnabled, in, s.applyUpstreams))
+}
+
+func (s *Server) handleUpstreamDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
+	act(w)(DeleteUpstream(s.Store, u.Username, s.UpstreamsEnabled, r.PathValue("id"), s.applyUpstreams))
+}
+
+func (s *Server) handleUpstreamSetDefault(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct{ ID string }
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	act(w)(SetDefaultUpstream(s.Store, u.Username, s.UpstreamsEnabled, in.ID, s.applyUpstreams))
+}
+
+func (s *Server) handleUpstreamAssign(w http.ResponseWriter, r *http.Request, u *store.User) {
+	var in struct {
+		CN, ID string
+		Clear  bool
+	}
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
+		return
+	}
+	act(w)(AssignUpstream(s.Store, u.Username, s.UpstreamsEnabled, s.ConfigPath, in.CN, in.ID, in.Clear, s.RewriteConnectedClientRule))
+}
+
+func (s *Server) handleUpstreamReconcile(w http.ResponseWriter, r *http.Request, u *store.User) {
+	act(w)(ReconcileUpstreams(s.Store, u.Username, s.UpstreamsEnabled, s.applyUpstreams))
 }

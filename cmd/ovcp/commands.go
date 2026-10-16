@@ -728,25 +728,6 @@ func cmdServe(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// statusOut is what `status -json` prints: the whole system in one object —
-// everything vpn|dns|telegram status and certificate list report
-// individually, without stitching four commands together.
-type statusOut struct {
-	Running       bool                       `json:"running"`
-	Pid           int                        `json:"pid,omitempty"`
-	Uptime        string                     `json:"uptime,omitempty"`     // openvpn child, empty if not running
-	OvcpUptime    string                     `json:"ovcpUptime,omitempty"` // serve process, empty if unreachable
-	Error         string                     `json:"error,omitempty"`
-	Clients       []controller.VPNClient     `json:"clients"`
-	DNSRunning    bool                       `json:"dnsRunning"`
-	DNSPid        int                        `json:"dnsPid,omitempty"`
-	DNSUptime     string                     `json:"dnsUptime,omitempty"`
-	CertsTotal    int                        `json:"certsTotal"`
-	CertsExpiring int                        `json:"certsExpiring"`
-	Telegram      *controller.TelegramStatus `json:"telegram,omitempty"` // nil: serve unreachable, couldn't ask
-	RoutingWarn   string                     `json:"routingWarning,omitempty"`
-}
-
 // fmtUptime renders a Go duration string ("3h2m1s"), or "" for the zero
 // time (not running / not known).
 func fmtUptime(t time.Time) string {
@@ -758,17 +739,17 @@ func fmtUptime(t time.Time) string {
 
 // printStatusText renders the one statusOut a status run ends up with,
 // whichever of the unknown/stopped/unavailable/running states it hit.
-func printStatusText(st statusOut) {
+func printStatusText(st api.Status) {
 	switch {
 	case st.Error != "" && !st.Running:
 		fmt.Println("OpenVPN: unknown —", st.Error)
 	case !st.Running:
 		fmt.Println(red("OpenVPN: stopped"))
 	case st.Error != "":
-		fmt.Printf("OpenVPN: running (pid %d, up %s)\n", st.Pid, st.Uptime)
+		fmt.Printf("OpenVPN: running (pid %d, up %s)\n", st.Pid, fmtUptime(st.StartedAt))
 		fmt.Println("Clients: unavailable —", st.Error)
 	default:
-		fmt.Println(green(fmt.Sprintf("OpenVPN: running (pid %d, up %s)", st.Pid, st.Uptime)))
+		fmt.Println(green(fmt.Sprintf("OpenVPN: running (pid %d, up %s)", st.Pid, fmtUptime(st.StartedAt))))
 		fmt.Printf("Clients: %d connected\n", len(st.Clients))
 		for _, c := range st.Clients {
 			fmt.Printf("  %-20s %-22s %-12s rx %d tx %d since %s\n",
@@ -782,12 +763,12 @@ func printStatusText(st statusOut) {
 		// unreachable — dns-status would fail identically, not really "stopped".
 		fmt.Println("DNS: unknown")
 	case st.DNSRunning:
-		fmt.Println(green(fmt.Sprintf("DNS: running (pid %d, up %s)", st.DNSPid, st.DNSUptime)))
+		fmt.Println(green(fmt.Sprintf("DNS: running (pid %d, up %s)", st.DNSPid, fmtUptime(st.DNSStartedAt))))
 	default:
 		fmt.Println(red("DNS: stopped"))
 	}
-	if st.OvcpUptime != "" {
-		fmt.Println("ovcp: up", st.OvcpUptime)
+	if u := fmtUptime(st.ServeStartedAt); u != "" {
+		fmt.Println("ovcp: up", u)
 	}
 	if st.CertsExpiring == 0 {
 		fmt.Printf("Certs: %d\n", st.CertsTotal)
@@ -805,63 +786,34 @@ func printStatusText(st statusOut) {
 	default:
 		fmt.Println(red("Telegram: stopped"))
 	}
-	if st.RoutingWarn != "" {
-		fmt.Println("warning:", st.RoutingWarn)
+	if st.RoutingWarning != "" {
+		fmt.Println("warning:", st.RoutingWarning)
 	}
 }
 
 func cmdStatus(fs *flag.FlagSet) func(ctx *cliContext) {
 	ctrl := ctrlFlag(fs, "")
 	return func(ctx *cliContext) {
-		st := statusOut{Clients: []controller.VPNClient{}}
-		// process line first (from serve); if serve/openvpn is down, there
-		// are no clients to list, so stop here.
-		r, err := controller.Control(*ctrl, "status")
-		switch {
-		case err != nil:
-			st.Error = err.Error()
-		case r.Pid == 0:
-			// running=false, no clients: nothing more to check, but serve
-			// answered so it's up even with the tunnel down
-			st.OvcpUptime = fmtUptime(r.ServeStartedAt)
-		default:
-			st.Running, st.Pid = true, r.Pid
-			st.Uptime = fmtUptime(r.StartedAt)
-			st.OvcpUptime = fmtUptime(r.ServeStartedAt)
-			// via serve's control socket, not a second dial to openvpn's mgmt
-			// socket — openvpn allows only one connected mgmt client, and serve already holds that slot.
-			if cl, err := controller.Clients(*ctrl); err != nil {
-				st.Error = err.Error()
-			} else {
-				st.Clients = cl
-			}
-		}
-
-		// dns-status/telegram-status share the same control socket the status
-		// call above already dialed — if that failed, these would fail
-		// identically; skip the guaranteed-redundant round trips.
-		serveUnreachable := st.Error != "" && !st.Running
-		if !serveUnreachable {
-			if dr, err := controller.Control(*ctrl, "dns-status"); err == nil && dr.Pid != 0 {
-				st.DNSRunning, st.DNSPid = true, dr.Pid
-				st.DNSUptime = fmtUptime(dr.StartedAt)
-			}
-		}
-
 		s := ctx.openStore()
 		defer s.Close()
-		if certs, err := s.AllCerts(ctx.p); err == nil {
-			st.CertsTotal, st.CertsExpiring = store.CertCounts(certs)
-		}
-		if !serveUnreachable {
-			if tg, err := controller.TelegramGetStatus(*ctrl); err == nil {
-				st.Telegram = &tg
-			}
-		}
-		st.RoutingWarn = controller.RoutingPrereqsWarning(upstreamsEnabled())
-
-		output(st, printStatusText)
+		output(api.BuildStatus(s, ctx.p, ctrlSource(*ctrl), upstreamsEnabled()), printStatusText)
 	}
+}
+
+// ctrlSource is api.StatusSource through a running serve's control socket.
+type ctrlSource string
+
+func (c ctrlSource) VPN() (controller.ControlResult, error) {
+	return controller.Control(string(c), "status")
+}
+func (c ctrlSource) DNS() (controller.ControlResult, error) {
+	return controller.Control(string(c), "dns-status")
+}
+func (c ctrlSource) Clients() ([]controller.VPNClient, error) {
+	return controller.Clients(string(c))
+}
+func (c ctrlSource) Telegram() (controller.TelegramStatus, error) {
+	return controller.TelegramGetStatus(string(c))
 }
 
 func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -977,14 +929,6 @@ func upstreamsEnabled() bool {
 	return upstream.Enabled(path)
 }
 
-// upstreamsReady dies with a clear error if nftables isn't usable — same
-// "fails cleanly without it" treatment dns commands get without dnsmasq.
-func upstreamsReady() {
-	if !upstreamsEnabled() {
-		die(fmt.Errorf("upstreams disabled: nftables not found on PATH, or OVCP_UPSTREAMS_ENABLED=false"))
-	}
-}
-
 // applyUpstreamsCLI relays through a running serve at sock (preserves its
 // live tracker); direct-applies as a fallback when serve isn't running.
 // Never fails — caller prints the returned warning.
@@ -995,20 +939,11 @@ func applyUpstreamsCLI(cfg upstream.Config, sock string) string {
 	return upstream.Warning(cfg.Upstreams)
 }
 
-// warnUpstream prints w to stderr if non-empty — same shape as warnDNSLeak.
-func warnUpstream(w string) {
+// warnLine prints a result's warning to stderr, if it has one.
+func warnLine(w string) {
 	if w != "" {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
-}
-
-// saveAndApplyUpstreamsCLI mirrors api.saveAndApplyUpstreams for the CLI's
-// three plain mutators (add/del/set-default): persist, reapply (warning
-// printed here), audit — the one tail all three share.
-func saveAndApplyUpstreamsCLI(s *store.Store, cfg upstream.Config, action, detail string) {
-	die(api.SaveUpstreamConfig(s, cfg))
-	warnUpstream(applyUpstreamsCLI(cfg, ctrlSock()))
-	s.Audit("cli", action, detail)
 }
 
 type upstreamStatusOut struct {
@@ -1099,35 +1034,22 @@ func cmdUpstreamAdd(afs *flag.FlagSet) func(ctx *cliContext) {
 	handshakeTimeout := afs.Int("handshake-timeout", 0, "SOCKS negotiation timeout in seconds, 0 = server default (higher for Tor, lower for a fast/local backend); -socks mode only")
 	desc := afs.String("desc", "", "description")
 	return func(ctx *cliContext) {
-		upstreamsReady()
 		s := ctx.openStore()
 		defer s.Close()
-		cfg, added, err := api.LoadUpstreamConfig(s).WithAdded(upstream.Upstream{
+		showUpstreams(api.AddUpstream(s, "cli", upstreamsEnabled(), upstream.Upstream{
 			ID: *id, Iface: *iface, Gateway: *gateway, SOCKS: *socks,
 			DialTimeout: *dialTimeout, HandshakeTimeout: *handshakeTimeout,
 			Description: *desc,
-		})
-		die(err)
-		saveAndApplyUpstreamsCLI(s, cfg, "upstream_add", *id)
-		output(msg("added: %s (table %d)", *id, added.Table), printMsg)
+		}, cliApplier))
 	}
 }
 
 func cmdUpstreamDel(dfs *flag.FlagSet) func(ctx *cliContext) {
 	id := dfs.String("id", "", "upstream id (required)")
 	return func(ctx *cliContext) {
-		upstreamsReady()
-		if *id == "" {
-			die(fmt.Errorf("-id required"))
-		}
 		s := ctx.openStore()
 		defer s.Close()
-		cfg, found := api.LoadUpstreamConfig(s).Without(*id)
-		if !found {
-			die(fmt.Errorf("upstream %q not found", *id))
-		}
-		saveAndApplyUpstreamsCLI(s, cfg, "upstream_del", *id)
-		output(msg("deleted: %s", *id), printMsg)
+		showUpstreams(api.DeleteUpstream(s, "cli", upstreamsEnabled(), *id, cliApplier))
 	}
 }
 
@@ -1135,24 +1057,12 @@ func cmdUpstreamSetDefault(sfs *flag.FlagSet) func(ctx *cliContext) {
 	id := sfs.String("id", "", "upstream id, empty turns it off")
 	clear := sfs.Bool("clear", false, "turn off the default (same as -id \"\")")
 	return func(ctx *cliContext) {
-		upstreamsReady()
 		if *clear {
 			*id = ""
 		}
 		s := ctx.openStore()
 		defer s.Close()
-		cfg, err := api.LoadUpstreamConfig(s).SetDefault(*id)
-		die(err)
-		action := "upstream_default_set"
-		if *id == "" {
-			action = "upstream_default_off"
-		}
-		saveAndApplyUpstreamsCLI(s, cfg, action, *id)
-		text := "default: " + *id
-		if *id == "" {
-			text = "default: off (host's own default route)"
-		}
-		output(msg("%s", text), printMsg)
+		showUpstreams(api.SetDefaultUpstream(s, "cli", upstreamsEnabled(), *id, cliApplier))
 	}
 }
 
@@ -1162,49 +1072,37 @@ func cmdUpstreamAssign(afs *flag.FlagSet) func(ctx *cliContext) {
 	clear := afs.Bool("clear", false, "clear this CN's override, fall back to default")
 	ctrl := ctrlFlag(afs, "")
 	return func(ctx *cliContext) {
-		upstreamsReady()
-		if *cn == "" {
-			die(fmt.Errorf("-cn required"))
-		}
-		if *clear == (*id != "") {
-			die(fmt.Errorf("exactly one of -id or -clear required"))
-		}
 		s := ctx.openStore()
 		defer s.Close()
-		before := api.UpstreamAuthActive(s)
-		cfg, err := api.LoadUpstreamConfig(s).Assign(*cn, *id, *clear)
-		die(err)
-		warning, err := api.ApplyAssign(s, dataPaths(ctx.dataDir).ServerConf, true, before, cfg, *id)
-		die(err)
-		warnUpstream(warning)
-		action := "upstream_assign"
-		if *clear {
-			action = "upstream_unassign"
+		// no serve running: no live rule to rewrite, it applies on reconnect
+		rewrite := func(cn string) error {
+			if err := controller.UpstreamAssign(*ctrl, cn); !errors.Is(err, controller.ErrServeDown) {
+				return err
+			}
+			return nil
 		}
-		s.Audit("cli", action, *cn)
-		// Best-effort: instantly rewrites an already-connected client's live
-		// rule; unreachable serve just means it applies on next reconnect.
-		if err := controller.UpstreamAssign(*ctrl, *cn); err != nil {
-			slog.Warn("upstream assign: live rewrite skipped", "cn", *cn, "err", err)
-		}
-		text := fmt.Sprintf("assigned: %s -> %s", *cn, *id)
-		if *clear {
-			text = "cleared: " + *cn
-		}
-		output(msg("%s", text), printMsg)
+		showUpstreams(api.AssignUpstream(s, "cli", upstreamsEnabled(), dataPaths(ctx.dataDir).ServerConf, *cn, *id, *clear, rewrite))
 	}
+}
+
+// cliApplier is api.Applier through a running serve, else applied directly.
+func cliApplier(cfg upstream.Config) string { return applyUpstreamsCLI(cfg, ctrlSock()) }
+
+// showUpstreams prints an upstream mutation's message, its warning on stderr.
+func showUpstreams(v api.UpstreamView, err error) {
+	die(err)
+	warnLine(v.Warning)
+	output(v, func(v api.UpstreamView) { fmt.Println(v.Message) })
 }
 
 func cmdUpstreamReconcile(rfs *flag.FlagSet) func(ctx *cliContext) {
 	ctrl := ctrlFlag(rfs, "")
 	return func(ctx *cliContext) {
-		upstreamsReady()
 		s := ctx.openStore()
 		defer s.Close()
-		cfg := api.LoadUpstreamConfig(s)
-		warnUpstream(applyUpstreamsCLI(cfg, *ctrl))
-		s.Audit("cli", "upstream_reconcile", "")
-		output(api.ViewUpstreams(cfg, ""), func(r api.UpstreamView) {
+		v := must(api.ReconcileUpstreams(s, "cli", upstreamsEnabled(), func(cfg upstream.Config) string { return applyUpstreamsCLI(cfg, *ctrl) }))
+		warnLine(v.Warning)
+		output(v, func(r api.UpstreamView) {
 			inUse := make(map[string]bool, len(r.PerCN)+1)
 			if r.Default != "" {
 				inUse[r.Default] = true
@@ -1304,22 +1202,13 @@ func cmdDNS(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// warnDNSLeak prints api.DNSLeakWarning's advisory (if any) after a vpn/dns
-// config save — same non-fatal check the web UI shows inline.
-func warnDNSLeak(s *store.Store) {
-	if w := api.DNSLeakWarning(api.LoadConfig(s), api.LoadDNSConfig(s)); w != "" {
-		fmt.Fprintln(os.Stderr, "warning:", w)
-	}
-}
-
 func cmdDNSConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		output(api.LoadDNSConfig(s), func(c api.DNSConfig) {
-			fmt.Println("block-internet:", boolText(c.BlockInternet))
-		})
-		warnDNSLeak(s)
+		v := api.ViewDNS(s)
+		warnLine(v.Warning)
+		output(v, func(v api.DNSView) { fmt.Println("block-internet:", boolText(v.BlockInternet)) })
 	}
 }
 
@@ -1335,15 +1224,10 @@ func cmdDNSConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 			die(err)
 			cfg.BlockInternet = on
 		}
-		die(api.SaveDNSConfig(s, cfg))
-		action := "off"
-		if cfg.BlockInternet {
-			action = "on"
-		}
-		s.Audit("cli", "dns_block_internet_"+action, "")
-		warnDNSLeak(s)
-		output(cfg, func(c api.DNSConfig) {
-			fmt.Println("block-internet:", boolText(c.BlockInternet), "(restart dns to apply)")
+		v := must(api.SetDNSConfig(s, "cli", cfg))
+		warnLine(v.Warning)
+		output(v, func(v api.DNSView) {
+			fmt.Println("block-internet:", boolText(v.BlockInternet), "(restart dns to apply)")
 			fmt.Println("saved")
 		})
 	}
@@ -1492,7 +1376,7 @@ func cmdVPNConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
 		output(api.LoadConfig(s), printConfigText)
-		warnDNSLeak(s)
+		warnLine(api.ViewDNS(s).Warning)
 	}
 }
 
@@ -1600,7 +1484,7 @@ func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 			return
 		}
 		s.Audit("cli", "config_change", "")
-		warnDNSLeak(s)
+		warnLine(api.ViewDNS(s).Warning)
 		output(cfg, func(c ovpnconf.Config) {
 			printDiff(diff)
 			fmt.Println("saved; run `ovcp vpn restart` to apply")
@@ -1617,18 +1501,10 @@ func cmdVPNConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		cfg, err := apply(api.LoadConfig(s))
 		die(err)
-		diff, err := api.PreviewVPNConfig(s, cfg)
-		die(err)
-		output(previewOut{diff, len(diff) > 0}, func(o previewOut) { printDiff(o.Diff) })
-		if w := api.DNSLeakWarning(cfg, api.LoadDNSConfig(s)); w != "" {
-			fmt.Fprintln(os.Stderr, "warning:", w)
-		}
+		pv := must(api.PreviewVPNConfig(s, cfg))
+		warnLine(pv.Warning)
+		output(pv, func(o api.Preview) { printDiff(o.Diff) })
 	}
-}
-
-type previewOut struct {
-	Diff    []string `json:"diff"`
-	Changed bool     `json:"changed"`
 }
 
 // caBodies wires ca's ops through opDispatch — the most sensitive surface,
@@ -1754,8 +1630,10 @@ func cmdDebugOp(op string) opBody {
 	return func(ofs *flag.FlagSet) func(ctx *cliContext) {
 		ctrl := ctrlFlag(ofs, "")
 		return func(ctx *cliContext) {
-			_, err := controller.Control(*ctrl, "debug "+op)
-			die(err)
+			die(controller.Debug(*ctrl, op == "on"))
+			s := ctx.openStore()
+			s.Audit("cli", "debug_"+op, "")
+			s.Close()
 			output(map[string]bool{"debug": op == "on"}, func(o map[string]bool) {
 				fmt.Println("debug logging", op)
 			})

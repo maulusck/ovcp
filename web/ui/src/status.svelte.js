@@ -23,16 +23,19 @@ export function fmtUptime(sec) {
   return (sec / 86400).toFixed(1) + 'd'
 }
 
+// since: an RFC 3339 start time → seconds up, 0 for Go's zero time (not running).
+const since = (t) => (t && !t.startsWith('0001') ? (Date.now() - Date.parse(t)) / 1000 : 0)
+
 export async function pollOnce() {
   try {
     const d = await api('GET', '/status')
     backend.up = true; misses = 0
-    vpn.up = d.vpn_up
+    vpn.up = d.running && !d.error // a pid but no readable client list is not up
     vpn.clients = d.clients?.length ?? 0
     vpn.clientList = d.clients || []
-    vpn.uptime = fmtUptime(d.vpn_uptime_seconds)
-    vpn.ovcpUptime = fmtUptime(d.ovcp_uptime_seconds)
-    if (d.vpn_up) {
+    vpn.uptime = fmtUptime(since(d.startedAt))
+    vpn.ovcpUptime = fmtUptime(since(d.serveStartedAt))
+    if (vpn.up) {
       vpn.phase = 'ok'
       deadline = 0
     } else if (vpn.phase === 'reloading' && Date.now() < deadline) {
@@ -40,9 +43,9 @@ export async function pollOnce() {
     } else {
       vpn.phase = 'down'
     }
-    dns.up = !!d.dns_up
-    dns.uptime = fmtUptime(d.dns_uptime_seconds)
-    if (d.dns_up) {
+    dns.up = !!d.dnsRunning
+    dns.uptime = fmtUptime(since(d.dnsStartedAt))
+    if (dns.up) {
       dns.phase = 'ok'
       dnsDeadline = 0
     } else if (dns.phase === 'reloading' && Date.now() < dnsDeadline) {
@@ -51,8 +54,8 @@ export async function pollOnce() {
       dns.phase = 'down'
     }
     if (d.telegram) Object.assign(telegram, d.telegram)
-    upstreams.warning = d.upstream_warning || ''
-    vpn.routingWarning = d.routing_warning || ''
+    upstreams.warning = d.upstreamWarning || ''
+    vpn.routingWarning = d.routingWarning || ''
     return d
   } catch (err) {
     // api() throws {status, error} once the server has answered (even with an
@@ -68,7 +71,7 @@ export async function pollOnce() {
     if (!(dns.phase === 'reloading' && Date.now() < dnsDeadline)) {
       dns.phase = 'down'; dns.up = false; dns.uptime = ''
     }
-    return { vpn_up: false, clients: [] }
+    return { running: false, clients: [] }
   }
 }
 

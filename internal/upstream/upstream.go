@@ -188,6 +188,9 @@ func (c Config) validated(mutate func(*Config)) (Config, error) {
 // empty-string value — Resolve would return that directly instead of
 // falling through to Default.
 func (c Config) Assign(cn, id string, clear bool) (Config, error) {
+	if cn == "" || clear == (id != "") {
+		return c, fmt.Errorf("upstream: assign needs a cn and exactly one of an id or clear")
+	}
 	return c.validated(func(cfg *Config) {
 		perCN := make(map[string]string, len(c.PerCN)+1)
 		for k, v := range c.PerCN {

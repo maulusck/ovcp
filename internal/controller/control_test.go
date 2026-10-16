@@ -124,13 +124,13 @@ func TestControlDebugToggle(t *testing.T) {
 	}
 	defer l.Close()
 
-	if _, err := Control(sock, "debug on"); err != nil {
+	if err := Debug(sock, true); err != nil {
 		t.Fatal(err)
 	}
 	if level.Level() != slog.LevelDebug {
 		t.Fatalf("level = %v, want Debug", level.Level())
 	}
-	if _, err := Control(sock, "debug off"); err != nil {
+	if err := Debug(sock, false); err != nil {
 		t.Fatal(err)
 	}
 	if level.Level() != slog.LevelInfo {
