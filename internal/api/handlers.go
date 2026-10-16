@@ -471,42 +471,35 @@ func mergedConfig(cur ovpnconf.Config, r *http.Request) (ovpnconf.Config, bool) 
 }
 
 func (s *Server) handleVPNConfigPut(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cur := s.LoadConfig()
-	in, ok := mergedConfig(cur, r)
+	in, ok := mergedConfig(s.LoadConfig(), r)
 	if !ok {
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := in.Validate(); err != nil {
+	diff, err := SetVPNConfig(s.Store, s.ConfigPath, in)
+	if err != nil {
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	if err := s.SaveConfig(in); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
+	if len(diff) > 0 {
+		s.Store.Audit(u.Username, "config_change", "")
 	}
-	if err := in.WriteAtomic(s.ConfigPath); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "config_change", "")
 	jsonOK(w, in)
 }
 
 // handleVPNConfigPreview is handleVPNConfigPut's dry run: same merge+validation,
 // but diffs against the persisted config instead of writing.
 func (s *Server) handleVPNConfigPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cur := s.LoadConfig()
-	in, ok := mergedConfig(cur, r)
+	in, ok := mergedConfig(s.LoadConfig(), r)
 	if !ok {
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := in.Validate(); err != nil {
+	diff, err := PreviewVPNConfig(s.Store, in)
+	if err != nil {
 		jsonErr(w, 400, err.Error())
 		return
 	}
-	diff := ovpnconf.Diff(cur.Render(), in.Render())
 	warning := DNSLeakWarning(in, LoadDNSConfig(s.Store))
 	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0, "warning": warning})
 }

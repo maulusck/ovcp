@@ -246,12 +246,33 @@ func LoadConfig(st *store.Store) ovpnconf.Config {
 	return ovpnconf.Load(raw)
 }
 
-// SaveConfig persists cfg to the settings store (not server.conf itself —
-// pair with cfg.WriteAtomic for that). Exported so callers outside this
-// package (e.g. cmd/ovcp's boot sequence) reuse it instead of re-marshaling.
-func (s *Server) SaveConfig(cfg ovpnconf.Config) error {
+// SaveConfig persists cfg to the settings store, not server.conf itself:
+// pair it with cfg.WriteAtomic, or use SetVPNConfig.
+func SaveConfig(st *store.Store, cfg ovpnconf.Config) error {
 	raw, _ := json.Marshal(cfg)
-	return s.Store.SetSetting("vpn_config", string(raw))
+	return st.SetSetting("vpn_config", string(raw))
+}
+
+// PreviewVPNConfig validates cfg and returns the server.conf change it makes.
+func PreviewVPNConfig(st *store.Store, cfg ovpnconf.Config) ([]string, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	cur := LoadConfig(st)
+	return ovpnconf.Diff(cur.Render(), cfg.Render()), nil
+}
+
+// SetVPNConfig is every server-config change, CLI or API: PreviewVPNConfig,
+// then persisted with server.conf, only when that diff isn't empty.
+func SetVPNConfig(st *store.Store, confPath string, cfg ovpnconf.Config) ([]string, error) {
+	diff, err := PreviewVPNConfig(st, cfg)
+	if err != nil || len(diff) == 0 {
+		return nil, err
+	}
+	if err := SaveConfig(st, cfg); err != nil {
+		return nil, err
+	}
+	return diff, cfg.WriteAtomic(confPath)
 }
 
 // SetManagementClientAuth rewrites vpn_config's ManagementClientAuth flag
@@ -259,14 +280,9 @@ func (s *Server) SaveConfig(cfg ovpnconf.Config) error {
 // whichever feature needs the toggle (today: upstream's per-CN
 // activation) instead of each caller reimplementing load/save/WriteAtomic.
 func SetManagementClientAuth(s *store.Store, confPath string, active bool) error {
-	raw, _ := s.GetSetting("vpn_config")
-	cfg := ovpnconf.Load(raw)
+	cfg := LoadConfig(s)
 	cfg.ManagementClientAuth = active
-	enc, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	if err := s.SetSetting("vpn_config", string(enc)); err != nil {
+	if err := SaveConfig(s, cfg); err != nil {
 		return err
 	}
 	return cfg.WriteAtomic(confPath)

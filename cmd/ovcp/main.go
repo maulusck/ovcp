@@ -262,7 +262,7 @@ func runServe(dataDir, listen, sock, ctrl string, p *pki.PKI, s *store.Store) {
 	fillPaths(&cfg, dataDir, sock)
 	perCNActive := upstreamsEnabled && api.UpstreamAuthActive(s)
 	cfg.ManagementClientAuth = perCNActive
-	die(srv.SaveConfig(cfg))
+	die(api.SaveConfig(s, cfg))
 	die(cfg.WriteAtomic(srv.ConfigPath))
 	srv.ReconcileUpstreams() // same path every other upstream-mutating op uses; no-ops if disabled
 	// Always wired: inert unless management-client-auth is actually in the
@@ -455,8 +455,7 @@ func newDNSSupervisor(pp paths, bin string, s *store.Store) *controller.Supervis
 		Name: "dnsmasq",
 		Bin:  bin,
 		PreStart: func() []string {
-			raw, _ := s.GetSetting("vpn_config")
-			ip, err := ovpnconf.Load(raw).ServerTunIP()
+			ip, err := api.LoadConfig(s).ServerTunIP()
 			if err != nil {
 				slog.Warn("dnsmasq: server tun IP", "err", err)
 				ip = net.IPv4zero

@@ -418,6 +418,21 @@ func TestConfigPutValidation(t *testing.T) {
 	if r := e.req("PUT", "/api/vpn/config", `{"Proto":"tcp","Port":443}`, true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}
+	// the same values again change nothing: no write, no audit line
+	if r := e.req("PUT", "/api/vpn/config", `{"Proto":"tcp","Port":443}`, true); r.StatusCode != 200 {
+		t.Fatal(r.Status)
+	}
+	var audit []struct{ Action string }
+	json.NewDecoder(e.req("GET", "/api/audit", "", false).Body).Decode(&audit)
+	n := 0
+	for _, a := range audit {
+		if a.Action == "config_change" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("config_change audited %d times, want 1 (the no-op PUT must not audit)", n)
+	}
 	if r := e.req("POST", "/api/vpn/restart", "", true); r.StatusCode != 200 {
 		t.Fatal(r.Status)
 	}

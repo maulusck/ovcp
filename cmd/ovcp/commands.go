@@ -710,8 +710,7 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 			cfg.PushInternalDNS = true // dnsmasq present: internal names resolve out of the box
 		}
 		fillPaths(&cfg, ctx.dataDir, *mgmt)
-		raw, _ := json.Marshal(cfg)
-		die(s.SetSetting("vpn_config", string(raw)))
+		die(api.SaveConfig(s, cfg))
 		die(cfg.WriteAtomic(pp.ServerConf))
 		progress("[4/5] server config: %s\n", pp.ServerConf)
 
@@ -930,7 +929,7 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 		pp := dataPaths(ctx.dataDir)
 		s := ctx.openStore()
 		certs, err := s.ListCerts()
-		raw, _ := s.GetSetting("vpn_config")
+		cfg := api.LoadConfig(s)
 		s.Close()
 		die(err)
 		out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
@@ -946,7 +945,7 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 				}
 			}
 		}
-		if ip, err := ovpnconf.Load(raw).ServerTunIP(); err == nil {
+		if ip, err := cfg.ServerTunIP(); err == nil {
 			liveIP[adminCertCN(ctx.dataDir)] = ip.String()
 		}
 		rows := []recordOut{}
@@ -1433,8 +1432,7 @@ func cmdDNS(fs *flag.FlagSet) func(ctx *cliContext) {
 // warnDNSLeak prints api.DNSLeakWarning's advisory (if any) after a vpn/dns
 // config save — same non-fatal check the web UI shows inline.
 func warnDNSLeak(s *store.Store) {
-	raw, _ := s.GetSetting("vpn_config")
-	if w := api.DNSLeakWarning(ovpnconf.Load(raw), api.LoadDNSConfig(s)); w != "" {
+	if w := api.DNSLeakWarning(api.LoadConfig(s), api.LoadDNSConfig(s)); w != "" {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
 }
@@ -1635,8 +1633,7 @@ func cmdVPNConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("vpn_config")
-		output(ovpnconf.Load(raw), printConfigText)
+		output(api.LoadConfig(s), printConfigText)
 		warnDNSLeak(s)
 	}
 }
@@ -1736,19 +1733,14 @@ func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("vpn_config")
-		cur := ovpnconf.Load(raw)
-		cfg, err := apply(cur)
+		cfg, err := apply(api.LoadConfig(s))
 		die(err)
-		die(cfg.Validate())
-		diff := ovpnconf.Diff(cur.Render(), cfg.Render())
+		diff, err := api.SetVPNConfig(s, dataPaths(ctx.dataDir).ServerConf, cfg)
+		die(err)
 		if len(diff) == 0 {
 			output(cfg, func(c ovpnconf.Config) { printDiff(diff) })
 			return
 		}
-		enc, _ := json.Marshal(cfg)
-		die(s.SetSetting("vpn_config", string(enc)))
-		die(cfg.WriteAtomic(dataPaths(ctx.dataDir).ServerConf))
 		s.Audit("cli", "config_change", "")
 		warnDNSLeak(s)
 		output(cfg, func(c ovpnconf.Config) {
@@ -1765,12 +1757,10 @@ func cmdVPNConfigPreview(fs *flag.FlagSet) func(ctx *cliContext) {
 	return func(ctx *cliContext) {
 		s := ctx.openStore()
 		defer s.Close()
-		raw, _ := s.GetSetting("vpn_config")
-		cur := ovpnconf.Load(raw)
-		cfg, err := apply(cur)
+		cfg, err := apply(api.LoadConfig(s))
 		die(err)
-		die(cfg.Validate())
-		diff := ovpnconf.Diff(cur.Render(), cfg.Render())
+		diff, err := api.PreviewVPNConfig(s, cfg)
+		die(err)
 		output(previewOut{diff, len(diff) > 0}, func(o previewOut) { printDiff(o.Diff) })
 		if w := api.DNSLeakWarning(cfg, api.LoadDNSConfig(s)); w != "" {
 			fmt.Fprintln(os.Stderr, "warning:", w)
