@@ -1579,6 +1579,21 @@ func TestRecordCommand(t *testing.T) {
 	if !strings.Contains(out.Custom, "10.8.0.50 pihole") {
 		t.Fatalf("record list -json custom = %q, want the edited entry", out.Custom)
 	}
+
+	// a renewal revokes the old server cert: only the active one shows the live IP.
+	if r := run(t, env, "certificate", "renew"); r.code != 0 {
+		t.Fatalf("renew: %+v", r)
+	}
+	rj = run(t, withEnv(env, "OVCP_JSON=1"), "record", "list")
+	out = recordListOut{}
+	if err := json.Unmarshal([]byte(rj.stdout), &out); err != nil {
+		t.Fatalf("record list -json: %v (%+v)", err, rj)
+	}
+	for _, c := range out.Certs {
+		if c.Kind == "server" && (c.IP != "") == (c.Status == "REVOKED") {
+			t.Fatalf("server row %+v: the IP belongs to the active cert only", c)
+		}
+	}
 }
 
 // TestDropRoot: as (userns) root, an invocation becomes OVCP_USER in place —

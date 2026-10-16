@@ -960,7 +960,8 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 		out, err := filterSortCerts(certs, *status, *kind, *sortBy, *desc)
 		die(err)
 		customData, _ := os.ReadFile(pp.CustomHosts)
-		// liveIP: CN -> resolvable IP right now.
+		// liveIP: CN -> resolvable IP right now; only the CN's active cert holds it
+		// (the CRL refuses a revoked cert, and one client cert is active per CN).
 		liveIP := map[string]string{}
 		if live, err := controller.Clients(ctrlSock()); err == nil {
 			for _, cl := range live {
@@ -974,7 +975,11 @@ func cmdRecordList(lfs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		rows := []recordOut{}
 		for _, c := range out {
-			rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS, liveIP[c.CN]})
+			ip := ""
+			if c.RevokedAt == nil {
+				ip = liveIP[c.CN]
+			}
+			rows = append(rows, recordOut{certOut{certStatus(c), c.Kind, c.CN, c.Serial, c.NotAfter}, c.IncludeDNS, ip})
 		}
 		output(recordListOut{rows, string(customData)}, func(o recordListOut) {
 			fmt.Println("Certificate records:")
