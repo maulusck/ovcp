@@ -175,7 +175,7 @@ var (
 	certOps      = []string{"issue", "list", "revoke", "renew"}
 	certOpDesc   = map[string]string{
 		"issue": "issue or renew a client cert (-export for a .ovpn)", "list": "list certs, filter/sort",
-		"revoke": "revoke a cert, regen CRL", "renew": "renew or rename the server cert",
+		"revoke": "revoke a client cert, regen CRL", "renew": "renew or rename the server cert",
 	}
 	caOps    = []string{"rotate", "renew", "status"}
 	caOpDesc = map[string]string{
@@ -214,7 +214,7 @@ var (
 	upstreamOps    = []string{"list", "add", "del", "set-default", "assign", "reconcile", "status"}
 	upstreamOpDesc = map[string]string{
 		"list": "configured upstreams and the active default",
-		"add":  "define one (-id, -iface, [-gateway], [-desc])",
+		"add":  "define one (-id, -iface [-gateway] | -socks URL, [-desc])",
 		"del":  "remove one (-id)", "set-default": "switch the active exit (-id | -clear)",
 		"assign":    "per-client override (-cn, -id | -clear)",
 		"reconcile": "re-apply and report which upstreams are up/down",
@@ -451,6 +451,7 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 			die(fmt.Errorf("-serial required"))
 		}
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
+		die(ctx.p.CheckPassphrase(pass)) // before the store: a revoked row must reach the CRL
 		s := ctx.openStore()
 		defer s.Close()
 		cn, err := s.Revoke(*serial, time.Now())

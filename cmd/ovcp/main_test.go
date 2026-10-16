@@ -861,6 +861,32 @@ func TestRenewRefusesNonexistentCert(t *testing.T) {
 	}
 }
 
+// TestRevokeWrongPassphraseKeepsCert: a revoke whose CRL can't be signed
+// must leave the cert active, never revoked in the store but absent from the CRL.
+func TestRevokeWrongPassphraseKeepsCert(t *testing.T) {
+	env := baseEnv(t)
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com", "-admin", ""); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "certificate", "issue", "-cn", "alice"); r.code != 0 {
+		t.Fatalf("issue: %+v", r)
+	}
+	var rows []certOut
+	assertCleanJSON(t, run(t, withEnv(env, "OVCP_JSON=1"), "certificate", "list"), &rows)
+	var serial string
+	for _, c := range rows {
+		if c.CN == "alice" {
+			serial = c.Serial
+		}
+	}
+	if r := run(t, withEnv(env, "OVCP_CA_PASSPHRASE=Wrong-but-strong-9"), "certificate", "revoke", "-serial", serial); r.code == 0 {
+		t.Fatalf("revoke with a wrong passphrase must fail: %+v", r)
+	}
+	if r := run(t, env, "certificate", "revoke", "-serial", serial); r.code != 0 {
+		t.Fatalf("revoke with the right passphrase must still work: %+v", r)
+	}
+}
+
 // TestRenewClient covers client renewal via `certificate issue -renew`:
 // revokes the outgoing cert, issues a fresh one under the same CN, and
 // hands back usable key material (no escrow), inline or to files with -out.
