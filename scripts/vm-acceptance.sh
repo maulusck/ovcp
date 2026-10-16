@@ -2,10 +2,12 @@
 # Live acceptance: `scripts/vm-acceptance.sh purge` resets both machines (rebooting
 # the client) and verifies the clean slate; `apk` installs the .apk on the client
 # (OpenRC) and checks it; plain `scripts/vm-acceptance.sh` then
-# builds a .deb, installs it here (systemd) and drives the Alpine client
-# $OVCP_TEST_VM. Host uplink, address and gateway come from the default
-# route. Needs passwordless sudo, BUILD.md's build tools, python3, nft and
-# key-auth root ssh to the VM; nothing else on either machine. Purge again afterwards.
+# builds a .deb, installs it here (systemd) and drives the client.
+# Host: Debian with systemd, passwordless sudo, BUILD.md's build tools, python3, nft.
+# Client: $OVCP_TEST_VM (default root@10.254.254.3), any plain Alpine install on
+# this host's LAN with internet access and key-auth root ssh. Uplinks, addresses
+# and gateways come from each machine's default route; packages are installed
+# idempotently. Purge again afterwards.
 set -u
 T=$(mktemp -d)
 export PATH=/usr/sbin:$PATH
@@ -147,6 +149,7 @@ t "profile issued: remote $SRV, 4 PEM blocks" "grep -q '^remote $SRV 1194' $T/vm
 echo "== vm3 (fresh boot)"
 timeout 180 sh -c "until ssh -o BatchMode=yes -o ConnectTimeout=3 $VM true 2>/dev/null; do sleep 3; done"
 t "vm3 reachable after reboot" "C true"
+VMIF=$(C "ip route show default | awk '{print \$5; exit}'")
 t "vm3 tools" "C 'apk add -q openvpn bind-tools curl iputils >/dev/null; which openvpn dig curl traceroute'"
 scp -q $T/vm3.ovpn $VM:/root/vm3.ovpn
 C 'modprobe tun; sysctl -qw net.ipv4.conf.all.rp_filter=2 net.ipv4.conf.default.rp_filter=2'
@@ -194,7 +197,7 @@ table inet spoofcheck {
 	}
 }
 NFT
-C "ip addr add 10.8.0.99/32 dev eth0; ip route add 1.1.1.1/32 via $SRV dev eth0 src 10.8.0.99; for i in 1 2 3; do dig +tries=1 +time=1 -b 10.8.0.99 @1.1.1.1 example.com >/dev/null 2>&1; done; ip route del 1.1.1.1/32 via $SRV dev eth0; ip addr del 10.8.0.99/32 dev eth0"
+C "ip addr add 10.8.0.99/32 dev $VMIF; ip route add 1.1.1.1/32 via $SRV dev $VMIF src 10.8.0.99; for i in 1 2 3; do dig +tries=1 +time=1 -b 10.8.0.99 @1.1.1.1 example.com >/dev/null 2>&1; done; ip route del 1.1.1.1/32 via $SRV dev $VMIF; ip addr del 10.8.0.99/32 dev $VMIF"
 SPOOF=$(sudo -n nft list chain inet spoofcheck c | grep -o 'packets [0-9]*' | awk '{print $2}' | tr '\n' ' ')
 t "spoofed 10.8.0.99 from LAN arrived (control: $SPOOF)" "[ \$(echo $SPOOF | cut -d' ' -f1) -gt 0 ]"
 t "spoofed packets NOT marked for the upstream" "[ \$(echo $SPOOF | cut -d' ' -f2) -eq 0 ]"
