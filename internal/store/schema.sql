@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
+-- the table holds live sessions only: each login sweeps the expired ones,
+-- and a password change ends every session the old password opened.
+CREATE TRIGGER IF NOT EXISTS sessions_sweep AFTER INSERT ON sessions
+BEGIN DELETE FROM sessions WHERE expires_at <= NEW.created_at; END;
+CREATE TRIGGER IF NOT EXISTS sessions_end_on_password AFTER UPDATE OF pass_hash ON users
+BEGIN DELETE FROM sessions WHERE user_id = NEW.id; END;
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id      INTEGER PRIMARY KEY,

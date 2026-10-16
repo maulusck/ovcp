@@ -88,7 +88,9 @@ TOTP 2FA, rate\-limited logins, and a full audit log (\fBaudit\fR). Failed
 logins lock out a username+IP pair after 5 attempts within 15 minutes,
 self\-clearing once the window passes; a separate, looser limit locks out
 the username alone after 20 attempts in the same window, to catch a brute
-force spread across many source IPs.
+force spread across many source IPs. A password change (\fBuser passwd\fR
+or the web UI) ends every session of that user, and a deleted or disabled
+user's sessions stop working at once.
 .PP
 \fBvpn config set \-extra\fR (server config) and
 \fBcertificate issue \-export\fR's \fB\-custom\-opts\fR (one client's profile) both

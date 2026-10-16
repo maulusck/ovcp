@@ -30,6 +30,16 @@ func TestSessionExpiry(t *testing.T) {
 	if u, err := s.SessionUser("live"); err != nil || u == nil || u.Username != "alice" {
 		t.Fatalf("live session must resolve, got %+v err=%v", u, err)
 	}
+	var n int
+	if s.db.QueryRow(`SELECT count(*) FROM sessions`).Scan(&n); n != 1 {
+		t.Fatalf("sessions = %d, want 1: a login sweeps the expired ones", n)
+	}
+	if err := s.SetUserPassword("alice", "hash2"); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.SessionUser("live"); u != nil {
+		t.Fatal("a password change must end the user's sessions")
+	}
 }
 
 func TestTOTPSecretEncryptedAtRest(t *testing.T) {
