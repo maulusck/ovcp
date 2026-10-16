@@ -1477,13 +1477,12 @@ func cmdVPNConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		defer s.Close()
 		cfg, err := apply(api.LoadConfig(s))
 		die(err)
-		diff, err := api.SetVPNConfig(s, dataPaths(ctx.dataDir).ServerConf, cfg)
+		diff, err := api.SetVPNConfig(s, "cli", dataPaths(ctx.dataDir).ServerConf, cfg)
 		die(err)
 		if len(diff) == 0 {
 			output(cfg, func(c ovpnconf.Config) { printDiff(diff) })
 			return
 		}
-		s.Audit("cli", "config_change", "")
 		warnLine(api.ViewDNS(s).Warning)
 		output(cfg, func(c ovpnconf.Config) {
 			printDiff(diff)
@@ -1669,26 +1668,18 @@ func cmdTelegramConfigGet(_ *flag.FlagSet) func(ctx *cliContext) {
 
 // cmdTelegramConfigSet: token and admin are independently optional — -token
 // is a flag, not a value, since a secret has no business on the command line.
-// Admin applies before token: SetToken wipes the chat id on any real change, so setting both needs SetAdmin's goodbye message sent first.
 func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	setToken := fs.Bool("token", false, "prompt for (or read $OVCP_TELEGRAM_TOKEN) a new bot token")
 	admin := fs.String("admin", os.Getenv("OVCP_TELEGRAM_ADMIN"),
 		"admin Telegram numeric id or @username (unchanged if omitted; env: OVCP_TELEGRAM_ADMIN)")
 	return func(ctx *cliContext) {
-		if !*setToken && *admin == "" {
-			die(fmt.Errorf("nothing to set: pass -token and/or -admin"))
+		var token string
+		if *setToken {
+			token = string(readSecret("Telegram bot token", "OVCP_TELEGRAM_TOKEN", false))
 		}
 		s := ctx.openStore()
 		defer s.Close()
-		if *admin != "" {
-			die(telegram.SetAdmin(s, *admin))
-			s.Audit("cli", "telegram_admin_change", "admin="+*admin)
-		}
-		if *setToken {
-			token := readSecret("Telegram bot token", "OVCP_TELEGRAM_TOKEN", false)
-			die(telegram.SetToken(s, string(token)))
-			s.Audit("cli", "telegram_token_change", "")
-		}
+		die(api.SetTelegram(s, "cli", *admin, token))
 		output(telegram.ConfigStatus(s), func(st controller.TelegramStatus) {
 			fmt.Println("token-set:", boolText(st.TokenSet))
 			fmt.Println("admin:    ", st.Admin)

@@ -274,7 +274,7 @@ func PreviewVPNConfig(st *store.Store, cfg ovpnconf.Config) (Preview, error) {
 
 // SetVPNConfig is every server-config change, CLI or API: PreviewVPNConfig,
 // then persisted with server.conf, only when that diff isn't empty.
-func SetVPNConfig(st *store.Store, confPath string, cfg ovpnconf.Config) ([]string, error) {
+func SetVPNConfig(st *store.Store, actor, confPath string, cfg ovpnconf.Config) ([]string, error) {
 	pv, err := PreviewVPNConfig(st, cfg)
 	if err != nil || !pv.Changed {
 		return nil, err
@@ -283,7 +283,11 @@ func SetVPNConfig(st *store.Store, confPath string, cfg ovpnconf.Config) ([]stri
 	if err := SaveConfig(st, cfg); err != nil {
 		return nil, err
 	}
-	return diff, cfg.WriteAtomic(confPath)
+	if err := cfg.WriteAtomic(confPath); err != nil {
+		return nil, err
+	}
+	st.Audit(actor, "config_change", "")
+	return diff, nil
 }
 
 // SetManagementClientAuth rewrites vpn_config's ManagementClientAuth flag

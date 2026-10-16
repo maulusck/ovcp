@@ -757,12 +757,14 @@ func TestStatsEndpoint(t *testing.T) {
 	die(s.AddClientSample(t0, "alice", 100, 200))
 	die(s.AddClientSample(t0, "bob", 10, 20))
 	die(s.AddClientSample(t1, "alice", 150, 250))
+	die(s.EndSession(store.ClientSession{CN: "bob", ConnectedAt: t0, DisconnectedAt: t1}))
 
 	var out struct {
 		Samples []struct {
 			Clients              int
 			BytesRecv, BytesSent uint64
 		}
+		Sessions []struct{ CN string }
 	}
 
 	r := e.req("GET", "/api/stats", "", false)
@@ -775,6 +777,9 @@ func TestStatsEndpoint(t *testing.T) {
 	json.NewDecoder(r.Body).Decode(&out)
 	if r.StatusCode != 200 || len(out.Samples) != 2 || out.Samples[1].BytesRecv != 150 {
 		t.Fatalf("alice-scoped samples: status=%d %+v", r.StatusCode, out.Samples)
+	}
+	if len(out.Sessions) != 0 {
+		t.Fatalf("alice-scoped sessions must not include bob's: %+v", out.Sessions)
 	}
 
 	r = e.req("GET", "/api/stats?cn=nobody", "", false)

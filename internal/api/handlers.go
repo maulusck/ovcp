@@ -455,13 +455,9 @@ func (s *Server) handleVPNConfigPut(w http.ResponseWriter, r *http.Request, u *s
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	diff, err := SetVPNConfig(s.Store, s.ConfigPath, in)
-	if err != nil {
+	if _, err := SetVPNConfig(s.Store, u.Username, s.ConfigPath, in); err != nil {
 		jsonErr(w, 400, err.Error())
 		return
-	}
-	if len(diff) > 0 {
-		s.Store.Audit(u.Username, "config_change", "")
 	}
 	jsonOK(w, in)
 }
@@ -502,28 +498,36 @@ func (s *Server) handleTelegramConfigGet(w http.ResponseWriter, r *http.Request,
 	jsonOK(w, s.Telegram.Status())
 }
 
-// handleTelegramConfigSet sets token and/or admin independently — empty means
-// unchanged. Admin applies before token: SetToken wipes the chat id on any
-// real token change, so setting both needs SetAdmin's goodbye message sent first.
+// SetTelegram sets the bot's admin and/or token, "" leaving either unchanged.
+// Admin applies first: SetToken wipes the chat id on a real token change, so
+// SetAdmin's goodbye to the replaced chat must go out before it.
+func SetTelegram(st *store.Store, actor, admin, token string) error {
+	if admin == "" && token == "" {
+		return errors.New("nothing to set: an admin and/or a token")
+	}
+	if admin != "" {
+		if err := telegram.SetAdmin(st, admin); err != nil {
+			return err
+		}
+		st.Audit(actor, "telegram_admin_change", "admin="+admin)
+	}
+	if token != "" {
+		if err := telegram.SetToken(st, token); err != nil {
+			return err
+		}
+		st.Audit(actor, "telegram_token_change", "")
+	}
+	return nil
+}
 func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
 	var in struct{ Token, Admin string }
 	if !decode(r, &in) {
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if in.Admin != "" {
-		if err := telegram.SetAdmin(s.Store, in.Admin); err != nil {
-			jsonErr(w, 500, err.Error())
-			return
-		}
-		s.Store.Audit(u.Username, "telegram_admin_change", "admin="+in.Admin)
-	}
-	if in.Token != "" {
-		if err := telegram.SetToken(s.Store, in.Token); err != nil {
-			jsonErr(w, 400, err.Error())
-			return
-		}
-		s.Store.Audit(u.Username, "telegram_token_change", "")
+	if err := SetTelegram(s.Store, u.Username, in.Admin, in.Token); err != nil {
+		jsonErr(w, 400, err.Error())
+		return
 	}
 	jsonOK(w, s.Telegram.Status())
 }
@@ -788,12 +792,7 @@ func (s *Server) handleLogsConfigSet(w http.ResponseWriter, r *http.Request, u *
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := SaveLogConfig(s.Store, cfg); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "log_config_change", "")
-	jsonOK(w, cfg)
+	act(w)(SaveLogConfig(s.Store, u.Username, cfg))
 }
 
 // handleLogsRotate is `ovcp logs rotate`'s API twin — same RotateLogs call.
@@ -813,12 +812,7 @@ func (s *Server) handleStatsConfigSet(w http.ResponseWriter, r *http.Request, u 
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	if err := SaveStatsConfig(s.Store, cfg); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "stats_config_change", "")
-	jsonOK(w, cfg)
+	act(w)(SaveStatsConfig(s.Store, u.Username, cfg))
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *store.User) {

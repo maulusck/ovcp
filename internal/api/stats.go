@@ -40,11 +40,15 @@ const statsConfigKey = "stats_config"
 func LoadStatsConfig(s *store.Store) StatsConfig {
 	return store.LoadJSON(s, statsConfigKey, DefaultStatsConfig())
 }
-func SaveStatsConfig(s *store.Store, cfg StatsConfig) error {
+func SaveStatsConfig(s *store.Store, actor string, cfg StatsConfig) (StatsConfig, error) {
 	if cfg.SampleIntervalSec <= 0 || cfg.RetentionHours <= 0 {
-		return errors.New("sample-interval-sec and retention-hours must be positive")
+		return cfg, errors.New("sample-interval-sec and retention-hours must be positive")
 	}
-	return store.SaveJSON(s, statsConfigKey, cfg)
+	if err := store.SaveJSON(s, statsConfigKey, cfg); err != nil {
+		return cfg, err
+	}
+	s.Audit(actor, "stats_config_change", "")
+	return cfg, nil
 }
 
 // LoadLogConfig/SaveLogConfig: controller.LogConfig's one read/write path,
@@ -52,11 +56,15 @@ func SaveStatsConfig(s *store.Store, cfg StatsConfig) error {
 func LoadLogConfig(s *store.Store) controller.LogConfig {
 	return store.LoadJSON(s, "log_config", controller.DefaultLogConfig())
 }
-func SaveLogConfig(s *store.Store, cfg controller.LogConfig) error {
+func SaveLogConfig(s *store.Store, actor string, cfg controller.LogConfig) (controller.LogConfig, error) {
 	if cfg.RetentionDays < 0 || cfg.KeepUncompressed < 0 {
-		return errors.New("retention-days and keep-uncompressed must be 0 or more")
+		return cfg, errors.New("retention-days and keep-uncompressed must be 0 or more")
 	}
-	return store.SaveJSON(s, "log_config", cfg)
+	if err := store.SaveJSON(s, "log_config", cfg); err != nil {
+		return cfg, err
+	}
+	s.Audit(actor, "log_config_change", "")
+	return cfg, nil
 }
 
 // StatsConfig reads the live persisted config — RunSampler re-reads it every
@@ -153,36 +161,47 @@ func (s *Server) samplerTick(sampleStats bool, retention time.Duration, prev map
 	return live
 }
 
-// handleStats serves the global aggregate, or one client's series when ?cn=
-// is given — same shape either way, so the frontend chart code doesn't care.
+// StatsSnapshot is stats and GET /api/stats: samples within the retention
+// window and the newest finished sessions, both for one CN when cn is set.
+type StatsSnapshot struct {
+	Samples  []store.Sample        `json:"samples"`
+	Sessions []store.ClientSession `json:"sessions"`
+}
+
+// Stats reads the traffic history, globally or for cn.
+func Stats(st *store.Store, cn string) (StatsSnapshot, error) {
+	since := time.Now().Add(-LoadStatsConfig(st).Retention())
+	var out StatsSnapshot
+	var err error
+	if cn != "" {
+		out.Samples, err = st.ClientSamples(cn, since)
+	} else {
+		out.Samples, err = st.Samples(since)
+	}
+	if err != nil {
+		return out, err
+	}
+	sessions, err := st.Sessions(200)
+	if err != nil {
+		return out, err
+	}
+	out.Sessions = []store.ClientSession{}
+	for _, x := range sessions {
+		if cn == "" || x.CN == cn {
+			out.Sessions = append(out.Sessions, x)
+		}
+	}
+	if out.Samples == nil {
+		out.Samples = []store.Sample{}
+	}
+	return out, nil
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cn := r.URL.Query().Get("cn")
 	if len(cn) > pki.MaxCNLen {
 		jsonErr(w, 400, "cn too long")
 		return
 	}
-	since := time.Now().Add(-s.StatsConfig().Retention())
-	var samples []store.Sample
-	var err error
-	if cn != "" {
-		samples, err = s.Store.ClientSamples(cn, since)
-	} else {
-		samples, err = s.Store.Samples(since)
-	}
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	sessions, err := s.Store.Sessions(200)
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	if samples == nil {
-		samples = []store.Sample{}
-	}
-	if sessions == nil {
-		sessions = []store.ClientSession{}
-	}
-	jsonOK(w, map[string]any{"samples": samples, "sessions": sessions})
+	act(w)(Stats(s.Store, cn))
 }

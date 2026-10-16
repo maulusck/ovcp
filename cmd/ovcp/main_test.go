@@ -363,7 +363,7 @@ func TestStats(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("-json stats: %+v", r)
 	}
-	var out statsSnapshot
+	var out api.StatsSnapshot
 	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.Samples == nil || out.Sessions == nil {
 		t.Fatalf("-json stats shape: want empty arrays, not null: %+v err=%v", r, err)
 	}

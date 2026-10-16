@@ -100,9 +100,7 @@ func cmdLogsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *keepUncompressed != -1 {
 			cfg.KeepUncompressed = *keepUncompressed
 		}
-		die(api.SaveLogConfig(s, cfg))
-		s.Audit("cli", "log_config_change", "")
-		output(cfg, func(c controller.LogConfig) { printLogConfigText(c); fmt.Println("saved") })
+		output(must(api.SaveLogConfig(s, "cli", cfg)), func(c controller.LogConfig) { printLogConfigText(c); fmt.Println("saved") })
 	}
 }
 

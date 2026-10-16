@@ -16,13 +16,6 @@ import (
 	"github.com/ovcp/ovcp/internal/store"
 )
 
-// statsSnapshot is `stats -json`'s shape: the same samples+sessions pair
-// GET /api/stats returns, so scripts get the real history, not a summary.
-type statsSnapshot struct {
-	Samples  []store.Sample        `json:"samples"`
-	Sessions []store.ClientSession `json:"sessions"`
-}
-
 var (
 	statsConfigOps    = []string{"get", "set"}
 	statsConfigBodies = map[string]opBody{
@@ -53,27 +46,7 @@ func cmdStats(fs *flag.FlagSet) func(ctx *cliContext) {
 		}
 		s := ctx.openStore()
 		defer s.Close()
-		since := time.Now().Add(-api.LoadStatsConfig(s).Retention())
-		var samples []store.Sample
-		var err error
-		if *cn != "" {
-			samples, err = s.ClientSamples(*cn, since)
-		} else {
-			samples, err = s.Samples(since)
-		}
-		die(err)
-		sessions, err := s.Sessions(200)
-		die(err)
-		if *cn != "" {
-			sessions = filterSessionsByCN(sessions, *cn)
-		}
-		if samples == nil {
-			samples = []store.Sample{}
-		}
-		if sessions == nil {
-			sessions = []store.ClientSession{}
-		}
-		output(statsSnapshot{samples, sessions}, func(o statsSnapshot) { printStatsText(o, *cn) })
+		output(must(api.Stats(s, *cn)), func(o api.StatsSnapshot) { printStatsText(o, *cn) })
 	}
 }
 
@@ -104,20 +77,8 @@ func cmdStatsConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *retentionHours != -1 {
 			cfg.RetentionHours = *retentionHours
 		}
-		die(api.SaveStatsConfig(s, cfg))
-		s.Audit("cli", "stats_config_change", "")
-		output(cfg, func(c api.StatsConfig) { printStatsConfigText(c); fmt.Println("saved") })
+		output(must(api.SaveStatsConfig(s, "cli", cfg)), func(c api.StatsConfig) { printStatsConfigText(c); fmt.Println("saved") })
 	}
-}
-
-func filterSessionsByCN(sessions []store.ClientSession, cn string) []store.ClientSession {
-	var out []store.ClientSession
-	for _, s := range sessions {
-		if s.CN == cn {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // fmtBytes mirrors web/ui/src/api.js's fmtBytes: same units, same thresholds.
@@ -148,7 +109,7 @@ func fmtDur(d time.Duration) string {
 	}
 }
 
-func printStatsText(o statsSnapshot, cn string) {
+func printStatsText(o api.StatsSnapshot, cn string) {
 	if len(o.Samples) == 0 {
 		fmt.Println("no samples yet — the sampler writes one per connected client per minute")
 	} else {
