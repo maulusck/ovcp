@@ -1042,12 +1042,12 @@ func cmdRecordIncludeExclude(op string) opBody {
 			if !found {
 				die(fmt.Errorf("no active certificate for CN %q", *cn))
 			}
-			include := op == "include"
-			if c.IncludeDNS == include {
+			changed, err := s.SetCertDNS(c.Serial, op == "include")
+			die(err)
+			if !changed {
 				output(msg("%s is already %sd", *cn, op), printMsg)
 				return
 			}
-			die(s.SetCertDNS(c.Serial, include))
 			refreshCertsHostsCLI(ctx.dataDir, s)
 			s.Audit("cli", "cert_dns_"+op, "cn="+*cn+" serial="+c.Serial)
 			output(msg("%sd: %s", op, *cn), printMsg)

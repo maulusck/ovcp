@@ -574,17 +574,13 @@ func (s *Server) handleCertDNS(w http.ResponseWriter, r *http.Request, u *store.
 		jsonErr(w, 400, "bad json")
 		return
 	}
-	c, err := s.Store.GetCert(serial)
-	if err != nil || c.Kind == "server" { // server's DNS line is unconditional, not toggleable
-		jsonErr(w, 404, "certificate not found")
+	changed, err := s.Store.SetCertDNS(serial, in.IncludeDNS)
+	if err != nil {
+		jsonErr(w, 404, err.Error())
 		return
 	}
-	if c.IncludeDNS == in.IncludeDNS {
+	if !changed {
 		jsonOK(w, map[string]bool{"ok": true, "changed": false})
-		return
-	}
-	if err := s.Store.SetCertDNS(serial, in.IncludeDNS); err != nil {
-		jsonErr(w, 400, err.Error())
 		return
 	}
 	action := "cert_dns_exclude"

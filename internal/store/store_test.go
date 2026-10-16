@@ -70,7 +70,7 @@ func TestCertIncludeDNS(t *testing.T) {
 		t.Fatalf("get after add: %+v err=%v, want IncludeDNS=true", got, err)
 	}
 
-	if err := s.SetCertDNS("dns1", false); err != nil {
+	if _, err := s.SetCertDNS("dns1", false); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.GetCert("dns1")
@@ -78,7 +78,7 @@ func TestCertIncludeDNS(t *testing.T) {
 		t.Fatalf("get after exclude: %+v err=%v, want IncludeDNS=false", got, err)
 	}
 
-	if err := s.SetCertDNS("dns1", true); err != nil {
+	if _, err := s.SetCertDNS("dns1", true); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.GetCert("dns1")
@@ -86,8 +86,17 @@ func TestCertIncludeDNS(t *testing.T) {
 		t.Fatalf("get after re-include: %+v err=%v, want IncludeDNS=true", got, err)
 	}
 
-	if err := s.SetCertDNS("nonexistent", true); err == nil {
+	if _, err := s.SetCertDNS("nonexistent", true); err == nil {
 		t.Fatal("SetCertDNS on an unknown serial must error")
+	}
+	if changed, err := s.SetCertDNS("dns1", true); err != nil || changed {
+		t.Fatalf("same value: changed=%v err=%v, want a no-op", changed, err)
+	}
+	if _, err := s.Revoke("dns1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetCertDNS("dns1", false); err == nil {
+		t.Fatal("a revoked cert has no DNS line to toggle")
 	}
 }
 

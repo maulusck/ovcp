@@ -224,9 +224,19 @@ func (s *Store) AddCert(c Cert) error {
 
 // SetCertDNS toggles whether serial's CN gets a certs.hosts line, mirroring
 // SetUserDisabled's shape.
-func (s *Store) SetCertDNS(serial string, include bool) error {
-	res, err := s.db.Exec(`UPDATE certs SET include_dns=? WHERE serial=?`, boolInt(include), serial)
-	return s.mustAffect(res, err, "store: no such cert")
+// SetCertDNS sets an active client cert's DNS line (the server's is
+// unconditional, a revoked cert has none); changed is false for a no-op.
+func (s *Store) SetCertDNS(serial string, include bool) (changed bool, err error) {
+	var cur bool
+	err = s.db.QueryRow(`SELECT include_dns FROM certs WHERE serial=? AND kind='client' AND revoked_at IS NULL`, serial).Scan(&cur)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("store: no active client cert %s", serial)
+	}
+	if err != nil || cur == include {
+		return false, err
+	}
+	_, err = s.db.Exec(`UPDATE certs SET include_dns=? WHERE serial=?`, boolInt(include), serial)
+	return err == nil, err
 }
 
 // ReplaceCert retires the outgoing active cert, if any, and adds c in one
