@@ -229,6 +229,9 @@ func (p *PKI) Issue(kind CertKind, cn string, days int, passphrase []byte) (*Iss
 	if err := CheckName("pki: cn", cn); err != nil {
 		return nil, err
 	}
+	if days <= 0 {
+		return nil, errors.New("pki: validity must be at least one day")
+	}
 	caCert, caKey, err := p.loadCA(passphrase)
 	if err != nil {
 		return nil, err

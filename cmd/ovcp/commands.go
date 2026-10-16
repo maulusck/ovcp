@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -353,70 +352,49 @@ func cmdIssue(fs *flag.FlagSet) func(ctx *cliContext) {
 		if *cn == "" {
 			die(fmt.Errorf("-cn required"))
 		}
-		requirePositive(*days, "days")
 		s := ctx.openStore()
 		defer s.Close()
-		if *renew {
-			if err := s.RequireActiveCert(*cn, "client"); err != nil {
-				die(fmt.Errorf("%w — omit -renew to issue a new one", err))
+		req := api.ClientRequest{CN: *cn, Days: *days, KeyPass: *keyPass, Renew: *renew,
+			Passphrase: readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)}
+		var ic *pki.IssuedCert
+		var bundle []byte
+		var err error
+		if *export {
+			if *remote == "" {
+				*remote = adminCertCN(ctx.dataDir)
 			}
+			if *serverCN == "" {
+				*serverCN = adminCertCN(ctx.dataDir)
+			}
+			extra, _, lerr := linesValue(*customOpts, "")
+			die(lerr)
+			ic, bundle, err = api.ExportClient(s, ctx.p, dataPaths(ctx.dataDir).TLSCrypt, req, api.ExportOpts{
+				Remote: *remote, ServerCN: *serverCN, Proto: *proto, Port: *port, Extra: extra, SplitTunnel: *splitTunnel})
+		} else {
+			ic, err = api.IssueClient(s, ctx.p, req)
 		}
-		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		ic, err := issueCert(ctx.p, pki.KindClient, *cn, *days, pass, *keyPass)
+		switch {
+		case errors.Is(err, store.ErrDuplicateCN):
+			err = fmt.Errorf("%w — add -renew to replace it", err)
+		case errors.Is(err, store.ErrNoActiveCert):
+			err = fmt.Errorf("%w — omit -renew to issue a new one", err)
+		}
 		die(err)
-		action := "issue"
 		if *renew {
-			action = "renew"
-			die(s.ReplaceCert(store.CertFrom(ic, "client")))
-			revokedCLI(ctx.p, s, *cn, pass)
-		} else if err := s.AddCert(store.CertFrom(ic, "client")); err != nil {
-			die(fmt.Errorf("%w — add -renew to replace it", err))
+			restartSessionsCLI(*cn)
 		}
 		refreshCertsHostsCLI(ctx.dataDir, s)
-		s.Audit("cli", action, fmt.Sprintf("cn=%s serial=%s", *cn, ic.SerialHex))
+		api.AuditClient(s, "cli", req, ic)
 
-		if !*export {
-			output(issueOut{ic.SerialHex, string(ic.CertPEM), string(ic.KeyPEM)}, func(o issueOut) {
-				fmt.Print(o.CertPEM, o.KeyPEM)
+		if *export {
+			output(exportOut{ic.SerialHex, string(bundle)}, func(o exportOut) {
+				fmt.Print(o.Bundle)
 				fmt.Fprintln(os.Stderr, "serial:", o.Serial)
 			})
 			return
 		}
-
-		if *remote == "" {
-			*remote = adminCertCN(ctx.dataDir)
-		}
-		if *serverCN == "" {
-			*serverCN = adminCertCN(ctx.dataDir)
-		}
-		if *remote == "" {
-			die(fmt.Errorf("-remote required (no server CN found)"))
-		}
-		raw, _ := s.GetSetting("vpn_config")
-		cfg := ovpnconf.Load(raw)
-		if *port != 0 {
-			cfg.Port = *port
-		}
-		if *proto != "" {
-			cfg.Proto = *proto
-		}
-		if *splitTunnel && !cfg.CanSplitTunnel() {
-			die(ovpnconf.ErrNoRedirect)
-		}
-		extra, _, err := linesValue(*customOpts, "")
-		die(err)
-		caPEM, err := ctx.p.CACertPEM()
-		die(err)
-		tc, err := loadOrCreateTLSCrypt(filepath.Join(ctx.dataDir, "pki", "tls-crypt.key"))
-		die(err)
-		bundle, err := pki.RenderOVPN(pki.BundleParams{
-			Remote: *remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: *serverCN,
-			CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
-			TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: *splitTunnel, Extra: extra,
-		})
-		die(err)
-		output(exportOut{ic.SerialHex, string(bundle)}, func(o exportOut) {
-			fmt.Print(o.Bundle)
+		output(issueOut{ic.SerialHex, string(ic.CertPEM), string(ic.KeyPEM)}, func(o issueOut) {
+			fmt.Print(o.CertPEM, o.KeyPEM)
 			fmt.Fprintln(os.Stderr, "serial:", o.Serial)
 		})
 	}
@@ -435,10 +413,8 @@ type exportOut struct {
 	Bundle string `json:"bundle"`
 }
 
-// revokedCLI is every CLI revoke's tail, the API's Server.revoked twin: the
-// CRL, then serve restarts cn's sessions (no serve running means no sessions).
-func revokedCLI(p *pki.PKI, s *store.Store, cn string, passphrase []byte) {
-	die(api.RegenCRL(s, p, passphrase))
+// restartSessionsCLI is Server.restartSessions through a running serve.
+func restartSessionsCLI(cn string) {
 	if _, err := controller.Kill(ctrlSock(), cn, "RESTART"); err != nil && !errors.Is(err, controller.ErrServeDown) {
 		slog.Warn("revoke: live sessions not restarted", "cn", cn, "err", err)
 	}
@@ -451,13 +427,12 @@ func cmdRevoke(fs *flag.FlagSet) func(ctx *cliContext) {
 			die(fmt.Errorf("-serial required"))
 		}
 		pass := readSecret("CA passphrase", "OVCP_CA_PASSPHRASE", false)
-		die(ctx.p.CheckPassphrase(pass)) // before the store: a revoked row must reach the CRL
 		s := ctx.openStore()
 		defer s.Close()
-		cn, err := s.Revoke(*serial, time.Now())
+		cn, err := api.RevokeCert(s, ctx.p, *serial, pass)
 		die(err)
 		refreshCertsHostsCLI(ctx.dataDir, s)
-		revokedCLI(ctx.p, s, cn, pass)
+		restartSessionsCLI(cn)
 		s.Audit("cli", "revoke", "serial="+*serial)
 		output(revokeOut{*serial, ctx.p.CRLPath()}, func(o revokeOut) {
 			fmt.Println("revoked; CRL regenerated:", o.CRLPath)
@@ -1581,7 +1556,6 @@ func cmdRenew(fs *flag.FlagSet) func(ctx *cliContext) {
 	cn := fs.String("cn", "", "new common name — omit to keep the current one")
 	days := fs.Int("days", 825, "validity (days)")
 	return func(ctx *cliContext) {
-		requirePositive(*days, "days")
 		s := ctx.openStore()
 		defer s.Close()
 		// renew replaces the current server cert; nothing active would

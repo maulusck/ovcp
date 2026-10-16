@@ -604,21 +604,6 @@ func ensureSkeleton(dataDir string) error {
 	return nil
 }
 
-// issueCert issues a cert under the CA, optionally password-protecting the
-// key. Shared by the issue and export CLI commands.
-func issueCert(p *pki.PKI, kind pki.CertKind, cn string, days int, pass []byte, keyPass string) (*pki.IssuedCert, error) {
-	ic, err := p.Issue(kind, cn, days, pass)
-	if err != nil {
-		return nil, err
-	}
-	if keyPass != "" {
-		if ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, keyPass); err != nil {
-			return nil, err
-		}
-	}
-	return ic, nil
-}
-
 // writeServerCert persists a freshly issued server cert+key; shared by init
 // and `certificate renew` (CLI), takes effect on next `vpn restart`.
 // Delegates to api.Server.WriteServerCert via a bare, HTTP-less instance.

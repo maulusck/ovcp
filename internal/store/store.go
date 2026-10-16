@@ -178,7 +178,7 @@ var ErrDuplicateCN = errors.New("an active cert already exists for this CN")
 const activeCert = `kind = ? AND (kind = 'server' OR cn = ?) AND revoked_at IS NULL`
 
 // ErrNoActiveCert: renewal needs something active to replace.
-var ErrNoActiveCert = errors.New("no active cert found for this cn+kind")
+var ErrNoActiveCert = errors.New("no active cert")
 
 // RequireActiveCert is ReplaceCert's precondition — fail fast before signing
 // anything, instead of ReplaceCert falling back to a plain issue.
@@ -230,7 +230,7 @@ func (s *Store) SetCertDNS(serial string, include bool) (changed bool, err error
 	var cur bool
 	err = s.db.QueryRow(`SELECT include_dns FROM certs WHERE serial=? AND kind='client' AND revoked_at IS NULL`, serial).Scan(&cur)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, fmt.Errorf("store: no active client cert %s", serial)
+		return false, fmt.Errorf("store: client %s: %w", serial, ErrNoActiveCert)
 	}
 	if err != nil || cur == include {
 		return false, err
@@ -287,7 +287,7 @@ func (s *Store) Revoke(serial string, at time.Time) (cn string, err error) {
 	err = s.db.QueryRow(`UPDATE certs SET revoked_at = ? WHERE serial = ? AND kind = 'client' AND revoked_at IS NULL RETURNING cn`,
 		at.Unix(), serial).Scan(&cn)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("store: no active client cert %s", serial)
+		return "", fmt.Errorf("store: client %s: %w", serial, ErrNoActiveCert)
 	}
 	return cn, err
 }

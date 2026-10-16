@@ -189,47 +189,116 @@ func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.Us
 		jsonErr(w, 400, "cn and passphrase required")
 		return
 	}
-	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days, false)
+	req := ClientRequest{CN: in.CN, Days: defaultDays(in.Days), Passphrase: []byte(in.Passphrase), KeyPass: in.KeyPassphrase}
+	ic, err := IssueClient(s.Store, s.PKI, req)
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
-	s.Store.Audit(u.Username, "issue", "cn="+in.CN+" serial="+ic.SerialHex)
+	AuditClient(s.Store, u.Username, req, ic)
 	jsonOK(w, map[string]string{"serial": ic.SerialHex,
 		"cert": string(ic.CertPEM), "key": string(ic.KeyPEM)})
 }
 
-// issueClientCert issues (AddCert) or renews (ReplaceCert + CRL regen) a
-// client cert — shared by handleIssue/handleExport, so an export-triggered
-// renewal is just as atomic: the outgoing cert is revoked only once the new one exists.
-func (s *Server) issueClientCert(cn, passphrase, keyPassphrase string, days int, renew bool) (*pki.IssuedCert, error) {
-	if days <= 0 {
-		days = 365
-	}
-	if renew {
-		if err := s.Store.RequireActiveCert(cn, "client"); err != nil {
+// ClientRequest is one client issue or renewal, CLI or API alike.
+type ClientRequest struct {
+	CN         string
+	Days       int
+	Passphrase []byte // CA passphrase
+	KeyPass    string // encrypts the returned key; "" leaves it plain
+	Renew      bool   // replace cn's active cert instead of adding one
+}
+
+// IssueClient is every client issue: a renewal retires the outgoing cert only
+// once the new one exists, then regenerates the CRL. Restarting the outgoing
+// cert's sessions is the caller's, over its own transport.
+func IssueClient(st *store.Store, p *pki.PKI, r ClientRequest) (*pki.IssuedCert, error) {
+	if r.Renew {
+		if err := st.RequireActiveCert(r.CN, "client"); err != nil {
 			return nil, err
 		}
 	}
-	ic, err := s.PKI.Issue(pki.KindClient, cn, days, []byte(passphrase))
+	ic, err := p.Issue(pki.KindClient, r.CN, r.Days, r.Passphrase)
 	if err != nil {
 		return nil, err
 	}
-	if keyPassphrase != "" {
-		if ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, keyPassphrase); err != nil {
+	if r.KeyPass != "" {
+		if ic.KeyPEM, err = pki.EncryptKeyPEM(ic.KeyPEM, r.KeyPass); err != nil {
 			return nil, err
 		}
 	}
-	if !renew {
-		if err := s.Store.AddCert(store.CertFrom(ic, "client")); err != nil {
-			return nil, err
-		}
-		return ic, nil
+	c := store.CertFrom(ic, "client")
+	if !r.Renew {
+		return ic, st.AddCert(c)
 	}
-	if err := s.Store.ReplaceCert(store.CertFrom(ic, "client")); err != nil {
+	if err := st.ReplaceCert(c); err != nil {
 		return nil, err
 	}
-	return ic, s.revoked(cn, []byte(passphrase))
+	return ic, RegenCRL(st, p, r.Passphrase)
+}
+
+// ErrNoRemote: an export with no host to connect to and no server CN to default it to.
+var ErrNoRemote = errors.New("remote required (no server CN found)")
+
+// ExportOpts shape a .ovpn. Remote and ServerCN are required (callers default
+// both to the server's CN); zero Port and Proto take the server's own.
+type ExportOpts struct {
+	Remote, ServerCN, Proto, Extra string
+	Port                           int
+	SplitTunnel                    bool
+}
+
+// ExportClient is every export: IssueClient, then the .ovpn. The options are
+// checked before anything is issued, so a refused export leaves no cert behind.
+func ExportClient(st *store.Store, p *pki.PKI, tlsCryptPath string, r ClientRequest, o ExportOpts) (*pki.IssuedCert, []byte, error) {
+	if o.Remote == "" || o.ServerCN == "" {
+		return nil, nil, ErrNoRemote
+	}
+	cfg := LoadConfig(st)
+	if o.Port != 0 {
+		cfg.Port = o.Port
+	}
+	if o.Proto != "" {
+		cfg.Proto = o.Proto
+	}
+	if o.SplitTunnel && !cfg.CanSplitTunnel() {
+		return nil, nil, ovpnconf.ErrNoRedirect
+	}
+	caPEM, err := p.CACertPEM()
+	if err != nil {
+		return nil, nil, err
+	}
+	tc, err := os.ReadFile(tlsCryptPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	ic, err := IssueClient(st, p, r)
+	if err != nil {
+		return nil, nil, err
+	}
+	bundle, err := pki.RenderOVPN(pki.BundleParams{
+		Remote: o.Remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: o.ServerCN,
+		CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
+		TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: o.SplitTunnel, Extra: o.Extra,
+	})
+	return ic, bundle, err
+}
+
+// defaultDays is the API's reading of an omitted Days: a year.
+func defaultDays(d int) int {
+	if d == 0 {
+		return 365
+	}
+	return d
+}
+
+// AuditClient records a client issue or renewal, the same line from every path.
+func AuditClient(st *store.Store, actor string, r ClientRequest, ic *pki.IssuedCert) {
+	action := "issue"
+	if r.Renew {
+		action = "renew"
+	}
+	st.Audit(actor, action, "cn="+r.CN+" serial="+ic.SerialHex)
 }
 
 // RegenCRL rebuilds the CRL from the store's full revoked set: the one
@@ -246,16 +315,24 @@ func RegenCRL(st *store.Store, p *pki.PKI, passphrase []byte) error {
 	return p.RegenCRL(entries, passphrase)
 }
 
-// revoked is every API revoke's tail: regenerate the CRL, then restart cn's
-// sessions so openvpn checks it on reconnect, not at the next renegotiation.
-func (s *Server) revoked(cn string, passphrase []byte) error {
-	if err := RegenCRL(s.Store, s.PKI, passphrase); err != nil {
-		return err
-	}
+// restartSessions restarts cn's live sessions so openvpn checks the new CRL
+// on reconnect, not at the next renegotiation.
+func (s *Server) restartSessions(cn string) {
 	if _, err := s.Mgmt.Kill(cn, "RESTART"); err != nil {
 		slog.Warn("revoke: live sessions not restarted", "cn", cn, "err", err)
 	}
-	return nil
+}
+
+// RevokeCert is every revoke, CLI or API: the passphrase is checked before
+// the store changes, so a revoked row always reaches the CRL.
+func RevokeCert(st *store.Store, p *pki.PKI, serial string, passphrase []byte) (cn string, err error) {
+	if err := p.CheckPassphrase(passphrase); err != nil {
+		return "", err
+	}
+	if cn, err = st.Revoke(serial, time.Now()); err != nil {
+		return "", err
+	}
+	return cn, RegenCRL(st, p, passphrase)
 }
 
 // WriteServerCert persists a freshly issued server cert+key to the paths
@@ -333,19 +410,12 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, u *store.U
 		jsonErr(w, 400, "serial and passphrase required")
 		return
 	}
-	if err := s.PKI.CheckPassphrase([]byte(in.Passphrase)); err != nil {
-		s.pkiErr(w, err)
-		return
-	}
-	cn, err := s.Store.Revoke(in.Serial, time.Now())
+	cn, err := RevokeCert(s.Store, s.PKI, in.Serial, []byte(in.Passphrase))
 	if err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	if err := s.revoked(cn, []byte(in.Passphrase)); err != nil {
 		s.pkiErr(w, err)
 		return
 	}
+	s.restartSessions(cn)
 	s.Store.Audit(u.Username, "revoke", "serial="+in.Serial)
 	jsonOK(w, map[string]bool{"ok": true})
 }
@@ -364,44 +434,18 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 	if in.Remote == "" {
 		in.Remote = s.DefaultRemote()
 	}
-	if in.Remote == "" {
-		jsonErr(w, 400, "remote required (no server CN configured)")
-		return
-	}
-	cfg := s.LoadConfig()
-	if in.SplitTunnel && !cfg.CanSplitTunnel() {
-		jsonErr(w, 400, ovpnconf.ErrNoRedirect.Error())
-		return
-	}
-	ic, err := s.issueClientCert(in.CN, in.Passphrase, in.KeyPassphrase, in.Days, in.Renew)
+	req := ClientRequest{CN: in.CN, Days: defaultDays(in.Days), Passphrase: []byte(in.Passphrase),
+		KeyPass: in.KeyPassphrase, Renew: in.Renew}
+	ic, bundle, err := ExportClient(s.Store, s.PKI, s.TLSCrypt, req,
+		ExportOpts{Remote: in.Remote, ServerCN: s.DefaultRemote(), Extra: in.Extra, SplitTunnel: in.SplitTunnel})
 	if err != nil {
 		s.pkiErr(w, err)
 		return
 	}
-	action := "issue"
 	if in.Renew {
-		action = "renew"
+		s.restartSessions(in.CN)
 	}
-	s.Store.Audit(u.Username, action, "cn="+in.CN+" (export)")
-	caPEM, err := s.PKI.CACertPEM()
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	tc, err := os.ReadFile(s.TLSCrypt)
-	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	bundle, err := pki.RenderOVPN(pki.BundleParams{
-		Remote: in.Remote, Port: cfg.Port, Proto: cfg.Proto, ServerCN: s.DefaultRemote(),
-		CACertPEM: caPEM, ClientCert: ic.CertPEM, ClientKey: ic.KeyPEM,
-		TLSCrypt: tc, Cipher: cfg.Cipher, SplitTunnel: in.SplitTunnel, Extra: in.Extra,
-	})
-	if err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
+	AuditClient(s.Store, u.Username, req, ic)
 	w.Header().Set("Content-Type", "application/x-openvpn-profile")
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="%s.ovpn"`, in.CN))
@@ -956,7 +1000,8 @@ func (s *Server) pkiErr(w http.ResponseWriter, err error) {
 		jsonErr(w, 403, "wrong CA passphrase")
 		return
 	}
-	if errors.Is(err, store.ErrDuplicateCN) || errors.Is(err, store.ErrNoActiveCert) {
+	if errors.Is(err, store.ErrDuplicateCN) || errors.Is(err, store.ErrNoActiveCert) ||
+		errors.Is(err, ovpnconf.ErrNoRedirect) || errors.Is(err, ErrNoRemote) {
 		jsonErr(w, 400, err.Error())
 		return
 	}

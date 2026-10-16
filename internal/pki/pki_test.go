@@ -204,6 +204,9 @@ func TestIssueCN(t *testing.T) {
 			t.Errorf("%q should be rejected", cn)
 		}
 	}
+	if _, err := p.Issue(KindClient, "alice", 0, pass); err == nil {
+		t.Error("a zero-day cert is born expired and must be refused")
+	}
 }
 
 func TestServerCertEKU(t *testing.T) {

@@ -238,8 +238,11 @@ func clientIP(r *http.Request) string {
 }
 
 // LoadConfig reads persisted server config (settings key) or defaults.
-func (s *Server) LoadConfig() ovpnconf.Config {
-	raw, _ := s.Store.GetSetting("vpn_config")
+func (s *Server) LoadConfig() ovpnconf.Config { return LoadConfig(s.Store) }
+
+// LoadConfig is the persisted server config, defaults filled in.
+func LoadConfig(st *store.Store) ovpnconf.Config {
+	raw, _ := st.GetSetting("vpn_config")
 	return ovpnconf.Load(raw)
 }
 

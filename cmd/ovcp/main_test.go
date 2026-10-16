@@ -727,6 +727,9 @@ func TestExportSplitTunnel(t *testing.T) {
 	if r2.code == 0 {
 		t.Fatalf("split-tunnel should be rejected when the server doesn't redirect: %+v", r2)
 	}
+	if rows := certLines(run(t, env, "certificate", "list").stdout, "bob"); len(rows) != 0 {
+		t.Fatalf("a refused export must issue nothing: %v", rows)
+	}
 }
 
 func TestExportCustomOpts(t *testing.T) {
