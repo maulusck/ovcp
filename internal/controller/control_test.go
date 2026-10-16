@@ -170,18 +170,18 @@ func TestControlTelegramOps(t *testing.T) {
 	}
 	defer l.Close()
 
-	st, err := TelegramStart(sock)
+	st, err := TelegramOp(sock, "start")
 	if err != nil || !st.Running || !st.Changed || tg.started != 1 {
 		t.Fatalf("TelegramStart: %+v err=%v tg=%+v", st, err, tg)
 	}
-	st, err = TelegramGetStatus(sock)
+	st, err = TelegramOp(sock, "status")
 	if err != nil || !st.Running || !st.TokenSet || st.Admin != fakeTelegramAdmin || st.Changed {
 		t.Fatalf("TelegramGetStatus: %+v err=%v", st, err)
 	}
-	if st, err = TelegramStop(sock); err != nil || st.Running || !st.Changed || tg.stopped != 1 {
+	if st, err = TelegramOp(sock, "stop"); err != nil || st.Running || !st.Changed || tg.stopped != 1 {
 		t.Fatalf("TelegramStop: %+v err=%v tg=%+v", st, err, tg)
 	}
-	if _, err := TelegramRestart(sock); err != nil || tg.restarted != 1 {
+	if _, err := TelegramOp(sock, "restart"); err != nil || tg.restarted != 1 {
 		t.Fatalf("TelegramRestart: err=%v tg=%+v", err, tg)
 	}
 }

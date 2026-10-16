@@ -339,18 +339,6 @@ func UpstreamReapply(sockPath string) error {
 	return err
 }
 
-// TelegramStart/Stop/Restart drive the telegram poller in a running serve;
-// TelegramGetStatus reports its state. Requires serve running, like Control —
-// the poller's live state only exists in that process.
-func TelegramStart(sockPath string) (TelegramStatus, error) {
-	return telegramOp(sockPath, "telegram-start")
-}
-func TelegramStop(sockPath string) (TelegramStatus, error) {
-	return telegramOp(sockPath, "telegram-stop")
-}
-func TelegramRestart(sockPath string) (TelegramStatus, error) {
-	return telegramOp(sockPath, "telegram-restart")
-}
 
 // Debug switches a running serve's log level.
 func Debug(sockPath string, on bool) error {
@@ -362,12 +350,11 @@ func Debug(sockPath string, on bool) error {
 	return err
 }
 
-func TelegramGetStatus(sockPath string) (TelegramStatus, error) {
-	return telegramOp(sockPath, "telegram-status")
-}
-
-func telegramOp(sockPath, op string) (TelegramStatus, error) {
+// TelegramOp runs RunTelegramOp's verb on a running serve's poller; its live
+// state only exists in that process.
+func TelegramOp(sockPath, verb string) (TelegramStatus, error) {
 	var st TelegramStatus
+	op := "telegram-" + verb
 	payload, err := controlRequest(sockPath, op)
 	if err != nil {
 		return st, err

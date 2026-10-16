@@ -813,7 +813,7 @@ func (c ctrlSource) Clients() ([]controller.VPNClient, error) {
 	return controller.Clients(string(c))
 }
 func (c ctrlSource) Telegram() (controller.TelegramStatus, error) {
-	return controller.TelegramGetStatus(string(c))
+	return controller.TelegramOp(string(c), "status")
 }
 
 func cmdKill(fs *flag.FlagSet) func(ctx *cliContext) {
@@ -1688,26 +1688,12 @@ func cmdTelegramConfigSet(fs *flag.FlagSet) func(ctx *cliContext) {
 	}
 }
 
-// telegramLifecycleBody registers one telegram lifecycle op's -ctrl flag —
-// same shape procOpBody uses for vpn/dns, kept separate since telegram
-// calls its own TelegramStart/Stop/Restart/GetStatus, not controller.Control.
+// telegramLifecycleBody is procOpBody's telegram twin.
 func telegramLifecycleBody(op string) opBody {
 	return func(fs *flag.FlagSet) func(ctx *cliContext) {
 		ctrl := ctrlFlag(fs, "")
 		return func(ctx *cliContext) {
-			var st controller.TelegramStatus
-			var err error
-			switch op {
-			case "start":
-				st, err = controller.TelegramStart(*ctrl)
-			case "stop":
-				st, err = controller.TelegramStop(*ctrl)
-			case "restart":
-				st, err = controller.TelegramRestart(*ctrl)
-			case "status":
-				st, err = controller.TelegramGetStatus(*ctrl)
-			}
-			die(err)
+			st := must(controller.TelegramOp(*ctrl, op))
 			if op != "status" {
 				s := ctx.openStore()
 				s.Audit("cli", "telegram_"+op, fmt.Sprintf("running=%t", st.Running))

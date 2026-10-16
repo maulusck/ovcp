@@ -538,7 +538,9 @@ func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *sto
 		jsonErr(w, opStatus(err), err.Error())
 		return
 	}
-	s.Store.Audit(u.Username, "telegram_"+r.PathValue("op"), "")
+	if op := r.PathValue("op"); op != "status" { // a read, never audited
+		s.Store.Audit(u.Username, "telegram_"+op, fmt.Sprintf("running=%t", st.Running))
+	}
 	jsonOK(w, st)
 }
 
