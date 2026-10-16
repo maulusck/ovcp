@@ -4,7 +4,8 @@
 # (OpenRC) and checks it; plain `scripts/vm-acceptance.sh` then
 # builds a .deb, installs it here (systemd) and drives the Alpine client
 # $OVCP_TEST_VM. Host uplink, address and gateway come from the default
-# route. Needs passwordless sudo. Purge again afterwards.
+# route. Needs passwordless sudo, BUILD.md's build tools, python3, nft and
+# key-auth root ssh to the VM; nothing else on either machine. Purge again afterwards.
 set -u
 T=$(mktemp -d)
 export PATH=/usr/sbin:$PATH
@@ -48,7 +49,7 @@ purge() { # clean slate on both machines, then verify it
 		sudo -n ip route flush table $((100+i)) 2>/dev/null
 	done
 	sudo -n ip link del ovcp0 2>/dev/null
-	pgrep -f '^ssh -o BatchMode=yes -f -N -D' | xargs -r kill
+	pkill -f "^python3 $SOCKS5" 2>/dev/null; rm -f $SOCKS5
 	C 'apk del -q ovcp 2>/dev/null; deluser ovcp 2>/dev/null; delgroup ovcp 2>/dev/null; rm -rf /var/lib/ovcp /run/ovcp /var/log/ovcp /root/vm3.ovpn /tmp/ovpn.log' >/dev/null 2>&1
 	boot=$(C cat /proc/sys/kernel/random/boot_id)
 	C reboot >/dev/null 2>&1
@@ -60,6 +61,34 @@ purge() { # clean slate on both machines, then verify it
 	t "purged: no rule or route in ovcp's band" "! ip rule | grep -qE '^200[0-6][0-9]:' && [ -z \"\$(for i in \$(seq 100 163); do ip route show table \$i; done)\" ]"
 	t "purged: client rebooted (new boot id)" "[ -n \"\$(C cat /proc/sys/kernel/random/boot_id)\" ] && [ \"\$(C cat /proc/sys/kernel/random/boot_id)\" != '$boot' ]"
 	t "purged: client has no openvpn, ovcp package, account or data" "! C 'pgrep openvpn || apk info -e ovcp || id ovcp || ls -d /var/lib/ovcp'"
+}
+SOCKS5=/tmp/ovcp-test-socks5.py # stand-in SOCKS5 backend (no-auth CONNECT), stdlib only
+socks5() {
+	cat >$SOCKS5 <<'PY'
+import socket, struct, threading
+def pipe(a, b):
+    try:
+        while d := a.recv(65536):
+            b.sendall(d)
+    except OSError:
+        pass
+    a.close(); b.close()
+def serve(c):
+    try:
+        c.recv(262); c.sendall(b'\5\0')
+        _, _, _, atyp = c.recv(4)
+        host = socket.inet_ntoa(c.recv(4)) if atyp == 1 else c.recv(c.recv(1)[0]).decode()
+        u = socket.create_connection((host, struct.unpack('!H', c.recv(2))[0]), 10)
+        c.sendall(b'\5\0\0\1' + bytes(6))
+    except (OSError, ValueError):
+        return c.close()
+    threading.Thread(target=pipe, args=(c, u), daemon=True).start(); pipe(u, c)
+s = socket.create_server(('127.0.0.1', 1080))
+while True:
+    threading.Thread(target=serve, args=(s.accept()[0],), daemon=True).start()
+PY
+	setsid python3 $SOCKS5 </dev/null >/dev/null 2>&1 &
+	sleep 1
 }
 connected() { timeout 90 sh -c "until sudo -n ovcp status 2>/dev/null | grep -q ' vm3 '; do sleep 2; done"; }
 
@@ -172,7 +201,7 @@ t "spoofed packets NOT marked for the upstream" "[ \$(echo $SPOOF | cut -d' ' -f
 sudo -n nft delete table inet spoofcheck
 
 echo "== upstream: socks, per-client"
-ssh -o BatchMode=yes -f -N -D 127.0.0.1:1080 localhost
+socks5
 t "socks upstream add" "O upstream add -id sox -socks socks5://127.0.0.1:1080"
 t "assign vm3 (asks for restart)" "O upstream assign -cn vm3 -id sox 2>&1 | grep -q 'vpn restart'"
 t "extra refuses a script directive" "! O vpn config set -extra 'up /bin/sh'"
@@ -182,14 +211,14 @@ t "vm3 reconnects" "connected"
 t "vm3 pushed the overridden keepalive" "sudo -n grep -q 'ping 5,ping-restart 30' /var/lib/ovcp/logs/openvpn.log"
 t "relay listener owned by ovcp" "sudo -n ss -ltnp | grep ':20001' | grep -q '\"ovcp\"'"
 t "client HTTPS via socks relay" "C 'curl -s -m 8 -o /dev/null https://1.1.1.1/'"
-pgrep -f '^ssh -o BatchMode=yes -f -N -D 127.0.0.1:1080' | xargs -r kill; sleep 1
+pkill -f "^python3 $SOCKS5"; sleep 1
 t "backend down: fails closed (no leak)" "! C 'curl -s -m 8 -o /dev/null https://1.1.1.1/'"
-ssh -o BatchMode=yes -f -N -D 127.0.0.1:1080 localhost; sleep 1
+socks5; sleep 1
 t "backend up: recovers" "C 'curl -s -m 8 -o /dev/null https://1.1.1.1/'"
 t "direct LAN connection to relay dropped" "[ \"\$(C 'curl -s -m 5 -o /dev/null -w %{http_code} http://$SRV:20001/')\" = 000 ]"
 O upstream assign -cn vm3 -clear >/dev/null; O upstream set-default -clear >/dev/null
 O upstream del -id sox >/dev/null; O upstream del -id wan >/dev/null
-pgrep -f '^ssh -o BatchMode=yes -f -N -D 127.0.0.1:1080' | xargs -r kill
+pkill -f "^python3 $SOCKS5"
 t "cleanup: no fwmark rules, no relay, baseline nft" "! ip rule | grep -q fwmark && ! sudo -n ss -ltn | grep -q ':2000[0-9]' && [ \$(sudo -n nft list table inet ovcp-upstreams | grep -c 'mark set') -eq 0 ]"
 t "client egress back to transparent" "C 'curl -s -m 8 -o /dev/null https://1.1.1.1/'"
 
