@@ -10,4 +10,5 @@ nohup.out
 *.rpm
 *.apk
 *.pkg.tar.zst
-/TODO.md
+/TRACKER.md
+/CLAUDE.md
