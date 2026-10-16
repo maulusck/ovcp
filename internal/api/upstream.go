@@ -94,16 +94,8 @@ func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *st
 		return
 	}
 	var in struct{ ID, Iface, Gateway, SOCKS, Description string }
-	if !decode(r, &in) || in.ID == "" {
-		jsonErr(w, 400, "id required")
-		return
-	}
-	if (in.Iface == "") == (in.SOCKS == "") {
-		jsonErr(w, 400, "exactly one of iface or socks required")
-		return
-	}
-	if in.SOCKS != "" && in.Gateway != "" {
-		jsonErr(w, 400, "gateway is not valid with socks")
+	if !decode(r, &in) {
+		jsonErr(w, 400, "bad json")
 		return
 	}
 	cfg, _, err := LoadUpstreamConfig(s.Store).WithAdded(upstream.Upstream{

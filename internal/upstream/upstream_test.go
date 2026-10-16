@@ -82,13 +82,14 @@ func TestValidateSOCKSTimeoutOverrides(t *testing.T) {
 func TestValidateRejectsSOCKS(t *testing.T) {
 	base := func() Upstream { return Upstream{ID: "tor", SOCKS: "socks5://127.0.0.1:9050", Table: tableBase} }
 	cases := map[string]Upstream{
-		"socks with iface":      func() Upstream { u := base(); u.Iface = "eth0"; return u }(),
-		"socks with gateway":    func() Upstream { u := base(); u.Gateway = "192.0.2.1"; return u }(),
-		"non-socks5 scheme":     func() Upstream { u := base(); u.SOCKS = "http://127.0.0.1:9050"; return u }(),
-		"missing port":          func() Upstream { u := base(); u.SOCKS = "socks5://127.0.0.1"; return u }(),
-		"missing host":          func() Upstream { u := base(); u.SOCKS = "socks5://:9050"; return u }(),
-		"unparseable url":       func() Upstream { u := base(); u.SOCKS = "socks5://%zz"; return u }(),
-		"negative dial timeout": func() Upstream { u := base(); u.DialTimeout = -1; return u }(),
+		"neither iface nor socks": {ID: "x", Table: tableBase},
+		"socks with iface":        func() Upstream { u := base(); u.Iface = "eth0"; return u }(),
+		"socks with gateway":      func() Upstream { u := base(); u.Gateway = "192.0.2.1"; return u }(),
+		"non-socks5 scheme":       func() Upstream { u := base(); u.SOCKS = "http://127.0.0.1:9050"; return u }(),
+		"missing port":            func() Upstream { u := base(); u.SOCKS = "socks5://127.0.0.1"; return u }(),
+		"missing host":            func() Upstream { u := base(); u.SOCKS = "socks5://:9050"; return u }(),
+		"unparseable url":         func() Upstream { u := base(); u.SOCKS = "socks5://%zz"; return u }(),
+		"negative dial timeout":   func() Upstream { u := base(); u.DialTimeout = -1; return u }(),
 		"negative handshake timeout": func() Upstream {
 			u := base()
 			u.HandshakeTimeout = -1

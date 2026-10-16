@@ -1201,18 +1201,6 @@ func cmdUpstreamAdd(afs *flag.FlagSet) func(ctx *cliContext) {
 	desc := afs.String("desc", "", "description")
 	return func(ctx *cliContext) {
 		upstreamsReady()
-		if *id == "" {
-			die(fmt.Errorf("-id required"))
-		}
-		if (*iface == "") == (*socks == "") {
-			die(fmt.Errorf("exactly one of -iface or -socks required"))
-		}
-		if *socks != "" && *gateway != "" {
-			die(fmt.Errorf("-gateway is not valid with -socks"))
-		}
-		if *socks == "" && (*dialTimeout != 0 || *handshakeTimeout != 0) {
-			die(fmt.Errorf("-dial-timeout/-handshake-timeout are only valid with -socks"))
-		}
 		s := ctx.openStore()
 		defer s.Close()
 		cfg, added, err := api.LoadUpstreamConfig(s).WithAdded(upstream.Upstream{
