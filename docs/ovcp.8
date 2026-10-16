@@ -1020,8 +1020,8 @@ admin UI certificate (falls back to the VPN server certificate's CN).
 .TP
 .B OVCP_CA_PASSPHRASE, OVCP_USER_PASSWORD
 Non\-interactive passphrase/password for automation, tests, and container
-init (the image defaults both to \fIchangeme!\fR). Avoid on
-shared systems: environment variables can leak.
+init. No default, the image's included. Avoid on shared systems:
+environment variables can leak.
 .TP
 .B OVCP_CA_NEW_PASSPHRASE, OVCP_BACKUP_PASSPHRASE
 Non\-interactive equivalents for \fBca rotate\fR's new passphrase and
@@ -1333,13 +1333,14 @@ One all\-in\-one image (\fBmake image\fR): ovcp drops to the image's \fIovcp\fR
 account and starts openvpn inside the container. Init once, then run:
 .nf
 .RS
-podman run \-\-rm \-v ovcp:/var/lib/ovcp ovcp init \-server\-cn vpn.example.com
+podman run \-\-rm \-it \-v ovcp:/var/lib/ovcp ovcp init \-server\-cn vpn.example.com
 podman run \-d \-\-cap\-add=NET_ADMIN \-\-device /dev/net/tun \e
   \-p 1194:1194/udp \-p 127.0.0.1:8443:8443 \-v ovcp:/var/lib/ovcp ovcp
 .RE
 .fi
-The image defaults \fBOVCP_CA_PASSPHRASE\fR/\fBOVCP_USER_PASSWORD\fR to
-\fIchangeme!\fR for the one\-shot init \(en override with \fB\-e\fR. To split
+\fBinit\fR prompts for the CA passphrase and the admin password (\fB\-it\fR),
+or takes them as \fB\-e OVCP_CA_PASSPHRASE\fR/\fBOVCP_USER_PASSWORD\fR;
+the image sets neither. To split
 the UI and the VPN across network interfaces, bind each published port to
 the right address, e.g.
 \fB\-p 203.0.113.7:1194:1194/udp \-p 192.168.1.10:8443:8443\fR. docker works

@@ -1707,3 +1707,13 @@ func TestRestorePromptsOnTTY(t *testing.T) {
 		t.Fatalf("restore with the passphrase typed on the terminal failed: %v\n%s", err, out)
 	}
 }
+
+// TestInitWithoutSecretsFailsFast: no env secret and no terminal (the image
+// run without -it or -e) must fail at once, naming the variable, not hang.
+func TestInitWithoutSecretsFailsFast(t *testing.T) {
+	env := []string{"OVCP_DATA=" + t.TempDir()}
+	r := run(t, env, "init", "-server-cn", "vpn.example.com")
+	if r.code == 0 || !strings.Contains(r.stderr, "OVCP_CA_PASSPHRASE") {
+		t.Fatalf("init without a secret must fail naming OVCP_CA_PASSPHRASE: %+v", r)
+	}
+}

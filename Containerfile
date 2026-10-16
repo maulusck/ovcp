@@ -44,10 +44,9 @@ FROM docker.io/library/alpine:latest
 RUN apk upgrade --no-cache && apk add --no-cache openvpn dnsmasq nftables \
     && adduser -S -D -H ovcp && install -d -o ovcp -m 0700 /var/lib/ovcp
 COPY --from=build /ovcp /usr/bin/ovcp
+# no secret defaults: init prompts (-it) or takes -e OVCP_CA_PASSPHRASE/OVCP_USER_PASSWORD
 ENV OVCP_DATA=/var/lib/ovcp \
-    OVCP_LISTEN=0.0.0.0:8443 \
-    OVCP_CA_PASSPHRASE=changeme! \
-    OVCP_USER_PASSWORD=changeme!
+    OVCP_LISTEN=0.0.0.0:8443
 # logrotate/log-shippers expect /var/log; symlink into the data volume
 # instead of duplicating files.
 RUN ln -s /var/lib/ovcp/logs /var/log/ovcp
