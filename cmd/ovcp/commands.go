@@ -689,11 +689,7 @@ func cmdInit(fs *flag.FlagSet) func(ctx *cliContext) {
 					fmt.Fprintf(os.Stderr, "create admin user %q\n", *admin)
 				}
 				pw := string(readSecret("Password", "OVCP_USER_PASSWORD", true))
-				h, err := auth.HashPassword(pw)
-				die(err)
-				_, err = s.AddUser(*admin, h, "admin")
-				die(err)
-				s.Audit("system", "user_add", "name="+*admin+" role=admin (init)")
+				must(api.AddUser(s, "system", *admin, pw, "admin"))
 				progress("[5/5] admin user created: %s\n", *admin)
 			}
 		} else {
@@ -737,7 +733,7 @@ func fmtUptime(t time.Time) string {
 	return time.Since(t).Round(time.Second).String()
 }
 
-// printStatusText renders the one statusOut a status run ends up with,
+// printStatusText renders an api.Status in text,
 // whichever of the unknown/stopped/unavailable/running states it hit.
 func printStatusText(st api.Status) {
 	switch {

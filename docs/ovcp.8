@@ -70,8 +70,9 @@ must be at least 8 characters and mix at least 2 of upper/lower/digit/
 symbol, enforced the same way whether set interactively, via
 \fBOVCP_CA_PASSPHRASE\fR / \fBOVCP_USER_PASSWORD\fR, or through the web UI.
 \fBOVCP_YOLO_PASSWORD\fR (any non\-empty value) waives this requirement in
-the CLI and, through \fBserve\fR's environment, in the web UI. Every weak
-secret accepted this way is audited as \fBweak_password_accepted\fR.
+the CLI and, through \fBserve\fR's environment, in the web UI. A weak user
+password accepted this way is audited as \fBweak_password_accepted\fR; a
+weak CA or backup passphrase (CLI only) draws a \fBwarning:\fR line.
 .PP
 Client private keys are embedded in the exported profile once and never
 stored server\-side (no escrow): a lost profile means revoke + reissue, not

@@ -1717,3 +1717,15 @@ func TestInitWithoutSecretsFailsFast(t *testing.T) {
 		t.Fatalf("init without a secret must fail naming OVCP_CA_PASSPHRASE: %+v", r)
 	}
 }
+
+// TestInitWeakAdminAudited: init's admin goes through the same api.AddUser
+// as user add, so a weak password it accepts is audited too.
+func TestInitWeakAdminAudited(t *testing.T) {
+	env := withEnv(baseEnv(t), "OVCP_USER_PASSWORD=alllowercase", "OVCP_YOLO_PASSWORD=1")
+	if r := run(t, env, "init", "-server-cn", "vpn.example.com"); r.code != 0 {
+		t.Fatalf("init: %+v", r)
+	}
+	if r := run(t, env, "audit"); !strings.Contains(r.stdout, "weak_password_accepted") {
+		t.Fatalf("init's weak admin password must be audited: %+v", r)
+	}
+}

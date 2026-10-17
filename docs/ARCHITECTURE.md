@@ -52,7 +52,7 @@ A running `serve` uses two Unix sockets:
   `start|stop|restart|status` drive their `Supervisor`, `vpn reconnect`
   sends `SIGUSR1` to the OpenVPN child, `telegram` drives the `Poller`,
   `debug` sets the log level, `upstream-assign` rewrites one connected
-  client's nftables rule (the CLI and web API share `api.ApplyAssign`),
+  client's nftables rule (the CLI and web API share `api.AssignUpstream`),
   and `upstream-reapply` re-applies the persisted upstream configuration.
 
 ### CLI and web API
