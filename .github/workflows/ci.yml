@@ -15,11 +15,15 @@ defaults:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+    steps: # each action pinned once: the build and image jobs reuse these steps
+      - &checkout
+        uses: actions/checkout@v7
+        with: { fetch-depth: 0 } # git describe needs tag history for VERSION
+      - &setup-go
+        uses: actions/setup-go@v7
         with: { go-version-file: go.mod }
-      - uses: actions/setup-node@v7
+      - &setup-node
+        uses: actions/setup-node@v7
         with: { node-version-file: web/ui/.nvmrc }
       - name: install test tools
         run: |
@@ -39,13 +43,10 @@ jobs:
       matrix:
         target: [host, arm64, armv7, armv6, riscv64, amd64-musl, arm64-musl, armv7-musl, armv6-musl, riscv64-musl]
     steps:
-      - uses: actions/checkout@v7
-        with: { fetch-depth: 0 } # git describe needs tag history for VERSION
+      - *checkout
       - run: make -s versions >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v7
-        with: { go-version-file: go.mod }
-      - uses: actions/setup-node@v7
-        with: { node-version-file: web/ui/.nvmrc }
+      - *setup-go
+      - *setup-node
       - name: install mandoc + nfpm
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq mandoc
@@ -89,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { packages: write }
     steps:
-      - uses: actions/checkout@v7
+      - *checkout
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
