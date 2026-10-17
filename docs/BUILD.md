@@ -13,16 +13,18 @@ they do and why.
 
 ## Requirements
 
-`make deps` checks the base build requirements are on `PATH` and reports
-what is missing:
+One version of each toolchain is supported, the same locally, in CI and in
+the image. `make versions` prints them; each has one home: Go in `go.mod`,
+Node in `web/ui/.nvmrc`, zig, nfpm and the Alpine base in the Makefile.
+`make deps` checks the base requirements are on `PATH` at those versions:
 
-- Go 1.22+
+- Go (`go.mod`)
 - a C compiler (`cc` or `gcc` — CGO, for the SQLite driver)
-- npm (`web/ui`, the Svelte admin UI)
+- Node.js with npm (`web/ui/.nvmrc`; `web/ui`, the Svelte admin UI)
 - mandoc (renders `docs/ovcp.8` into the UI's Docs tab)
 
-Additional tools are required only for specific targets, and are checked
-individually when that target runs — not by `make deps`:
+Additional tools are required only for specific targets, and are checked,
+version included, when that target runs — not by `make deps`:
 
 - [zig](https://ziglang.org/) — cross-compiling (`TARGET=` set to anything
   other than `host`); checked by `build` and packaging targets via
@@ -120,7 +122,7 @@ tools.
 The Containerfile's builder stage (`FROM --platform=$BUILDPLATFORM ...`) is
 pinned to the build machine's own architecture: Go and npm never run
 emulated, since zig cross-compiles the binary directly. The final stage
-(`FROM alpine:latest`, `apk add openvpn`) is not pinned the same way — for
+(`FROM alpine`, `apk add openvpn`) is not pinned the same way — for
 a genuine cross build it must run as the target architecture, because
 `apk` itself has to execute. Without binfmt handlers registered for that
 architecture, this step fails with `exec container process: Exec format
@@ -354,9 +356,9 @@ Live acceptance on real machines, this host plus an Alpine client VM:
 ## CI / the release pipeline
 
 One workflow, [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
-Its `test` job runs the gates above on every push and pull request. A `v*` tag push
-also runs three release stages, each only after `test` passes (toolchain
-versions live once, in the workflow's `env`):
+Its `test` job runs `make check` on every push and pull request. A `v*` tag
+push also runs three release stages, each only after `test` passes, all on
+the toolchain versions `make versions` prints (see Requirements):
 
 1. **`build`** — every `TARGET` row above, as a separate matrix job:
    binary, shell completions, and (`.deb`/`.rpm`/`.zst` for glibc targets,
@@ -369,7 +371,7 @@ versions live once, in the workflow's `env`):
    `ghcr.io`, tagged with the release tag and `latest`:
 
    ```sh
-   docker buildx build \
+   docker buildx build $(make -s image-args) \
      --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64 \
      --push -f Containerfile .
    ```

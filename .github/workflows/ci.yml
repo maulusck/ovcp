@@ -9,19 +9,18 @@ defaults:
   run:
     shell: bash # explicit shell: bash adds -o pipefail, so no pipe can mask a failing command
 
-env: # the one place CI's toolchain versions live
-  GO_VERSION: '1.27'
-  NODE_VERSION: '24'
+# Toolchain versions have one home each (`make versions`): setup-go and
+# setup-node read go.mod and web/ui/.nvmrc, the rest comes from make versions.
 
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with: { go-version: '${{ env.GO_VERSION }}' }
-      - uses: actions/setup-node@v4
-        with: { node-version: '${{ env.NODE_VERSION }}' }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@v7
+        with: { node-version-file: web/ui/.nvmrc }
       - name: install test tools
         run: |
           sudo apt-get update -qq
@@ -40,24 +39,23 @@ jobs:
       matrix:
         target: [host, arm64, armv7, armv6, riscv64, amd64-musl, arm64-musl, armv7-musl, armv6-musl, riscv64-musl]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 } # git describe needs tag history for VERSION
-      - uses: actions/setup-go@v5
-        with: { go-version: '${{ env.GO_VERSION }}' }
-      - uses: actions/setup-node@v4
-        with: { node-version: '${{ env.NODE_VERSION }}' }
+      - run: make -s versions >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@v7
+        with: { node-version-file: web/ui/.nvmrc }
       - name: install mandoc + nfpm
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq mandoc
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@$NFPM_VERSION"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: install zig
         if: matrix.target != 'host' # only the cross-compile targets need it
         run: |
-          ZIGVER=$(curl -fsSL https://ziglang.org/download/index.json | python3 -c \
-            "import json,sys; d=json.load(sys.stdin); print(sorted([k for k in d if k!='master'], key=lambda v:[int(x) for x in v.split('.')])[-1])")
-          curl -fsSL "https://ziglang.org/download/$ZIGVER/zig-x86_64-linux-$ZIGVER.tar.xz" | tar -xJ -C /usr/local
-          sudo ln -s "/usr/local/zig-x86_64-linux-$ZIGVER/zig" /usr/local/bin/zig
+          curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-$ZIG_VERSION" >> "$GITHUB_PATH"
       - name: build + package
         run: |
           make release TARGET=${{ matrix.target }}
@@ -68,7 +66,7 @@ jobs:
             *)      make deb rpm archlinux TARGET=${{ matrix.target }} ;;
           esac
           cp dist/*.deb dist/*.rpm dist/*.zst dist/*.apk out/ 2>/dev/null || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: out/*
@@ -78,7 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: out, merge-multiple: true }
       - run: cd out && sha256sum -- * > SHA256SUMS
       - run: gh release create "${{ github.ref_name }}" out/* --generate-notes
@@ -91,14 +89,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { packages: write }
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
       - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64 \
-            --build-arg VERSION="${{ github.ref_name }}" \
+            --build-arg VERSION="${GITHUB_REF_NAME#v}" \
+            $(make -s image-args) \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             -t "ghcr.io/${{ github.repository }}:${{ github.ref_name }}" \

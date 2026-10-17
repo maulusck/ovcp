@@ -1,6 +1,18 @@
 # require(cmds,msg): fail if none of cmds (space-separated alternatives) are on PATH.
 require = command -v $(firstword $(1)) >/dev/null 2>&1 $(patsubst %,|| command -v % >/dev/null 2>&1,$(wordlist 2,99,$(1))) || { echo "missing: $(2)"; exit 1; }
 
+# Toolchain versions, one home each: Go in go.mod, Node in web/ui/.nvmrc, the
+# rest here. `make versions` prints them; CI and the image build read that.
+GO_VERSION     := $(shell sed -n 's/^go //p' go.mod)
+NODE_VERSION   := $(shell cat web/ui/.nvmrc)
+ZIG_VERSION    := 0.17.0
+NFPM_VERSION   := v2.48.0
+ALPINE_VERSION := 3.24
+TOOLCHAIN      := GO_VERSION NODE_VERSION ZIG_VERSION NFPM_VERSION ALPINE_VERSION
+IMAGE_ARGS     := $(foreach v,GO_VERSION NODE_VERSION ZIG_VERSION ALPINE_VERSION,--build-arg $(v)=$($(v)))
+# want(cmd,version,name): fail unless cmd's output contains version.
+want = v=$$($(1) 2>&1); case "$$v" in *$(2)*) ;; *) echo "$(3): want $(2), have: $$(echo "$$v" | head -1)"; exit 1;; esac
+
 BINARY  := ovcp
 # v1.2.3 tags give 1.2.3; an untagged tree gives 0.0.0-<hash>, which every
 # package format accepts (deb needs a leading digit) and sorts below 1.0.0.
@@ -49,16 +61,24 @@ else
 APK_TARGET := $(HOSTARCH)-musl
 endif
 
-.PHONY: build check clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
+.PHONY: build check versions image-args clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
 
 release: build completions ## UI + binary + shell completions
 
-deps: ## check build tools are on PATH (go, cc, npm, mandoc)
-	@$(call require,go,go (1.22+))
+deps: ## check build tools are on PATH at `make versions` (go, cc, node, mandoc)
+	@$(call require,go,go)
 	@$(call require,cc gcc,a C compiler (CGO, for the sqlite driver))
 	@$(call require,npm,npm (web/ui))
 	@$(call require,mandoc,mandoc (renders docs/ovcp.8 for the UI's Docs tab))
+	@$(call want,go env GOVERSION,go$(GO_VERSION),go)
+	@$(call want,node --version,v$(NODE_VERSION).,node)
 	@echo "build deps OK"
+
+versions: ## print the toolchain versions as KEY=value
+	@$(foreach v,$(TOOLCHAIN),echo $(v)=$($(v));)
+
+image-args: ## print the Containerfile's toolchain --build-arg flags
+	@echo $(IMAGE_ARGS)
 
 CTR := $(shell command -v podman || command -v docker)
 # id=ovcp-build-cache in the Containerfile's zig/go RUN mount; reused by
@@ -67,15 +87,16 @@ CACHE_HINT := podman/docker builder prune reclaims the persistent build cache (i
 
 check-image: check-target
 	@$(call require,podman docker,podman or docker (container image build))
-	@test "$(TARGET)" = host || $(CTR) run --rm --platform $(PLATFORM) docker.io/library/alpine:latest true >/dev/null 2>&1 || \
+	@test "$(TARGET)" = host || $(CTR) run --rm --platform $(PLATFORM) docker.io/library/alpine:$(ALPINE_VERSION) true >/dev/null 2>&1 || \
 	  { echo "error: this host can't run $(PLATFORM) containers (no working QEMU/binfmt for it) - see docs/BUILD.md, 'Cross-building an image needs QEMU/binfmt'"; exit 1; }
 
 image: check-image ## build all-in-one container image for TARGET's arch (default: this host's own); podman, else docker
 	@echo "using persistent zig/go build cache - $(CACHE_HINT)"
-	$(CTR) build --platform $(PLATFORM) -t ovcp -t ovcp:$(VERSION) --build-arg VERSION=$(VERSION) -f Containerfile .
+	$(CTR) build --platform $(PLATFORM) -t ovcp -t ovcp:$(VERSION) --build-arg VERSION=$(VERSION) $(IMAGE_ARGS) -f Containerfile .
 
 check-nfpm:
 	@$(call require,nfpm,nfpm (packaging))
+	@$(call want,nfpm --version,$(NFPM_VERSION),nfpm)
 
 deb rpm archlinux: check-nfpm release ## build package (needs nfpm; TARGET= to cross-build first, see build)
 	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
@@ -97,7 +118,7 @@ help: ## show targets and variables
 	@echo "  prefix, DESTDIR      install paths, GNU-standard (install target)"
 
 web/ui/node_modules: web/ui/package.json web/ui/package-lock.json
-	cd web/ui && npm ci
+	cd web/ui && npm ci --no-fund
 	@touch $@
 
 ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the in-app Docs tab)
@@ -108,7 +129,7 @@ check-target:
 	@test "$(TARGET)" = host -o -n "$(t-$(TARGET))" || { echo "unknown TARGET=$(TARGET) (see: make help)"; exit 1; }
 
 check-cross: check-target
-	@test -z '$(CC)' || { $(call require,zig,zig (cross-compiler for TARGET=$(TARGET))); }
+	@test -z '$(CC)' || { $(call require,zig,zig (cross-compiler for TARGET=$(TARGET))); $(call want,zig version,$(ZIG_VERSION),zig); }
 
 build: check-cross ui ## build bin/ovcp (CGO for sqlite; see help for TARGET= to cross-build via zig)
 	GOOS=$(if $(GOARCH),linux) GOARCH=$(GOARCH) GOARM=$(GOARM) CC='$(CC)' \
