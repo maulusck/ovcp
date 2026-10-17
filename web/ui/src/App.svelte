@@ -11,6 +11,7 @@
   import Users from './Users.svelte'
   import Logs from './Logs.svelte'
   import Docs from './Docs.svelte'
+  /** @import { Me } from './api.gen' */
 
   const ALL_TABS = [
     ['dashboard', 'Dashboard'],
@@ -29,24 +30,21 @@
   // packaged/container install ships the binary, not a .git directory.
   const REPO_URL = 'https://goldrake.bot.nu/c/maulusck/ovcp.git'
 
-  let user = $state(null)
+  let user = $state(/** @type {Me | null} */ (null))
   let verLong = $state(false) // footer: short "ovcp X" vs long "ovcp X · openvpn Y (path)"
-  let tab = $state(ALL_TABS.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
+  let tab = $state(savedTab && ALL_TABS.some(([id]) => id === savedTab) ? savedTab : 'dashboard')
   let navOpen = $state(false)
   let themeOpen = $state(false)
   // set by Dashboard's CN click, consumed (and cleared) by Certs to scroll/flash the matching row
   let focusCN = $state('')
-  function goToCert(cn) { tab = 'certs'; focusCN = cn }
+  function goToCert(/** @type {string} */ cn) { tab = 'certs'; focusCN = cn }
   let login = $state({ username: '', password: '', totp: '' })
   let step = $state('creds') // creds | totp
   let err = $state('')
 
-  async function boot() {
-    try { user = await api('GET', '/me') } catch { user = null }
-    // tab title: server CN identifies which VPN this is, useful with several open
-    document.title = user?.serverCN ? `OVCP · ${user.serverCN}` : 'OVCP'
-  }
-  boot()
+  api('GET /api/me').then((me) => (user = me)).catch(() => {})
+  // tab title: server CN identifies which VPN this is, useful with several open
+  $effect(() => { document.title = user?.serverCN ? `OVCP · ${user.serverCN}` : 'OVCP' })
 
   // app-wide live status poll while signed in — cadence matches how often
   // openvpn itself rewrites its status file server-side (statusPollSeconds),
@@ -54,12 +52,12 @@
   $effect(() => {
     if (!user) return
     pollOnce()
-    const t = setInterval(pollOnce, (user.statusPollSeconds || 3) * 1000)
+    const t = setInterval(pollOnce, user.statusPollSeconds * 1000)
     return () => clearInterval(t)
   })
 
   // once backend.up has gone false, lock the UI until a real page reload —
-  // forces boot()'s /me re-check instead of quietly resuming a stale session.
+  // forces the /me re-check instead of quietly resuming a stale session.
   let backendWasDown = $state(false)
   $effect(() => {
     if (!backend.up) { backendWasDown = true; return }
@@ -74,22 +72,22 @@
   // close the mobile nav/theme dropdowns on an outside tap (native <details> has no such behavior)
   $effect(() => {
     if (!navOpen && !themeOpen) return
-    const onClick = (e) => {
-      if (!e.target.closest('.nav-mobile')) navOpen = false
-      if (!e.target.closest('.theme-mobile')) themeOpen = false
+    const onClick = (/** @type {MouseEvent} */ e) => {
+      const t = /** @type {Element} */ (e.target)
+      if (!t.closest('.nav-mobile')) navOpen = false
+      if (!t.closest('.theme-mobile')) themeOpen = false
     }
     document.addEventListener('click', onClick)
     return () => document.removeEventListener('click', onClick)
   })
 
-  async function doLogin(e) {
+  async function doLogin(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     err = ''
     try {
-      await api('POST', '/login', {
+      user = await api('POST /api/login', {
         Username: login.username, Password: login.password, TOTP: login.totp,
       })
-      await boot() // /login's response lacks version/platform fields; /me has them
       login = { username: '', password: '', totp: '' }; step = 'creds'
     } catch (x) {
       if (x.error === 'totp required') { step = 'totp'; return }
@@ -100,14 +98,14 @@
   }
 
   async function doLogout() {
-    try { await api('POST', '/logout') } catch {}
+    try { await api('POST /api/logout') } catch {}
     user = null
     tab = 'dashboard'
   }
 
   // deterministic per-username "identicon": a symmetric 5x3 bit grid seeded
   // by a cheap string hash — no avatar library, no network image.
-  function identicon(seed, size = 24) {
+  function identicon(/** @type {string} */ seed, size = 24) {
     let h = 0
     for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0
     const cell = size / 5
@@ -124,8 +122,8 @@
       `<rect width="100%" height="100%" fill="var(--ink)"/><g fill="hsl(${h % 360} 65% 55%)">${rects}</g></svg>`
   }
 
-  const canOperate = $derived(user && user.role !== 'readonly')
-  const isAdmin = $derived(user && user.role === 'admin')
+  const canOperate = $derived(!!user && user.role !== 'readonly')
+  const isAdmin = $derived(!!user && user.role === 'admin')
   const currentTheme = $derived(THEMES.find(t => t.name === theme.name) ?? THEMES[0])
   const phaseText = $derived(
     vpn.phase === 'ok' ? `VPN running · up ${vpn.uptime} · ${vpn.clients} client${vpn.clients === 1 ? '' : 's'} connected` +
@@ -207,7 +205,7 @@
       </div>
     </details>
     <div class="who">
-      <select class="theme-pick" value={theme.name} onchange={(e) => setTheme(e.target.value)}
+      <select class="theme-pick" value={theme.name} onchange={(e) => setTheme(e.currentTarget.value)}
         title="UI theme">
         {#each THEMES as t}
           <option value={t.name} style="background:{t.bg}; color:{t.fg}">{t.label}</option>
@@ -237,9 +235,9 @@
     {:else if tab === 'stats'}
       <Stats />
     {:else if tab === 'certs'}
-      <Certs {canOperate} {isAdmin} upstreamsAvailable={!!user.upstreamsEnabled} bind:focusCN />
+      <Certs {canOperate} {isAdmin} upstreamsAvailable={user.upstreamsEnabled} bind:focusCN />
     {:else if tab === 'settings'}
-      <Settings {isAdmin} dnsAvailable={!!user.dnsmasqVersion} upstreamsAvailable={!!user.upstreamsEnabled} />
+      <Settings {isAdmin} dnsAvailable={!!user.dnsmasqVersion} upstreamsAvailable={user.upstreamsEnabled} />
     {:else if tab === 'users'}
       <Users {isAdmin} me={user.username} minLen={user.minSecretLen} minClasses={user.minSecretClasses} />
     {:else if tab === 'logs'}

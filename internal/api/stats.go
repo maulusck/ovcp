@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/ovcp/ovcp/internal/controller"
@@ -197,11 +196,11 @@ func Stats(st *store.Store, cn string) (StatsSnapshot, error) {
 	return out, nil
 }
 
-func (s *Server) handleStats(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cn := r.URL.Query().Get("cn")
-	if len(cn) > pki.MaxCNLen {
-		jsonErr(w, 400, "cn too long")
-		return
+func (s *Server) handleStats(c call, in struct {
+	CN string `json:"cn"`
+}) (StatsSnapshot, error) {
+	if len(in.CN) > pki.MaxCNLen {
+		return StatsSnapshot{}, fail(400, "cn too long")
 	}
-	act(w)(Stats(s.Store, cn))
+	return Stats(s.Store, in.CN)
 }

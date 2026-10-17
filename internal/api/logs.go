@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,27 +52,33 @@ func tailLines(path string, n int) ([]string, error) {
 
 // logHandler builds a GET handler tailing <DataDir>/logs/filename; shared by
 // the openvpn.log and ovcp.log routes so the tailing logic exists exactly once.
-func (s *Server) logHandler(filename string) handler {
-	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) logHandler(filename string) func(call, none) (LogTail, error) {
+	return func(c call, _ none) (LogTail, error) {
 		lines, err := tailLines(filepath.Join(s.DataDir, "logs", filename), tailLineLimit)
 		if err != nil {
-			jsonErr(w, 500, err.Error())
-			return
+			return LogTail{}, httpError{500, err}
 		}
-		jsonOK(w, map[string]any{"lines": lines})
+		return LogTail{lines}, nil
 	}
+}
+
+// LogTail is a log's last lines.
+type LogTail struct {
+	Lines []string `json:"lines"`
 }
 
 // handleLogsDownload bundles an unencrypted audit package: every regular file
 // in logs/ (so rotated/compressed siblings come along too), the audit trail,
 // and a status.json snapshot — no new exposure, no keys/DB (that's `ovcp backup`).
-func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
-	w.Header().Set("Content-Type", "application/zip")
+func (s *Server) handleLogsDownload(c call, _ none) (Download, error) {
 	name := "ovcp-audit-" + time.Now().Format("20060102-150405") + ".zip"
 	if cn := sanitizeFilename(s.DefaultRemote()); cn != "" {
 		name = "ovcp-audit-" + cn + "-" + time.Now().Format("20060102-150405") + ".zip"
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	return Download{name, "application/zip", s.writeAuditZip}, nil
+}
+
+func (s *Server) writeAuditZip(w io.Writer) error {
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 	// top-level only (logrotate never nests); IsRegular excludes symlinks
@@ -103,6 +108,7 @@ func (s *Server) handleLogsDownload(w http.ResponseWriter, r *http.Request, u *s
 			f.Write(data)
 		}
 	}
+	return nil
 }
 
 // statusExport reuses the same reads /status, /certs, /users, /config do.

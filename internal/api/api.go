@@ -5,9 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -58,65 +62,205 @@ const (
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// public
-	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("POST /api/login", s.handleLogin)
-	// authenticated
-	mux.Handle("POST /api/logout", s.wrap(auth.RoleReadonly, s.handleLogout))
-	mux.Handle("GET /api/me", s.wrap(auth.RoleReadonly, s.handleMe))
-	mux.Handle("GET /api/status", s.wrap(auth.RoleReadonly, s.handleStatus))
-	mux.Handle("GET /api/stats", s.wrap(auth.RoleReadonly, s.handleStats))
-	mux.Handle("GET /api/certs", s.wrap(auth.RoleReadonly, s.handleCertList))
-	mux.Handle("GET /api/vpn/config", s.wrap(auth.RoleReadonly, s.handleVPNConfigGet))
-	mux.Handle("GET /api/audit", s.wrap(auth.RoleReadonly, s.handleAudit))
-	for _, name := range controller.LogNames {
-		mux.Handle("GET /api/logs/"+name, s.wrap(auth.RoleReadonly, s.logHandler(name+".log")))
+	for _, rt := range s.routes() {
+		if rt.role == "" {
+			mux.HandleFunc(rt.pattern, func(w http.ResponseWriter, r *http.Request) { rt.serve(call{w, r, nil}) })
+		} else {
+			mux.Handle(rt.pattern, s.wrap(rt.role, rt.serve))
+		}
 	}
-	mux.Handle("GET /api/logs/download", s.wrap(auth.RoleOperator, s.handleLogsDownload))
-	mux.Handle("GET /api/logs/config", s.wrap(auth.RoleReadonly, s.handleLogsConfigGet))
-	mux.Handle("PUT /api/logs/config", s.wrap(auth.RoleAdmin, s.handleLogsConfigSet))
-	mux.Handle("POST /api/logs/rotate", s.wrap(auth.RoleAdmin, s.handleLogsRotate))
-	mux.Handle("GET /api/stats/config", s.wrap(auth.RoleReadonly, s.handleStatsConfigGet))
-	mux.Handle("PUT /api/stats/config", s.wrap(auth.RoleAdmin, s.handleStatsConfigSet))
-	mux.Handle("GET /api/debug", s.wrap(auth.RoleReadonly, s.handleDebugGet))
-	mux.Handle("POST /api/debug", s.wrap(auth.RoleAdmin, s.handleDebugSet))
-	mux.Handle("POST /api/clients/kill", s.wrap(auth.RoleOperator, s.handleKill))
-	mux.Handle("POST /api/certs", s.wrap(auth.RoleOperator, s.handleIssue))
-	mux.Handle("POST /api/certs/revoke", s.wrap(auth.RoleOperator, s.handleRevoke))
-	mux.Handle("POST /api/certs/renew", s.wrap(auth.RoleAdmin, s.handleRenew))
-	mux.Handle("POST /api/backup", s.wrap(auth.RoleAdmin, s.handleBackup))
-	mux.Handle("POST /api/certs/export", s.wrap(auth.RoleOperator, s.handleExport))
-	mux.Handle("PUT /api/vpn/config", s.wrap(auth.RoleAdmin, s.handleVPNConfigPut))
-	mux.Handle("POST /api/vpn/config/preview", s.wrap(auth.RoleAdmin, s.handleVPNConfigPreview))
-	mux.Handle("POST /api/vpn/{op}", s.wrap(auth.RoleAdmin, s.handleProc("vpn", s.VPN, true)))
-	mux.Handle("POST /api/dns/{op}", s.wrap(auth.RoleAdmin, s.handleProc("dns", s.DNS, false)))
-	mux.Handle("PATCH /api/certs/{serial}/dns", s.wrap(auth.RoleOperator, s.handleCertDNS))
-	mux.Handle("GET /api/records", s.wrap(auth.RoleReadonly, s.handleRecords))
-	mux.Handle("PUT /api/records/custom", s.wrap(auth.RoleAdmin, s.handleCustomHostsPut))
-	mux.Handle("POST /api/records/custom/preview", s.wrap(auth.RoleAdmin, s.handleCustomHostsPreview))
-	mux.Handle("GET /api/dns/config", s.wrap(auth.RoleReadonly, s.handleDNSConfigGet))
-	mux.Handle("PUT /api/dns/config", s.wrap(auth.RoleAdmin, s.handleDNSConfigSet))
-	mux.Handle("GET /api/upstreams", s.wrap(auth.RoleReadonly, s.handleUpstreamsGet))
-	mux.Handle("POST /api/upstreams", s.wrap(auth.RoleAdmin, s.handleUpstreamAdd))
-	mux.Handle("DELETE /api/upstreams/{id}", s.wrap(auth.RoleAdmin, s.handleUpstreamDelete))
-	mux.Handle("PUT /api/upstreams/default", s.wrap(auth.RoleAdmin, s.handleUpstreamSetDefault))
-	mux.Handle("PUT /api/upstreams/assign", s.wrap(auth.RoleAdmin, s.handleUpstreamAssign))
-	mux.Handle("POST /api/upstreams/reconcile", s.wrap(auth.RoleAdmin, s.handleUpstreamReconcile))
-	mux.Handle("GET /api/telegram/config", s.wrap(auth.RoleReadonly, s.handleTelegramConfigGet))
-	mux.Handle("PUT /api/telegram/config", s.wrap(auth.RoleAdmin, s.handleTelegramConfigSet))
-	mux.Handle("POST /api/telegram/{op}", s.wrap(auth.RoleAdmin, s.handleTelegramOp))
-	mux.Handle("GET /api/certs/download", s.wrap(auth.RoleReadonly, s.handleCertDownload))
-	mux.Handle("GET /api/users", s.wrap(auth.RoleAdmin, s.handleUsersList))
-	mux.Handle("POST /api/users", s.wrap(auth.RoleAdmin, s.handleUserAdd))
-	mux.Handle("DELETE /api/users/{name}", s.wrap(auth.RoleAdmin, s.handleUserDelete))
-	mux.Handle("PATCH /api/users/{name}", s.wrap(auth.RoleAdmin, s.handleUserDisabled))
-	mux.Handle("POST /api/users/{name}/password", s.wrap(auth.RoleAdmin, s.handleUserPassword))
-	mux.Handle("POST /api/users/{name}/totp", s.wrap(auth.RoleAdmin, s.handleUserTOTPEnroll))
-	mux.Handle("DELETE /api/users/{name}/totp", s.wrap(auth.RoleAdmin, s.handleUserTOTPOff))
 	if s.UI != nil {
 		mux.Handle("/", spa(s.UI))
 	}
 	return requestLog(secureHeaders(mux))
+}
+
+// routes is the web API: every route, the role it needs ("" is public) and
+// its handler. Handler serves it; TypeScript describes it to the web UI.
+func (s *Server) routes() []route {
+	rs := []route{
+		handle("GET /healthz", "", s.handleHealthz),
+		handle("POST /api/login", "", s.handleLogin),
+		handle("POST /api/logout", auth.RoleReadonly, s.handleLogout),
+		handle("GET /api/me", auth.RoleReadonly, s.handleMe),
+		handle("GET /api/status", auth.RoleReadonly, s.handleStatus),
+		handle("GET /api/stats", auth.RoleReadonly, s.handleStats),
+		handle("GET /api/certs", auth.RoleReadonly, s.handleCertList),
+		handle("GET /api/vpn/config", auth.RoleReadonly, s.handleVPNConfigGet),
+		handle("GET /api/audit", auth.RoleReadonly, s.handleAudit),
+		handle("GET /api/logs/download", auth.RoleOperator, s.handleLogsDownload),
+		handle("GET /api/logs/config", auth.RoleReadonly, s.handleLogsConfigGet),
+		handle("PUT /api/logs/config", auth.RoleAdmin, s.handleLogsConfigSet),
+		handle("POST /api/logs/rotate", auth.RoleAdmin, s.handleLogsRotate),
+		handle("GET /api/stats/config", auth.RoleReadonly, s.handleStatsConfigGet),
+		handle("PUT /api/stats/config", auth.RoleAdmin, s.handleStatsConfigSet),
+		handle("GET /api/debug", auth.RoleReadonly, s.handleDebugGet),
+		handle("POST /api/debug", auth.RoleAdmin, s.handleDebugSet),
+		handle("POST /api/clients/kill", auth.RoleOperator, s.handleKill),
+		handle("POST /api/certs", auth.RoleOperator, s.handleIssue),
+		handle("POST /api/certs/revoke", auth.RoleOperator, s.handleRevoke),
+		handle("POST /api/certs/renew", auth.RoleAdmin, s.handleRenew),
+		handle("POST /api/backup", auth.RoleAdmin, s.handleBackup),
+		handle("POST /api/certs/export", auth.RoleOperator, s.handleExport),
+		handle("PUT /api/vpn/config", auth.RoleAdmin, s.handleVPNConfigPut),
+		handle("POST /api/vpn/config/preview", auth.RoleAdmin, s.handleVPNConfigPreview),
+		handle("POST /api/vpn/{op}", auth.RoleAdmin, s.handleProc("vpn", s.VPN, true)),
+		handle("POST /api/dns/{op}", auth.RoleAdmin, s.handleProc("dns", s.DNS, false)),
+		handle("PATCH /api/certs/{serial}/dns", auth.RoleOperator, s.handleCertDNS),
+		handle("GET /api/records", auth.RoleReadonly, s.handleRecords),
+		handle("PUT /api/records/custom", auth.RoleAdmin, s.handleCustomHostsPut),
+		handle("POST /api/records/custom/preview", auth.RoleAdmin, s.handleCustomHostsPreview),
+		handle("GET /api/dns/config", auth.RoleReadonly, s.handleDNSConfigGet),
+		handle("PUT /api/dns/config", auth.RoleAdmin, s.handleDNSConfigSet),
+		handle("GET /api/upstreams", auth.RoleReadonly, s.handleUpstreamsGet),
+		handle("POST /api/upstreams", auth.RoleAdmin, s.handleUpstreamAdd),
+		handle("DELETE /api/upstreams/{id}", auth.RoleAdmin, s.handleUpstreamDelete),
+		handle("PUT /api/upstreams/default", auth.RoleAdmin, s.handleUpstreamSetDefault),
+		handle("PUT /api/upstreams/assign", auth.RoleAdmin, s.handleUpstreamAssign),
+		handle("POST /api/upstreams/reconcile", auth.RoleAdmin, s.handleUpstreamReconcile),
+		handle("GET /api/telegram/config", auth.RoleReadonly, s.handleTelegramConfigGet),
+		handle("PUT /api/telegram/config", auth.RoleAdmin, s.handleTelegramConfigSet),
+		handle("POST /api/telegram/{op}", auth.RoleAdmin, s.handleTelegramOp),
+		handle("GET /api/certs/download", auth.RoleReadonly, s.handleCertDownload),
+		handle("GET /api/users", auth.RoleAdmin, s.handleUsersList),
+		handle("POST /api/users", auth.RoleAdmin, s.handleUserAdd),
+		handle("DELETE /api/users/{name}", auth.RoleAdmin, s.handleUserDelete),
+		handle("PATCH /api/users/{name}", auth.RoleAdmin, s.handleUserDisabled),
+		handle("POST /api/users/{name}/password", auth.RoleAdmin, s.handleUserPassword),
+		handle("POST /api/users/{name}/totp", auth.RoleAdmin, s.handleUserTOTPEnroll),
+		handle("DELETE /api/users/{name}/totp", auth.RoleAdmin, s.handleUserTOTPOff),
+	}
+	for _, name := range controller.LogNames {
+		rs = append(rs, handle("GET /api/logs/"+name, auth.RoleReadonly, s.logHandler(name+".log")))
+	}
+	return rs
+}
+
+// call is one request as a route's handler sees it; u is nil on a public route.
+type call struct {
+	w http.ResponseWriter
+	r *http.Request
+	u *store.User
+}
+
+// none is the input of a route that reads nothing.
+type none struct{}
+
+// route is one web API route: in is what its handler reads, out what it returns.
+type route struct {
+	pattern string
+	role    auth.Role
+	in, out reflect.Type
+	serve   func(call)
+}
+
+// handle is a route whose handler reads In (a JSON body, or on GET the query,
+// then the pattern's {wildcards}) and returns Out as JSON, a Download as its file.
+func handle[In, Out any](pattern string, role auth.Role, h func(call, In) (Out, error)) route {
+	in := reflect.TypeFor[In]()
+	wild := wildcards(pattern, in)
+	return route{pattern, role, in, reflect.TypeFor[Out](), func(c call) {
+		var v In
+		if err := readIn(c.r, wild, &v); err != nil {
+			jsonErr(c.w, 400, "bad json")
+			return
+		}
+		out, err := h(c, v)
+		respond(c.w, out, err)
+	}}
+}
+
+// wildcards are pattern's {names}; each must be a string field of in, by JSON name.
+func wildcards(pattern string, in reflect.Type) []string {
+	var names []string
+	for seg := range strings.SplitSeq(pattern, "/") {
+		name, ok := strings.CutPrefix(seg, "{")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSuffix(name, "}")
+		if f, ok := jsonField(in, name); !ok || f.Type.Kind() != reflect.String {
+			panic(pattern + ": {" + name + "} is not a string field of " + in.String())
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+// readIn fills v from r. Query and path values go on top of the body, so a
+// body can't override the path.
+func readIn(r *http.Request, wild []string, v any) error {
+	params := map[string]string{}
+	if r.Method == http.MethodGet {
+		for k, vs := range r.URL.Query() {
+			params[k] = vs[0]
+		}
+	} else if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20)).Decode(v); err != nil && err != io.EOF {
+		return err // no body sets nothing
+	}
+	for _, k := range wild {
+		params[k] = r.PathValue(k)
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(params)
+	return json.Unmarshal(b, v)
+}
+
+// Download is a file response.
+type Download struct {
+	Name, Type string
+	Write      func(io.Writer) error
+}
+
+// Patch is a request body applied onto the current T: omitted fields keep their value.
+type Patch[T any] struct{ raw json.RawMessage }
+
+func (p *Patch[T]) UnmarshalJSON(b []byte) error { p.raw = append(p.raw[:0], b...); return nil }
+
+// Onto is cur with p's fields set.
+func (p Patch[T]) Onto(cur T) (T, error) {
+	if p.raw == nil {
+		return cur, nil
+	}
+	return cur, json.Unmarshal(p.raw, &cur)
+}
+
+func (Patch[T]) patched() reflect.Type { return reflect.TypeFor[T]() }
+
+// httpError is an error with its own status.
+type httpError struct {
+	code int
+	error
+}
+
+func fail(code int, msg string) error { return httpError{code, errors.New(msg)} }
+
+// respond writes a handler's result, or its error: an httpError's status, an
+// unknown target 404, anything else a 400 the caller can fix.
+func respond(w http.ResponseWriter, out any, err error) {
+	var he httpError
+	switch {
+	case errors.As(err, &he):
+		jsonErr(w, he.code, err.Error())
+	case errors.Is(err, ErrNotConnected), errors.Is(err, store.ErrNoActiveCert), errors.Is(err, ErrNoUpstream):
+		jsonErr(w, 404, err.Error())
+	case err != nil:
+		jsonErr(w, 400, err.Error())
+	default:
+		d, ok := out.(Download)
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(out)
+			return
+		}
+		w.Header().Set("Content-Type", d.Type)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, d.Name))
+		if err := d.Write(w); err != nil {
+			jsonErr(w, 500, err.Error())
+		}
+	}
 }
 
 // requestLog: Debug for 2xx/4xx noise, Warn for 5xx so server faults are
@@ -145,10 +289,8 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-type handler func(w http.ResponseWriter, r *http.Request, u *store.User)
-
 // wrap = session auth + CSRF (mutating verbs) + RBAC.
-func (s *Server) wrap(required auth.Role, h handler) http.Handler {
+func (s *Server) wrap(required auth.Role, serve func(call)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookie)
 		if err != nil {
@@ -171,7 +313,7 @@ func (s *Server) wrap(required auth.Role, h handler) http.Handler {
 			jsonErr(w, 403, "insufficient role")
 			return
 		}
-		h(w, r, u)
+		serve(call{w, r, u})
 	})
 }
 
@@ -206,11 +348,6 @@ func spa(ui fs.FS) http.Handler {
 
 // --- helpers ---
 
-func jsonOK(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
-}
-
 func jsonErr(w http.ResponseWriter, code int, msg string) {
 	if code >= 500 {
 		slog.Warn("api error", "status", code, "msg", msg)
@@ -218,10 +355,6 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
-func decode(r *http.Request, v any) bool {
-	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20)).Decode(v) == nil
 }
 
 func randToken() string {

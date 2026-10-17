@@ -336,8 +336,12 @@ owned by `ovcp`; remove it with `sudo rmdir data`.
 ### Tests
 
 `make check` runs every gate, the same target CI's `test` job runs:
-`go vet`, `gofmt`, `mandoc` lint and every test, failing on any failed or
-skipped test (full output in `dist/check.log`). Commit only behind it:
+`go vet`, `gofmt`, the web UI type check, `mandoc` lint and every test,
+failing on any failed or skipped test (full output in `dist/check.log`).
+The type check (`npm run check`: svelte-check, strict) reads
+`web/ui/src/api.gen.d.ts`, which `go run ./cmd/apits` generates from the
+Go route table; it is git-ignored, so run `make check` once before checking
+the UI alone. Commit only behind it:
 
 ```sh
 make check && git commit

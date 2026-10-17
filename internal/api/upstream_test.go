@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,12 +246,8 @@ func TestVPNStartRunsAfterStart(t *testing.T) {
 	calls := 0
 	srv := &Server{Store: s, VPN: &fakeVPN{}, AfterVPNStart: func() error { calls++; return nil }}
 	for _, op := range []string{"start", "restart", "stop", "reconnect"} {
-		r := httptest.NewRequest("POST", "/api/vpn/"+op, nil)
-		r.SetPathValue("op", op)
-		w := httptest.NewRecorder()
-		srv.handleProc("vpn", srv.VPN, true)(w, r, &store.User{Username: "admin"})
-		if w.Code != 200 {
-			t.Fatalf("%s: %d %s", op, w.Code, w.Body)
+		if _, err := srv.handleProc("vpn", srv.VPN, true)(call{u: &store.User{Username: "admin"}}, opIn{op}); err != nil {
+			t.Fatalf("%s: %v", op, err)
 		}
 	}
 	if calls != 2 {

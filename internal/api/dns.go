@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -91,16 +90,15 @@ func Records(certs []store.Cert, live []controller.VPNClient, serverCN string, s
 	return RecordList{rows, custom}
 }
 
-func (s *Server) handleRecords(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleRecords(c call, _ none) (RecordList, error) {
 	certs, err := s.Store.ListCerts()
 	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
+		return RecordList{}, httpError{500, err}
 	}
 	live, _ := s.Mgmt.Status() // openvpn down: nothing resolves live
 	ip, _ := s.LoadConfig().ServerTunIP()
 	custom, _ := os.ReadFile(s.CustomHostsPath)
-	jsonOK(w, Records(certs, live, s.DefaultRemote(), ip, string(custom)))
+	return Records(certs, live, s.DefaultRemote(), ip, string(custom)), nil
 }
 
 // RefreshCertsHosts regenerates certs.hosts from live. RunSampler's ticker

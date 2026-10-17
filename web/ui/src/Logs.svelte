@@ -2,13 +2,19 @@
   import { tick } from 'svelte'
   import { api, downloadBlob, copyToClipboard, matchesQuery, sortRows, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
   import Msg from './Msg.svelte'
+  /** @import { AuditEntry } from './api.gen' */
+  /** @import { Sort } from './api.js' */
+  /** @typedef {'openvpn' | 'ovcp' | 'dnsmasq'} LogName */
+  /** @typedef {'audit' | LogName} PanelId */
+  /** @typedef {{ id: LogName, title: string, file: string }} Log */
   let { isAdmin, canOperate } = $props()
 
   // Splits a line into time/level/msg: ovcp's own "time=... level=X ..." text,
   // its -log-json form, or a leading RFC3339 token — one space-free token, so
   // a future format change here needs no matching edit on this side.
+  /** @param {string} line */
   function parseLine(line) {
-    let raw = '', msg = line, level
+    let raw = '', msg = line, level = 'info'
     if (line[0] === '{') {
       try {
         const j = JSON.parse(line)
@@ -24,26 +30,32 @@
       raw = m[1]; level = m[2].toLowerCase(); msg = m[3]
     } else {
       m = line.match(/^(\S+)\s+(.*)$/)
-      if (m && !isNaN(new Date(m[1]))) { raw = m[1]; msg = m[2] }
+      if (m && !isNaN(Date.parse(m[1]))) { raw = m[1]; msg = m[2] }
       level = /\b(error|fatal|fail(ed|ure)?)\b/i.test(msg) ? 'error'
         : /\bwarn(ing)?\b/i.test(msg) ? 'warn' : 'info'
     }
-    const d = raw && new Date(raw)
-    return { time: d && !isNaN(d) ? fmtTimestamp(d) : '', ts: d && !isNaN(d) ? d.getTime() : 0, level, msg }
+    const d = new Date(raw), ok = raw !== '' && !isNaN(d.getTime())
+    return { time: ok ? fmtTimestamp(d) : '', ts: ok ? d.getTime() : 0, level, msg }
   }
 
   // the two log panels render as a table like the audit panel; audit stays bespoke
   // (newest-first, no autoscroll) since it's real structured rows, not parsed text.
+  /** @type {Log[]} */
   const LOGS = [
     { id: 'openvpn', title: 'OpenVPN log', file: 'openvpn.log' },
     { id: 'ovcp', title: 'OVCP log', file: 'ovcp.log' },
     { id: 'dnsmasq', title: 'Dnsmasq log', file: 'dnsmasq.log' },
   ]
+  /** @type {PanelId[]} */
   const PANEL_IDS = ['audit', ...LOGS.map((l) => l.id)] // initial order
+  /** @type {Record<LogName, string[]>} */
   let lines = $state({ openvpn: [], ovcp: [], dnsmasq: [] })
+  /** @type {AuditEntry[]} */
   let entries = $state([])
-  let boxes = $state({}) // id -> scroll container ('audit' included)
-  let cards = $state({}) // id -> <details> element, for Maximize
+  /** @type {Partial<Record<PanelId, HTMLElement>>} */
+  let boxes = $state({}) // scroll containers ('audit' included)
+  /** @type {Partial<Record<PanelId, HTMLDetailsElement>>} */
+  let cards = $state({}) // <details> elements, for Maximize
   let debugOn = $state(false)
   let err = $state('')
 
@@ -52,6 +64,7 @@
   const AUTOSCROLL_KEY = 'ovcp_logs_autoscroll'
   let autoscroll = $state(localStorage.getItem(AUTOSCROLL_KEY) !== '0')
   const OPEN_KEY = 'ovcp_logs_open'
+  /** @type {Record<PanelId, boolean>} */
   let openState = $state(Object.assign(
     { audit: true, openvpn: false, ovcp: true, dnsmasq: false },
     JSON.parse(localStorage.getItem(OPEN_KEY) || '{}')))
@@ -60,15 +73,17 @@
   // Collapsed panels always sort after, in fixed PANEL_IDS order — no
   // tracking needed for those.
   const ORDER_KEY = 'ovcp_logs_order'
+  /** @type {PanelId[]} */
   const savedOrder = JSON.parse(localStorage.getItem(ORDER_KEY) || 'null') || []
   let order = $state([
     ...savedOrder.filter((id) => PANEL_IDS.includes(id)),
     ...PANEL_IDS.filter((id) => !savedOrder.includes(id)),
   ])
-  const bumpFront = (id) => (order = [id, ...order.filter((x) => x !== id)])
+  const bumpFront = (/** @type {PanelId} */ id) => (order = [id, ...order.filter((x) => x !== id)])
 
   // clamp a box's height to content: CSS fit-content doesn't work vertically in Firefox,
   // so measure instead (also re-clamps a resize drag on pointerup).
+  /** @param {HTMLElement | undefined} el */
   function fitToContent(el) {
     if (!el) return
     const cur = el.offsetHeight
@@ -76,9 +91,10 @@
     el.style.height = Math.min(cur, el.offsetHeight) + 'px'
   }
 
+  /** @param {LogName} id */
   async function loadLog(id) {
     try {
-      lines[id] = (await api('GET', '/logs/' + id)).lines
+      lines[id] = (await api(`GET /api/logs/${id}`)).lines
       await tick()
       const el = boxes[id]
       fitToContent(el)
@@ -87,14 +103,14 @@
     } catch (x) { flash(v => err = v, x.error) }
   }
   async function loadAudit() {
-    try { entries = await api('GET', '/audit'); await tick(); fitToContent(boxes.audit); err = '' }
+    try { entries = await api('GET /api/audit'); await tick(); fitToContent(boxes.audit); err = '' }
     catch (x) { flash(v => err = v, x.error) }
   }
   async function loadDebug() {
-    try { debugOn = (await api('GET', '/debug')).debug; err = '' } catch (x) { flash(v => err = v, x.error) }
+    try { debugOn = (await api('GET /api/debug')).debug; err = '' } catch (x) { flash(v => err = v, x.error) }
   }
   // per-panel refresh (maximized view's own button) — every id already has a loader.
-  const refreshOne = (id) => (id === 'audit' ? loadAudit() : loadLog(id))
+  const refreshOne = (/** @type {PanelId} */ id) => (id === 'audit' ? loadAudit() : loadLog(id))
   let refreshing = $state(false)
   async function refresh() {
     if (refreshing) return
@@ -104,7 +120,7 @@
   }
   refresh()
 
-  const setAllOpen = (open) => (openState = { audit: open, ...Object.fromEntries(LOGS.map((l) => [l.id, open])) })
+  const setAllOpen = (/** @type {boolean} */ open) => (openState = /** @type {Record<PanelId, boolean>} */ (Object.fromEntries(PANEL_IDS.map((id) => [id, open]))))
 
   // odd expanded count leaves one dangling grid cell — stack collapsed panels into it.
   const openIds = $derived(order.filter((id) => openState[id]))
@@ -117,8 +133,9 @@
     audit: { open: false, query: '' }, openvpn: { open: false, query: '' },
     ovcp: { open: false, query: '' }, dnsmasq: { open: false, query: '' },
   })
+  /** @type {Record<string, (e: AuditEntry) => string>} */
   const AUDIT_SORT_GETTERS = { ts: (e) => e.TS, actor: (e) => e.Actor, action: (e) => e.Action, detail: (e) => e.Detail }
-  let auditSort = $state({ key: null, desc: false })
+  let auditSort = $state(/** @type {Sort} */ ({ key: null, desc: false }))
   const filteredEntries = $derived.by(() => {
     const out = entries.filter((e) => matchesQuery(e, search.audit.query, (x) => x.Actor, (x) => x.Action, (x) => x.Detail))
     return auditSort.key ? sortRows(out, AUDIT_SORT_GETTERS[auditSort.key], auditSort.desc) : out
@@ -126,27 +143,33 @@
 
   // level-only filter, openvpn/ovcp panels only (audit has no level) —
   // 'all' skips it entirely so the common case parses each line once, not twice.
+  /** @type {Record<string, number>} */
   const LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 }
-  let levelFilter = $state({ openvpn: 'all', ovcp: 'all', dnsmasq: 'all' })
+  /** @type {Record<PanelId, string>} */
+  let levelFilter = $state({ audit: 'all', openvpn: 'all', ovcp: 'all', dnsmasq: 'all' })
+  /** @type {Record<string, (line: string) => string | number>} */
   const LOG_SORT_GETTERS = {
     ts: (line) => parseLine(line).ts, level: (line) => LEVEL_RANK[parseLine(line).level] ?? 1,
     msg: (line) => parseLine(line).msg,
   }
+  /** @type {Record<LogName, Sort>} */
   let logSort = $state({ openvpn: { key: null, desc: false }, ovcp: { key: null, desc: false }, dnsmasq: { key: null, desc: false } })
-  const visibleLines = (id) => {
+  const visibleLines = (/** @type {LogName} */ id) => {
     const out = lines[id]
       .filter((line) => matchesQuery(line, search[id].query, (x) => x))
       .filter((line) => levelFilter[id] === 'all' || LEVEL_RANK[parseLine(line).level] >= LEVEL_RANK[levelFilter[id]])
     return logSort[id].key ? sortRows(out, LOG_SORT_GETTERS[logSort[id].key], logSort[id].desc) : out
   }
 
+  /** @param {Event & { currentTarget: HTMLInputElement }} e */
   async function toggleDebug(e) {
-    const want = e.target.checked
-    try { debugOn = (await api('POST', '/debug', { Debug: want })).debug; err = '' }
-    catch (x) { flash(v => err = v, x.error); e.target.checked = !want }
+    const want = e.currentTarget.checked
+    try { debugOn = (await api('POST /api/debug', { debug: want })).debug; err = '' }
+    catch (x) { flash(v => err = v, x.error); e.currentTarget.checked = !want }
   }
 
   let copied = $state('')
+  /** @param {string} panel @param {string} text */
   async function copyText(panel, text) {
     if (!(await copyToClipboard(text, 'Log text'))) return
     flash(v => copied = v, panel, 1200)
@@ -154,15 +177,20 @@
   const auditText = () => filteredEntries.map(e =>
     `${fmtTimestamp(new Date(e.TS))} ${e.Actor} ${e.Action} ${e.Detail}`).join('\n')
 
-  // archive download has fixed server-side filenames, no request input — per-log
-  // copy/download stays client-side instead of adding a parametrized endpoint.
-  const downloadAllLogs = () => (window.location.href = '/api/logs/download')
+  // the archive is the server's (every file in logs/); per-log copy/download
+  // is what's shown here, client-side.
+  async function downloadAllLogs() {
+    try { const { blob, filename } = await api('GET /api/logs/download'); downloadBlob(blob, filename) }
+    catch (x) { flash(v => err = v, x.error) }
+  }
 
-  const downloadText = (filename, text) => downloadBlob(new Blob([text], { type: 'text/plain' }), filename)
+  const downloadText = (/** @type {string} */ filename, /** @type {string} */ text) => downloadBlob(new Blob([text], { type: 'text/plain' }), filename)
 
   // native Fullscreen API for "maximize" — no custom overlay/z-index CSS,
   // Esc-to-exit and restore both come from the browser for free.
-  let maximized = $state(null) // panel id | null
+  /** @type {PanelId | null} */
+  let maximized = $state(null)
+  /** @param {PanelId} id */
   function toggleMaximize(id) {
     const el = cards[id]
     if (!el) return
@@ -171,13 +199,13 @@
   }
   $effect(() => {
     const onChange = () =>
-      (maximized = Object.keys(cards).find((k) => cards[k] === document.fullscreenElement) ?? null)
+      (maximized = PANEL_IDS.find((k) => cards[k] === document.fullscreenElement) ?? null)
     document.addEventListener('fullscreenchange', onChange)
     return () => document.removeEventListener('fullscreenchange', onChange)
   })
 
   $effect(() => {
-    localStorage.setItem(POLL_KEY, pollSec)
+    localStorage.setItem(POLL_KEY, String(pollSec))
     if (!pollSec) return
     const t = setInterval(refresh, pollSec * 1000)
     return () => clearInterval(t)
@@ -187,7 +215,7 @@
   $effect(() => { localStorage.setItem(ORDER_KEY, JSON.stringify(order)) })
 </script>
 
-{#snippet actions(id, filename, text, hasLevel)}
+{#snippet actions(/** @type {PanelId} */ id, /** @type {string} */ filename, /** @type {() => string} */ text, /** @type {boolean} */ hasLevel = false)}
   <div class="panel-actions">
     {#if hasLevel}
       <select bind:value={levelFilter[id]} title="Show only this level and above">
@@ -252,7 +280,7 @@
 
 {#snippet auditPanel()}
   <details class="card" bind:open={openState.audit} bind:this={cards.audit}
-    ontoggle={(e) => e.target.open && bumpFront('audit')}>
+    ontoggle={(e) => e.currentTarget.open && bumpFront('audit')}>
     <summary onclick={(e) => maximized === 'audit' && e.preventDefault()}>Audit log</summary>
     {#if entries.length === 0}
       <p class="muted">No entries yet.</p>
@@ -287,9 +315,9 @@
   </details>
 {/snippet}
 
-{#snippet logPanel(l)}
+{#snippet logPanel(/** @type {Log} */ l)}
   <details class="card" bind:open={openState[l.id]} bind:this={cards[l.id]}
-    ontoggle={(e) => e.target.open && bumpFront(l.id)}>
+    ontoggle={(e) => e.currentTarget.open && bumpFront(l.id)}>
     <summary onclick={(e) => maximized === l.id && e.preventDefault()}>{l.title}</summary>
     {#if lines[l.id].length === 0}
       <p class="muted">No log yet.</p>
@@ -323,8 +351,8 @@
   </details>
 {/snippet}
 
-{#snippet panel(id)}
-  {#if id === 'audit'}{@render auditPanel()}{:else}{@render logPanel(LOGS.find((l) => l.id === id))}{/if}
+{#snippet panel(/** @type {PanelId} */ id)}
+  {#if id === 'audit'}{@render auditPanel()}{:else}{@render logPanel(/** @type {Log} */ (LOGS.find((l) => l.id === id)))}{/if}
 {/snippet}
 
 <div class="logs-grid">

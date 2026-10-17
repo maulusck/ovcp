@@ -1,5 +1,6 @@
 <script>
   import { fade } from 'svelte/transition'
+  /** @type {{ type: string, text: string, role?: string }} */
   let { type, text, role } = $props()
 </script>
 

@@ -1,34 +1,32 @@
 <script>
   import { api, fmtBytes, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, fmtDate, flash } from './api.js'
-  import { vpn, dns, telegram, pollOnce } from './status.svelte.js'
+  import { vpn, dns, telegram, certs, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
-  let { canOperate, goToCert, dnsAvailable, caCN, caNotAfter, caStatus } = $props()
+  /** @import { VPNClient } from './api.gen' */
+  /** @import { Sort } from './api.js' */
+  /** @type {{ canOperate: boolean, goToCert: (cn: string) => void, dnsAvailable: boolean, caCN?: string, caNotAfter?: string, caStatus?: string }} */
+  let { canOperate, goToCert, dnsAvailable, caCN, caNotAfter = '', caStatus } = $props()
   let err = $state('')
 
-  // cert count/DNS leak check: a DB scan / config read, not a cheap
-  // point-check — one-shot on mount, unlike vpn/dns/telegram below
-  // (status.svelte.js), which are already polled app-wide.
-  let certSummary = $state({ total: 0, warn: 0 })
-  api('GET', '/certs').then((certs) => {
-    certSummary = { total: certs.length, warn: certs.filter((c) => c.status === 'expiring' || c.status === 'expired').length }
-  }).catch(() => {})
-
+  // DNS leak check: a config read, one-shot on mount, unlike the rest
+  // (status.svelte.js), which is polled app-wide.
   let dnsWarning = $state('')
   $effect(() => {
     if (!dnsAvailable) return
-    api('GET', '/dns/config').then((d) => (dnsWarning = d.warning || '')).catch(() => {})
+    api('GET /api/dns/config').then((d) => (dnsWarning = d.warning ?? '')).catch(() => {})
   })
 
   // no local poll loop: App.svelte already polls status app-wide (for the
   // header pill) and caches the full client list on the shared vpn state.
-  async function kill(cn) {
+  async function kill(/** @type {string} */ cn) {
     if (!confirm(`Disconnect ${cn}?`)) return
-    try { await api('POST', '/clients/kill', { CN: cn }); pollOnce(); err = '' }
+    try { await api('POST /api/clients/kill', { CN: cn }); pollOnce(); err = '' }
     catch (x) { flash(v => err = v, x.error) }
   }
 
   let search = $state({ open: false, query: '' })
-  let sort = $state({ key: null, desc: false })
+  let sort = $state(/** @type {Sort} */ ({ key: null, desc: false }))
+  /** @type {Record<string, (c: VPNClient) => string | number>} */
   const SORT_GETTERS = {
     cn: (c) => c.CN, real: (c) => c.RealAddress, vpnAddr: (c) => c.VirtualAddress,
     recv: (c) => c.BytesRecv, sent: (c) => c.BytesSent, since: (c) => c.ConnectedSince,
@@ -41,7 +39,7 @@
 
 <div class="card">
   <h2>Server status</h2>
-  <p class="status-line" class:warn={certSummary.warn > 0}>{certSummary.total} cert{certSummary.total === 1 ? '' : 's'}{certSummary.warn ? ` · ${certSummary.warn} need attention` : ''}</p>
+  <p class="status-line" class:warn={certs.expiring > 0}>{certs.total} cert{certs.total === 1 ? '' : 's'}{certs.expiring ? ` · ${certs.expiring} expiring` : ''}</p>
   {#if caCN}
     <p class="status-line" class:warn={caStatus !== 'valid'}>CA "{caCN}" — {caStatus}, expires {fmtDate(new Date(caNotAfter))}</p>
   {/if}

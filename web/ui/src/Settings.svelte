@@ -1,49 +1,53 @@
 <script>
-  import { api, apiBlob, downloadBlob, procOp, procDone, flash, autosize, sortRows, toggleSort, sortMark } from './api.js'
+  import { api, downloadBlob, procOp, procDone, flash, autosize, sortRows, toggleSort, sortMark } from './api.js'
   import { expectRecovery, expectDnsRecovery, telegram, upstreams, pollOnce } from './status.svelte.js'
   import Msg from './Msg.svelte'
+  /** @import { Config, Preview, DNSView, UpstreamView, UpstreamRow, LogConfig, StatsConfig } from './api.gen' */
+  /** @import { Sort } from './api.js' */
+  /** @type {{ isAdmin: boolean, dnsAvailable: boolean, upstreamsAvailable: boolean }} */
   let { isAdmin, dnsAvailable, upstreamsAvailable } = $props()
-  let cfg = $state(null)
+  let cfg = $state(/** @type {Config | null} */ (null))
   let dns = $state('')
   let err = $state('')
   let ok = $state('')
 
   async function load() {
     try {
-      cfg = await api('GET', '/vpn/config')
-      dns = (cfg.DNS || []).join(', ')
+      cfg = await api('GET /api/vpn/config')
+      dns = cfg.DNS.join(', ')
     } catch (x) { flash(v => err = v, x.error) }
   }
   load()
 
   function normalized() {
-    cfg.DNS = dns.split(',').map(s => s.trim()).filter(Boolean)
-    cfg.Port = +cfg.Port
-    return cfg
+    const c = /** @type {Config} */ (cfg)
+    return { ...c, DNS: dns.split(',').map(s => s.trim()).filter(Boolean), Port: +c.Port }
   }
 
-  async function save(e) {
+  async function save(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     err = ''; ok = ''; preview = null
     try {
-      cfg = await api('PUT', '/vpn/config', normalized())
+      cfg = await api('PUT /api/vpn/config', normalized())
+      showDNS(await api('GET /api/dns/config'))
       flash(v => ok = v, 'Saved. Use Restart to apply configuration changes.')
     } catch (x) { flash(v => err = v, x.error) }
   }
 
-  let preview = $state(null) // {diff, changed}
+  let preview = $state(/** @type {Preview | null} */ (null))
   async function previewConfig() {
     err = ''; ok = ''
-    try { preview = await api('POST', '/vpn/config/preview', normalized()) }
+    try { preview = await api('POST /api/vpn/config/preview', normalized()) }
     catch (x) { flash(v => err = v, x.error) }
   }
 
   // Config and CRL changes require a full Restart (fresh root process re-reads
   // the keys); Reconnect only soft-resets live sessions for recovery.
+  /** @param {string} op @param {string | null} confirmMsg @param {number} recoverMs @param {string} done @param {string} [label] */
   async function vpn(op, confirmMsg, recoverMs, done, label) {
     err = ''; ok = ''
     try {
-      const r = await procOp('/vpn/', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectRecovery(ms, label) })
+      const r = await procOp('POST /api/vpn/{op}', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectRecovery(ms, label) })
       if (r) flash(v => ok = v, procDone(op, r, done))
     } catch (x) { flash(v => err = v, x.error) }
   }
@@ -57,51 +61,49 @@
   // shape as the vpn card above (fields, then one row: save/preview/lifecycle).
   let blockInternet = $state(false)
   let dnsRecords = $state('')
-  let dnsPreview = $state(null)
+  let dnsPreview = $state(/** @type {Preview | null} */ (null))
+  let dnsWarning = $state('')
   let dnsErr = $state('')
   let dnsOk = $state('')
 
-  // Advisory only, mirrors api.DNSLeakWarning — never blocks Save.
-  const dnsLeakWarning = $derived.by(() => {
-    if (!cfg || !blockInternet) return ''
-    if (dns.trim()) return 'Manual DNS entries can leak queries around Block internet DNS.'
-    if (!cfg.PushInternalDNS) return 'Block internet DNS has no effect unless Push internal DNS is also on.'
-    return ''
-  })
+  // the server's DNS leak advisory (api.DNSLeakWarning) for the saved configs
+  const showDNS = (/** @type {DNSView} */ d) => { blockInternet = d.BlockInternet; dnsWarning = d.warning ?? '' }
 
   async function loadDNS() {
     try {
-      blockInternet = (await api('GET', '/dns/config')).BlockInternet
-      dnsRecords = (await api('GET', '/records')).custom
+      showDNS(await api('GET /api/dns/config'))
+      dnsRecords = (await api('GET /api/records')).custom
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }
   $effect(() => { if (dnsAvailable) loadDNS() })
 
+  /** @param {Event & { currentTarget: HTMLInputElement }} e */
   async function toggleBlockInternet(e) {
-    const want = e.target.checked
-    try { blockInternet = (await api('PUT', '/dns/config', { BlockInternet: want })).BlockInternet }
-    catch (x) { flash(v => dnsErr = v, x.error); e.target.checked = !want }
+    const want = e.currentTarget.checked
+    try { showDNS(await api('PUT /api/dns/config', { BlockInternet: want })) }
+    catch (x) { flash(v => dnsErr = v, x.error); e.currentTarget.checked = !want }
   }
 
   async function previewDNS() {
     dnsErr = ''; dnsOk = ''
-    try { dnsPreview = await api('POST', '/records/custom/preview', { Content: dnsRecords }) }
+    try { dnsPreview = await api('POST /api/records/custom/preview', { Content: dnsRecords }) }
     catch (x) { flash(v => dnsErr = v, x.error) }
   }
 
-  async function saveDNS(e) {
+  async function saveDNS(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     dnsErr = ''; dnsOk = ''; dnsPreview = null
     try {
-      await api('PUT', '/records/custom', { Content: dnsRecords })
+      await api('PUT /api/records/custom', { Content: dnsRecords })
       flash(v => dnsOk = v, 'Saved. Use Restart to apply configuration changes.')
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }
 
+  /** @param {string} op @param {string | null} confirmMsg @param {number} recoverMs @param {string} done @param {string} [label] */
   async function dnsOp(op, confirmMsg, recoverMs, done, label) {
     dnsErr = ''; dnsOk = ''
     try {
-      const r = await procOp('/dns/', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectDnsRecovery(ms, label) })
+      const r = await procOp('POST /api/dns/{op}', op, { confirm: confirmMsg, recoverMs, onRecover: (ms) => expectDnsRecovery(ms, label) })
       if (r) flash(v => dnsOk = v, procDone(op, r, done))
     } catch (x) { flash(v => dnsErr = v, x.error) }
   }
@@ -111,53 +113,55 @@
 
   // Upstreams: policy-routed VPN egress — a list of named entries (add/del/
   // set-default), not a single-blob form like DNS/logs above.
-  let upCfg = $state(null)
+  let upCfg = $state(/** @type {UpstreamView | null} */ (null))
   let upErr = $state('') // list card: remove/set-default/reconcile
   let upOk = $state('')
   let addErr = $state('') // add-upstream card, own pair — same split as Users' form vs. list
   let addOk = $state('')
   let newID = $state(''), newIface = $state(''), newGateway = $state(''), newSocks = $state(''), newDesc = $state('')
   let newMode = $state('iface') // 'iface' | 'socks' — which fields the add form sends
-  let upSort = $state({ key: null, desc: false })
+  let upSort = $state(/** @type {Sort} */ ({ key: null, desc: false }))
+  /** @type {Record<string, (u: UpstreamRow) => string | undefined>} */
   const UP_SORT_GETTERS = { id: (u) => u.id, iface: (u) => u.iface, desc: (u) => u.description }
   const sortedUpstreams = $derived.by(() => {
-    const rows = upCfg?.upstreams || []
+    const rows = upCfg?.upstreams ?? []
     return upSort.key ? sortRows(rows, UP_SORT_GETTERS[upSort.key], upSort.desc) : rows
   })
 
   async function loadUpstreams() {
-    try { upCfg = await api('GET', '/upstreams') } catch (x) { flash(v => upErr = v, x.error) }
+    try { upCfg = await api('GET /api/upstreams') } catch (x) { flash(v => upErr = v, x.error) }
   }
   $effect(() => { if (upstreamsAvailable) loadUpstreams() })
 
-  async function addUpstream(e) {
+  async function addUpstream(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     addErr = ''; addOk = ''
     try {
       const body = newMode === 'socks'
         ? { ID: newID, SOCKS: newSocks, Description: newDesc }
         : { ID: newID, Iface: newIface, Gateway: newGateway, Description: newDesc }
-      upCfg = await api('POST', '/upstreams', body)
+      upCfg = await api('POST /api/upstreams', body)
       const id = newID
       newID = ''; newIface = ''; newGateway = ''; newSocks = ''; newDesc = ''
       flash(v => addOk = v, `Added ${id}.`)
     } catch (x) { flash(v => addErr = v, x.error) }
   }
 
-  async function delUpstream(id) {
+  async function delUpstream(/** @type {string} */ id) {
     if (!confirm(`Remove upstream "${id}"? Traffic steered through it falls back to the host's own default route.`)) return
     upErr = ''; upOk = ''
     try {
-      upCfg = await api('DELETE', '/upstreams/' + encodeURIComponent(id))
+      upCfg = await api('DELETE /api/upstreams/{id}', { id })
       flash(v => upOk = v, `Removed ${id}.`)
     } catch (x) { flash(v => upErr = v, x.error) }
   }
 
+  /** @param {Event & { currentTarget: HTMLSelectElement }} e */
   async function setDefaultUpstream(e) {
-    const id = e.target.value
+    const id = e.currentTarget.value
     upErr = ''; upOk = ''
     try {
-      upCfg = await api('PUT', '/upstreams/default', { ID: id })
+      upCfg = await api('PUT /api/upstreams/default', { ID: id })
       flash(v => upOk = v, id ? `Default: ${id}.` : "Default: off (host's own default route).")
     } catch (x) { flash(v => upErr = v, x.error); loadUpstreams() }
   }
@@ -168,29 +172,28 @@
   async function reconcileUpstreams() {
     upErr = ''; upOk = ''
     try {
-      const r = await api('POST', '/upstreams/reconcile')
+      const r = await api('POST /api/upstreams/reconcile')
       upCfg = r
-      flash(v => upOk = v, r.warning || 'Reconciled — all upstreams reachable.')
+      flash(v => upOk = v, r.warning ?? 'Reconciled — all upstreams reachable.')
     } catch (x) { flash(v => upErr = v, x.error) }
   }
 
   // Logs: rotation policy for openvpn.log/ovcp.log/dnsmasq.log.
-  let logsCfg = $state(null)
+  let logsCfg = $state(/** @type {LogConfig | null} */ (null))
   let logsErr = $state('')
   let logsOk = $state('')
 
   async function loadLogsCfg() {
-    try { logsCfg = await api('GET', '/logs/config') } catch (x) { flash(v => logsErr = v, x.error) }
+    try { logsCfg = await api('GET /api/logs/config') } catch (x) { flash(v => logsErr = v, x.error) }
   }
   loadLogsCfg()
 
-  async function saveLogsCfg(e) {
+  async function saveLogsCfg(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     logsErr = ''; logsOk = ''
-    logsCfg.RetentionDays = +logsCfg.RetentionDays
-    logsCfg.KeepUncompressed = +logsCfg.KeepUncompressed
+    const c = /** @type {LogConfig} */ (logsCfg)
     try {
-      logsCfg = await api('PUT', '/logs/config', logsCfg)
+      logsCfg = await api('PUT /api/logs/config', { ...c, RetentionDays: +c.RetentionDays, KeepUncompressed: +c.KeepUncompressed })
       flash(v => logsOk = v, 'Saved.')
     } catch (x) { flash(v => logsErr = v, x.error) }
   }
@@ -198,28 +201,27 @@
   async function rotateLogs() {
     logsErr = ''; logsOk = ''
     try {
-      await api('POST', '/logs/rotate')
+      await api('POST /api/logs/rotate')
       flash(v => logsOk = v, 'Rotated.')
     } catch (x) { flash(v => logsErr = v, x.error) }
   }
 
   // Stats: traffic-history sampling/retention policy.
-  let statsCfg = $state(null)
+  let statsCfg = $state(/** @type {StatsConfig | null} */ (null))
   let statsErr = $state('')
   let statsOk = $state('')
 
   async function loadStatsCfg() {
-    try { statsCfg = await api('GET', '/stats/config') } catch (x) { flash(v => statsErr = v, x.error) }
+    try { statsCfg = await api('GET /api/stats/config') } catch (x) { flash(v => statsErr = v, x.error) }
   }
   loadStatsCfg()
 
-  async function saveStatsCfg(e) {
+  async function saveStatsCfg(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     statsErr = ''; statsOk = ''
-    statsCfg.SampleIntervalSec = +statsCfg.SampleIntervalSec
-    statsCfg.RetentionHours = +statsCfg.RetentionHours
+    const c = /** @type {StatsConfig} */ (statsCfg)
     try {
-      statsCfg = await api('PUT', '/stats/config', statsCfg)
+      statsCfg = await api('PUT /api/stats/config', { ...c, SampleIntervalSec: +c.SampleIntervalSec, RetentionHours: +c.RetentionHours })
       flash(v => statsOk = v, 'Saved.')
     } catch (x) { flash(v => statsErr = v, x.error) }
   }
@@ -231,10 +233,10 @@
     if (!passphrase) return
     backupErr = ''; backupOk = ''
     try {
-      const { blob, filename } = await apiBlob('POST', '/backup', { Passphrase: passphrase })
-      downloadBlob(blob, filename || 'ovcp-backup.ovcpbak')
+      const { blob, filename } = await api('POST /api/backup', { Passphrase: passphrase })
+      downloadBlob(blob, filename)
       flash(v => backupOk = v, 'Backup downloaded.')
-    } catch (x) { flash(v => backupErr = v, x.error || 'backup failed') }
+    } catch (x) { flash(v => backupErr = v, x.error) }
   }
 
   // telegram itself (running/tokenSet/admin/chatLinked) lives in the shared,
@@ -250,7 +252,7 @@
     if (!token) return
     tgErr = ''; tgOk = ''
     try {
-      await api('PUT', '/telegram/config', { Token: token })
+      await api('PUT /api/telegram/config', { Token: token })
       pollOnce()
       flash(v => tgOk = v, 'Token set. Start the bot below to bring it up.')
     } catch (x) { flash(v => tgErr = v, x.error) }
@@ -261,16 +263,17 @@
     if (!admin) return
     tgErr = ''; tgOk = ''
     try {
-      await api('PUT', '/telegram/config', { Admin: admin })
+      await api('PUT /api/telegram/config', { Admin: admin })
       pollOnce()
       flash(v => tgOk = v, 'Admin set.')
     } catch (x) { flash(v => tgErr = v, x.error) }
   }
 
+  /** @param {string} op @param {string} done */
   async function telegramOp(op, done) {
     tgErr = ''; tgOk = ''
     try {
-      const r = await procOp('/telegram/', op)
+      const r = await procOp('POST /api/telegram/{op}', op)
       pollOnce()
       flash(v => tgOk = v, procDone(op, r, done))
     } catch (x) { flash(v => tgErr = v, x.error) }
@@ -331,7 +334,7 @@
           <textarea bind:value={cfg.Extra} use:autosize={cfg.Extra} rows="2" placeholder="e.g. client-to-client" disabled={!isAdmin}></textarea>
         </label>
       </div>
-      <Msg type="err" text={dnsLeakWarning} />
+      <Msg type="err" text={preview?.warning ?? dnsWarning} />
       <Msg type="err" text={err} />
       <Msg type="ok" text={ok} />
       {#if preview}
@@ -378,7 +381,7 @@
           <textarea bind:value={dnsRecords} use:autosize={dnsRecords} rows="2" placeholder="10.8.0.50 pihole" disabled={!isAdmin}></textarea>
         </label>
       </div>
-      <Msg type="err" text={dnsLeakWarning} />
+      <Msg type="err" text={dnsWarning} />
       <Msg type="err" text={dnsErr} />
       <Msg type="ok" text={dnsOk} />
       {#if dnsPreview}
@@ -443,7 +446,7 @@
 
   <div class="card">
     <h2>Upstreams
-      {#if isAdmin && upCfg?.upstreams?.length}
+      {#if isAdmin && upCfg?.upstreams.length}
         <button type="button" class="ghost" onclick={reconcileUpstreams}
           title="Re-check reachability and re-apply routing/NAT for the saved config">Reconcile</button>
       {/if}

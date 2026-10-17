@@ -13,12 +13,14 @@ export const THEMES = [
 export const theme = $state({ name: localStorage.getItem(KEY) || 'default' })
 apply(theme.name)
 
+/** @param {string} name */
 export function setTheme(name) {
   theme.name = name
   localStorage.setItem(KEY, name)
   apply(name)
 }
 
+/** @param {string} name */
 function apply(name) {
   document.documentElement.dataset.theme = name
 }

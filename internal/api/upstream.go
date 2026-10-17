@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 
@@ -108,8 +107,8 @@ func ViewUpstreams(cfg upstream.Config, warning string) UpstreamView {
 	return UpstreamView{Upstreams: rows, Default: cfg.Default, PerCN: cfg.PerCN, Warning: warning}
 }
 
-func (s *Server) handleUpstreamsGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, ViewUpstreams(LoadUpstreamConfig(s.Store), ""))
+func (s *Server) handleUpstreamsGet(c call, _ none) (UpstreamView, error) {
+	return ViewUpstreams(LoadUpstreamConfig(s.Store), ""), nil
 }
 
 // applyAssign persists an assign's cfg, flips ManagementClientAuth when PerCN
@@ -276,40 +275,27 @@ func ReconcileUpstreams(st *store.Store, actor string, enabled bool, apply Appli
 	return v, nil
 }
 
-func (s *Server) handleUpstreamAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in upstream.Upstream
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(AddUpstream(s.Store, u.Username, s.UpstreamsEnabled, in, s.applyUpstreams))
+func (s *Server) handleUpstreamAdd(c call, in upstream.Upstream) (UpstreamView, error) {
+	return AddUpstream(s.Store, c.u.Username, s.UpstreamsEnabled, in, s.applyUpstreams)
 }
 
-func (s *Server) handleUpstreamDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
-	act(w)(DeleteUpstream(s.Store, u.Username, s.UpstreamsEnabled, r.PathValue("id"), s.applyUpstreams))
+func (s *Server) handleUpstreamDelete(c call, in struct {
+	ID string `json:"id"`
+}) (UpstreamView, error) {
+	return DeleteUpstream(s.Store, c.u.Username, s.UpstreamsEnabled, in.ID, s.applyUpstreams)
 }
 
-func (s *Server) handleUpstreamSetDefault(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ ID string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(SetDefaultUpstream(s.Store, u.Username, s.UpstreamsEnabled, in.ID, s.applyUpstreams))
+func (s *Server) handleUpstreamSetDefault(c call, in struct{ ID string }) (UpstreamView, error) {
+	return SetDefaultUpstream(s.Store, c.u.Username, s.UpstreamsEnabled, in.ID, s.applyUpstreams)
 }
 
-func (s *Server) handleUpstreamAssign(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct {
-		CN, ID string
-		Clear  bool
-	}
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(AssignUpstream(s.Store, u.Username, s.UpstreamsEnabled, s.ConfigPath, in.CN, in.ID, in.Clear, s.RewriteConnectedClientRule))
+func (s *Server) handleUpstreamAssign(c call, in struct {
+	CN, ID string
+	Clear  bool
+}) (UpstreamView, error) {
+	return AssignUpstream(s.Store, c.u.Username, s.UpstreamsEnabled, s.ConfigPath, in.CN, in.ID, in.Clear, s.RewriteConnectedClientRule)
 }
 
-func (s *Server) handleUpstreamReconcile(w http.ResponseWriter, r *http.Request, u *store.User) {
-	act(w)(ReconcileUpstreams(s.Store, u.Username, s.UpstreamsEnabled, s.applyUpstreams))
+func (s *Server) handleUpstreamReconcile(c call, _ none) (UpstreamView, error) {
+	return ReconcileUpstreams(s.Store, c.u.Username, s.UpstreamsEnabled, s.applyUpstreams)
 }

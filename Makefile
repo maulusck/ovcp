@@ -144,11 +144,14 @@ completions: ui ## generate shell completion scripts into dist/completion
 	@rm -f bin/.completions-helper
 
 # check is every gate, the one list CI and a commit both run: fails on any
-# vet, gofmt or mandoc complaint, any failed test and any skipped test.
+# vet, gofmt, web UI type or mandoc complaint, any failed test and any skipped
+# test. The UI is type-checked against the web API's types, generated from Go.
 check: SHELL := /bin/bash
 check: .SHELLFLAGS := -eo pipefail -c
-check: ui ## run every gate: vet, gofmt, mandoc lint, all tests, none skipped
+check: ui ## run every gate: vet, gofmt, UI types, mandoc lint, all tests, none skipped
 	go vet ./cmd/... ./internal/...
+	go run ./cmd/apits > web/ui/src/api.gen.d.ts
+	cd web/ui && npm run -s check
 	test -z "$$(gofmt -l cmd internal web)" || { gofmt -l cmd internal web; exit 1; }
 	mandoc -T lint -W warning docs/ovcp.8
 	mkdir -p dist && go test -count=1 -v ./cmd/... ./internal/... 2>&1 | tee dist/check.log | grep -E -- '^(--- FAIL|--- SKIP|FAIL|ok)'

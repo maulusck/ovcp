@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,115 +21,117 @@ import (
 
 // handleHealthz is unauthenticated (probes have no session); a DB ping is
 // the cheapest real signal serve is actually working, not just listening.
-func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHealthz(c call, _ none) (Health, error) {
 	if err := s.Store.Ping(); err != nil {
-		jsonErr(w, 503, "db unreachable")
-		return
+		return Health{}, fail(503, "db unreachable")
 	}
-	jsonOK(w, map[string]string{"status": "ok"})
+	return Health{"ok"}, nil
 }
 
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Username, Password, TOTP string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	token, u, err := s.Auth.Login(in.Username, in.Password, in.TOTP, clientIP(r))
+// Health is GET /healthz.
+type Health struct {
+	Status string `json:"status"`
+}
+
+func (s *Server) handleLogin(c call, in struct{ Username, Password, TOTP string }) (Me, error) {
+	token, u, err := s.Auth.Login(in.Username, in.Password, in.TOTP, clientIP(c.r))
 	switch err {
 	case nil:
 	case auth.ErrTOTPRequired:
-		jsonErr(w, 401, "totp required")
-		return
+		return Me{}, fail(401, "totp required")
 	case auth.ErrRateLimited:
-		slog.Warn("login rate limited", "user", in.Username, "remote", clientIP(r))
-		jsonErr(w, 429, "too many attempts, try again later")
-		return
+		slog.Warn("login rate limited", "user", in.Username, "remote", clientIP(c.r))
+		return Me{}, fail(429, "too many attempts, try again later")
 	default:
-		slog.Warn("login failed", "user", in.Username, "remote", clientIP(r))
-		jsonErr(w, 401, "invalid credentials")
-		return
+		slog.Warn("login failed", "user", in.Username, "remote", clientIP(c.r))
+		return Me{}, fail(401, "invalid credentials")
 	}
-	csrf := randToken()
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/",
+	http.SetCookie(c.w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/",
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 		MaxAge: int(auth.SessionTTL.Seconds())})
-	http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: csrf, Path: "/",
+	http.SetCookie(c.w, &http.Cookie{Name: csrfCookie, Value: randToken(), Path: "/",
 		Secure: true, SameSite: http.SameSiteStrictMode,
 		MaxAge: int(auth.SessionTTL.Seconds())})
-	jsonOK(w, map[string]string{"username": u.Username, "role": u.Role})
+	return s.me(u), nil
 }
 
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		s.Auth.Logout(c.Value)
+func (s *Server) handleLogout(c call, _ none) (Msg, error) {
+	if ck, err := c.r.Cookie(sessionCookie); err == nil {
+		s.Auth.Logout(ck.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
-	jsonOK(w, map[string]bool{"ok": true})
+	http.SetCookie(c.w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	return Msg{"logged out", true}, nil
 }
 
-func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
-	out := map[string]any{
-		"username": u.Username, "role": u.Role, "serverCN": s.DefaultRemote(),
-		"version": s.Version, "buildTarget": s.BuildTarget, "platform": runtime.GOOS + "/" + runtime.GOARCH,
-		"openvpnVersion": s.OpenVPNVersion, "openvpnPath": s.OpenVPNPath,
-		"dnsmasqVersion": s.DnsmasqVersion, "dnsmasqPath": s.DnsmasqPath,
-		"nftVersion": s.NftVersion, "nftPath": s.NftPath, "upstreamsEnabled": s.UpstreamsEnabled,
-		"minSecretLen": auth.MinSecretLen, "minSecretClasses": auth.MinSecretClasses,
-		// how often openvpn itself rewrites its status file (OVCP_STATUS_INTERVAL)
-		// — the UI polls /api/status at the same cadence so it's never asking
-		// faster than the data can actually change.
-		"statusPollSeconds": s.LoadConfig().EffectiveStatusInterval(),
-	}
-	// CA info for Settings' renew-CA card; store.Cert{}.Status() is the same
-	// classification every other cert-status display uses.
+// Me is the signed-in user and the server facts the UI shows: versions, the
+// password policy, the status poll cadence and the CA (unset if unreadable).
+type Me struct {
+	Username         string    `json:"username"`
+	Role             string    `json:"role"`
+	ServerCN         string    `json:"serverCN"`
+	Version          string    `json:"version"`
+	BuildTarget      string    `json:"buildTarget"`
+	Platform         string    `json:"platform"`
+	OpenVPNVersion   string    `json:"openvpnVersion"`
+	OpenVPNPath      string    `json:"openvpnPath"`
+	DnsmasqVersion   string    `json:"dnsmasqVersion"`
+	DnsmasqPath      string    `json:"dnsmasqPath"`
+	NftVersion       string    `json:"nftVersion"`
+	NftPath          string    `json:"nftPath"`
+	UpstreamsEnabled bool      `json:"upstreamsEnabled"`
+	MinSecretLen     int       `json:"minSecretLen"`
+	MinSecretClasses int       `json:"minSecretClasses"`
+	StatusPollSecs   int       `json:"statusPollSeconds"` // openvpn's status file cadence (OVCP_STATUS_INTERVAL)
+	CACN             string    `json:"caCN,omitempty"`
+	CANotAfter       time.Time `json:"caNotAfter,omitzero"`
+	CAStatus         string    `json:"caStatus,omitempty"`
+}
+
+func (s *Server) me(u *store.User) Me {
+	m := Me{u.Username, u.Role, s.DefaultRemote(), s.Version, s.BuildTarget, runtime.GOOS + "/" + runtime.GOARCH,
+		s.OpenVPNVersion, s.OpenVPNPath, s.DnsmasqVersion, s.DnsmasqPath, s.NftVersion, s.NftPath, s.UpstreamsEnabled,
+		auth.MinSecretLen, auth.MinSecretClasses, s.LoadConfig().EffectiveStatusInterval(), "", time.Time{}, ""}
 	if ca, err := s.PKI.CACert(); err == nil {
-		out["caCN"] = ca.Subject.CommonName
-		out["caNotAfter"] = ca.NotAfter
-		out["caStatus"] = store.Cert{NotAfter: ca.NotAfter}.Status()
+		m.CACN, m.CANotAfter, m.CAStatus = ca.Subject.CommonName, ca.NotAfter, store.Cert{NotAfter: ca.NotAfter}.Status()
 	}
-	jsonOK(w, out)
+	return m
 }
 
-func (s *Server) handleKill(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ CN string }
-	if !decode(r, &in) || in.CN == "" {
-		jsonErr(w, 400, "cn required")
-		return
+func (s *Server) handleMe(c call, _ none) (Me, error) { return s.me(c.u), nil }
+
+func (s *Server) handleKill(c call, in struct{ CN string }) (Msg, error) {
+	if in.CN == "" {
+		return Msg{}, fail(400, "cn required")
 	}
-	act(w)(Kill(s.Store, u.Username, in.CN, s.Mgmt.Kill))
+	return Kill(s.Store, c.u.Username, in.CN, s.Mgmt.Kill)
 }
 
-func (s *Server) handleCertList(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleCertList(c call, _ none) ([]CertRow, error) {
 	certs, err := s.Store.ListCerts()
 	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
+		return nil, httpError{500, err}
 	}
 	out := []CertRow{}
 	for _, c := range certs {
 		out = append(out, NewCertRow(c))
 	}
-	jsonOK(w, out)
+	return out, nil
 }
 
-func (s *Server) handleIssue(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct {
-		CN, Passphrase, KeyPassphrase string
-		Days                          int
-	}
-	if !decode(r, &in) || in.CN == "" || in.Passphrase == "" {
-		jsonErr(w, 400, "cn and passphrase required")
-		return
+func (s *Server) handleIssue(c call, in struct {
+	CN, Passphrase, KeyPassphrase string
+	Days                          int
+}) (IssueResult, error) {
+	if in.CN == "" || in.Passphrase == "" {
+		return IssueResult{}, fail(400, "cn and passphrase required")
 	}
 	req := ClientRequest{CN: in.CN, Days: defaultDays(in.Days, 365), Passphrase: []byte(in.Passphrase), KeyPass: in.KeyPassphrase}
 	ic, err := IssueClient(s.Store, s.PKI, req)
 	if err != nil {
-		s.pkiErr(w, err)
-		return
+		return IssueResult{}, pkiErr(err)
 	}
-	AuditClient(s.Store, u.Username, req, ic)
-	jsonOK(w, IssueResult{ic.SerialHex, string(ic.CertPEM), string(ic.KeyPEM)})
+	AuditClient(s.Store, c.u.Username, req, ic)
+	return IssueResult{ic.SerialHex, string(ic.CertPEM), string(ic.KeyPEM)}, nil
 }
 
 // IssueResult is a client issue's result: the key appears here once, never stored.
@@ -353,65 +356,52 @@ func RenewServer(st *store.Store, p *pki.PKI, certPath, keyPath, actor, cn strin
 }
 
 // handleRenew reissues the server cert in place, same CN (a rename is CLI-only).
-func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct {
-		Passphrase string
-		Days       int
-	}
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	res, err := RenewServer(s.Store, s.PKI, s.ServerCert, s.ServerKey, u.Username, s.DefaultRemote(), defaultDays(in.Days, 825), []byte(in.Passphrase))
+func (s *Server) handleRenew(c call, in struct {
+	Passphrase string
+	Days       int
+}) (RenewResult, error) {
+	res, err := RenewServer(s.Store, s.PKI, s.ServerCert, s.ServerKey, c.u.Username, s.DefaultRemote(), defaultDays(in.Days, 825), []byte(in.Passphrase))
 	if err != nil {
-		s.pkiErr(w, err)
-		return
+		return res, pkiErr(err)
 	}
-	jsonOK(w, res)
+	return res, nil
 }
 
 // handleBackup streams an encrypted backup download; admin-only. No restore endpoint here — `ovcp backup restore` is CLI-only, offline.
-func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Passphrase string }
-	if !decode(r, &in) || in.Passphrase == "" {
-		jsonErr(w, 400, "passphrase required")
-		return
+func (s *Server) handleBackup(c call, in struct{ Passphrase string }) (Download, error) {
+	if in.Passphrase == "" {
+		return Download{}, fail(400, "passphrase required")
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
 	name := "ovcp-backup-" + time.Now().Format("20060102-150405") + ".ovcpbak"
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
-	if err := backup.Create(s.DataDir, s.Store, w, []byte(in.Passphrase)); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-	s.Store.Audit(u.Username, "backup_create", "")
+	return Download{name, "application/octet-stream", func(w io.Writer) error {
+		if err := backup.Create(s.DataDir, s.Store, w, []byte(in.Passphrase)); err != nil {
+			return err
+		}
+		s.Store.Audit(c.u.Username, "backup_create", "")
+		return nil
+	}}, nil
 }
 
-func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Serial, Passphrase string }
-	if !decode(r, &in) || in.Serial == "" || in.Passphrase == "" {
-		jsonErr(w, 400, "serial and passphrase required")
-		return
+func (s *Server) handleRevoke(c call, in struct{ Serial, Passphrase string }) (RevokeResult, error) {
+	if in.Serial == "" || in.Passphrase == "" {
+		return RevokeResult{}, fail(400, "serial and passphrase required")
 	}
-	res, err := RevokeCert(s.Store, s.PKI, u.Username, in.Serial, []byte(in.Passphrase))
+	res, err := RevokeCert(s.Store, s.PKI, c.u.Username, in.Serial, []byte(in.Passphrase))
 	if err != nil {
-		s.pkiErr(w, err)
-		return
+		return res, pkiErr(err)
 	}
 	s.restartSessions(res.CN)
-	jsonOK(w, res)
+	return res, nil
 }
 
-// handleExport issues a fresh client cert and streams an inline .ovpn.
-func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct {
-		CN, Passphrase, Remote, KeyPassphrase, Extra string
-		Days                                         int
-		SplitTunnel, Renew                           bool
-	}
-	if !decode(r, &in) || in.CN == "" || in.Passphrase == "" {
-		jsonErr(w, 400, "cn and passphrase required")
-		return
+// handleExport issues a fresh client cert and returns an inline .ovpn.
+func (s *Server) handleExport(c call, in struct {
+	CN, Passphrase, Remote, KeyPassphrase, Extra string
+	Days                                         int
+	SplitTunnel, Renew                           bool
+}) (ExportResult, error) {
+	if in.CN == "" || in.Passphrase == "" {
+		return ExportResult{}, fail(400, "cn and passphrase required")
 	}
 	if in.Remote == "" {
 		in.Remote = s.DefaultRemote()
@@ -421,81 +411,77 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, u *store.U
 	ic, bundle, err := ExportClient(s.Store, s.PKI, s.TLSCrypt, req,
 		ExportOpts{Remote: in.Remote, ServerCN: s.DefaultRemote(), Extra: in.Extra, SplitTunnel: in.SplitTunnel})
 	if err != nil {
-		s.pkiErr(w, err)
-		return
+		return ExportResult{}, pkiErr(err)
 	}
 	if in.Renew {
 		s.restartSessions(in.CN)
 	}
-	AuditClient(s.Store, u.Username, req, ic)
-	jsonOK(w, ExportResult{ic.SerialHex, string(bundle)})
+	AuditClient(s.Store, c.u.Username, req, ic)
+	return ExportResult{ic.SerialHex, string(bundle)}, nil
 }
 
-func (s *Server) handleVPNConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, s.LoadConfig())
+func (s *Server) handleVPNConfigGet(c call, _ none) (ovpnconf.Config, error) {
+	return s.LoadConfig(), nil
 }
 
-// mergedConfig decodes r's body onto cur, keeping server-owned path fields
-// untouched — shared by PUT and preview so they can't drift on what's editable.
-func mergedConfig(cur ovpnconf.Config, r *http.Request) (ovpnconf.Config, bool) {
-	in := cur
-	if !decode(r, &in) {
-		return in, false
-	}
+// mergedConfig is p onto the current config, server-owned path fields kept:
+// shared by PUT and preview so they can't drift on what's editable.
+func (s *Server) mergedConfig(p Patch[ovpnconf.Config]) (ovpnconf.Config, error) {
+	cur := s.LoadConfig()
+	in, err := p.Onto(cur)
 	in.CACert, in.ServerCert, in.ServerKey = cur.CACert, cur.ServerCert, cur.ServerKey
 	in.CRL, in.TLSCrypt, in.MgmtSocket, in.StatusLog = cur.CRL, cur.TLSCrypt, cur.MgmtSocket, cur.StatusLog
 	in.StatusInterval = cur.StatusInterval
 	in.ServerCN = cur.ServerCN
-	return in, true
+	return in, err
 }
 
-func (s *Server) handleVPNConfigPut(w http.ResponseWriter, r *http.Request, u *store.User) {
-	in, ok := mergedConfig(s.LoadConfig(), r)
-	if !ok {
-		jsonErr(w, 400, "bad json")
-		return
+func (s *Server) handleVPNConfigPut(c call, p Patch[ovpnconf.Config]) (ovpnconf.Config, error) {
+	in, err := s.mergedConfig(p)
+	if err != nil {
+		return in, err
 	}
-	if _, err := SetVPNConfig(s.Store, u.Username, s.ConfigPath, in); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	jsonOK(w, in)
+	_, err = SetVPNConfig(s.Store, c.u.Username, s.ConfigPath, in)
+	return in, err
 }
 
 // handleVPNConfigPreview is handleVPNConfigPut's dry run: same merge+validation,
 // but diffs against the persisted config instead of writing.
-func (s *Server) handleVPNConfigPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
-	in, ok := mergedConfig(s.LoadConfig(), r)
-	if !ok {
-		jsonErr(w, 400, "bad json")
-		return
+func (s *Server) handleVPNConfigPreview(c call, p Patch[ovpnconf.Config]) (Preview, error) {
+	in, err := s.mergedConfig(p)
+	if err != nil {
+		return Preview{}, err
 	}
-	act(w)(PreviewVPNConfig(s.Store, in))
+	return PreviewVPNConfig(s.Store, in)
+}
+
+// opIn is a lifecycle route's input: the {op} it names.
+type opIn struct {
+	Op string `json:"op"`
 }
 
 // handleProc drives a supervised worker's lifecycle (start|stop|restart,
 // optionally reconnect) — shared by /api/vpn/{op} and /api/dns/{op}, name
 // prefixes the audit action and unknown-op message per worker.
-func (s *Server) handleProc(name string, target controller.Lifecycle, isVPN bool) handler {
-	return func(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleProc(name string, target controller.Lifecycle, isVPN bool) func(call, opIn) (controller.ControlResult, error) {
+	return func(c call, in opIn) (controller.ControlResult, error) {
 		var after func() error
 		if isVPN {
 			after = s.AfterVPNStart
 		}
-		res, err := controller.RunOp(target, r.PathValue("op"), isVPN, after)
+		res, err := controller.RunOp(target, in.Op, isVPN, after)
 		if err != nil {
-			jsonErr(w, opStatus(err), err.Error())
-			return
+			return res, httpError{opStatus(err), err}
 		}
-		if op := r.PathValue("op"); op != "status" { // a read, never audited
-			s.Store.Audit(u.Username, name+"_"+op, fmt.Sprintf("pid=%d", res.Pid))
+		if in.Op != "status" { // a read, never audited
+			s.Store.Audit(c.u.Username, name+"_"+in.Op, fmt.Sprintf("pid=%d", res.Pid))
 		}
-		jsonOK(w, res)
+		return res, nil
 	}
 }
 
-func (s *Server) handleTelegramConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, s.Telegram.Status())
+func (s *Server) handleTelegramConfigGet(c call, _ none) (controller.TelegramStatus, error) {
+	return s.Telegram.Status(), nil
 }
 
 // SetTelegram sets the bot's admin and/or token, "" leaving either unchanged.
@@ -519,29 +505,22 @@ func SetTelegram(st *store.Store, actor, admin, token string) error {
 	}
 	return nil
 }
-func (s *Server) handleTelegramConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Token, Admin string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
+func (s *Server) handleTelegramConfigSet(c call, in struct{ Token, Admin string }) (controller.TelegramStatus, error) {
+	if err := SetTelegram(s.Store, c.u.Username, in.Admin, in.Token); err != nil {
+		return controller.TelegramStatus{}, err
 	}
-	if err := SetTelegram(s.Store, u.Username, in.Admin, in.Token); err != nil {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	jsonOK(w, s.Telegram.Status())
+	return s.Telegram.Status(), nil
 }
 
-func (s *Server) handleTelegramOp(w http.ResponseWriter, r *http.Request, u *store.User) {
-	st, err := controller.RunTelegramOp(s.Telegram, r.PathValue("op"))
+func (s *Server) handleTelegramOp(c call, in opIn) (controller.TelegramStatus, error) {
+	st, err := controller.RunTelegramOp(s.Telegram, in.Op)
 	if err != nil {
-		jsonErr(w, opStatus(err), err.Error())
-		return
+		return st, httpError{opStatus(err), err}
 	}
-	if op := r.PathValue("op"); op != "status" { // a read, never audited
-		s.Store.Audit(u.Username, "telegram_"+op, fmt.Sprintf("running=%t", st.Running))
+	if in.Op != "status" { // a read, never audited
+		s.Store.Audit(c.u.Username, "telegram_"+in.Op, fmt.Sprintf("running=%t", st.Running))
 	}
-	jsonOK(w, st)
+	return st, nil
 }
 
 // opStatus: an op already in flight is a client retry situation, not a
@@ -558,53 +537,40 @@ func opStatus(err error) int {
 
 // handleCertDNS toggles whether a cert's CN gets a certs.hosts line while
 // connected, mirroring handleUserDisabled's shape.
-func (s *Server) handleCertDNS(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ IncludeDNS bool }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(SetCertDNS(s.Store, u.Username, r.PathValue("serial"), in.IncludeDNS))
+func (s *Server) handleCertDNS(c call, in struct {
+	Serial     string `json:"serial"`
+	IncludeDNS bool
+}) (Msg, error) {
+	return SetCertDNS(s.Store, c.u.Username, in.Serial, in.IncludeDNS)
 }
 
-func (s *Server) handleCustomHostsPut(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Content string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(SetCustomHosts(s.Store, u.Username, s.CustomHostsPath, in.Content))
+func (s *Server) handleCustomHostsPut(c call, in struct{ Content string }) (Msg, error) {
+	return SetCustomHosts(s.Store, c.u.Username, s.CustomHostsPath, in.Content)
 }
 
 // handleCustomHostsPreview is handleCustomHostsPut's dry run, same shape as
 // handleVPNConfigPreview: diff against what's on disk, don't write it.
-func (s *Server) handleCustomHostsPreview(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Content string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
+func (s *Server) handleCustomHostsPreview(c call, in struct{ Content string }) (Preview, error) {
 	cur, err := os.ReadFile(s.CustomHostsPath)
 	if err != nil && !os.IsNotExist(err) {
-		jsonErr(w, 500, err.Error())
-		return
+		return Preview{}, httpError{500, err}
 	}
 	diff := ovpnconf.Diff(cur, []byte(in.Content))
-	jsonOK(w, map[string]any{"diff": diff, "changed": len(diff) > 0})
+	return Preview{Diff: diff, Changed: len(diff) > 0}, nil
 }
 
 // handleCertDownload returns the (public) certificate PEM for any issued cert.
-func (s *Server) handleCertDownload(w http.ResponseWriter, r *http.Request, u *store.User) {
-	serial := r.URL.Query().Get("serial")
-	c, err := s.Store.GetCert(serial)
+func (s *Server) handleCertDownload(c call, in struct {
+	Serial string `json:"serial"`
+}) (Download, error) {
+	cert, err := s.Store.GetCert(in.Serial)
 	if err != nil {
-		jsonErr(w, 404, "certificate not found")
-		return
+		return Download{}, fail(404, "certificate not found")
 	}
-	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="%s.crt"`, c.CN))
-	w.Write(c.CertPEM)
+	return Download{cert.CN + ".crt", "application/x-pem-file", func(w io.Writer) error {
+		_, err := w.Write(cert.CertPEM)
+		return err
+	}}, nil
 }
 
 // UserSummary strips store.User to its non-secret fields — shared by /users,
@@ -621,83 +587,74 @@ func NewUserSummary(u store.User) UserSummary {
 	return UserSummary{u.Username, u.Role, u.Disabled, u.TOTPSecret != "", u.CreatedAt}
 }
 
-func (s *Server) handleUsersList(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleUsersList(c call, _ none) ([]UserSummary, error) {
 	users, err := s.Store.ListUsers()
 	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
+		return nil, httpError{500, err}
 	}
 	out := []UserSummary{}
 	for _, x := range users {
 		out = append(out, NewUserSummary(x))
 	}
-	jsonOK(w, out)
+	return out, nil
 }
 
-func (s *Server) handleUserAdd(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Username, Password, Role string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(AddUser(s.Store, u.Username, in.Username, in.Password, in.Role))
+func (s *Server) handleUserAdd(c call, in struct{ Username, Password, Role string }) (Msg, error) {
+	return AddUser(s.Store, c.u.Username, in.Username, in.Password, in.Role)
 }
 
-func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request, u *store.User) {
-	name := r.PathValue("name")
-	if name == u.Username {
-		jsonErr(w, 400, "cannot delete your own account")
-		return
+// user is a per-user route's input: the {name} it names.
+type user struct {
+	Name string `json:"name"`
+}
+
+func (s *Server) handleUserDelete(c call, in user) (Msg, error) {
+	if in.Name == c.u.Username {
+		return Msg{}, fail(400, "cannot delete your own account")
 	}
-	act(w)(DeleteUser(s.Store, u.Username, name))
+	return DeleteUser(s.Store, c.u.Username, in.Name)
 }
 
 // handleUserDisabled toggles enable/disable (`ovcp user disable|enable` as one endpoint).
-func (s *Server) handleUserDisabled(w http.ResponseWriter, r *http.Request, u *store.User) {
-	name := r.PathValue("name")
-	var in struct{ Disabled bool }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
+func (s *Server) handleUserDisabled(c call, in struct {
+	Name     string `json:"name"`
+	Disabled bool
+}) (Msg, error) {
+	if in.Disabled && in.Name == c.u.Username {
+		return Msg{}, fail(400, "cannot disable your own account")
 	}
-	if in.Disabled && name == u.Username {
-		jsonErr(w, 400, "cannot disable your own account")
-		return
-	}
-	act(w)(SetUserDisabled(s.Store, u.Username, name, in.Disabled))
+	return SetUserDisabled(s.Store, c.u.Username, in.Name, in.Disabled)
 }
 
-func (s *Server) handleUserPassword(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Password string }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(SetUserPassword(s.Store, u.Username, r.PathValue("name"), in.Password))
+func (s *Server) handleUserPassword(c call, in struct {
+	Name     string `json:"name"`
+	Password string
+}) (Msg, error) {
+	return SetUserPassword(s.Store, c.u.Username, in.Name, in.Password)
 }
 
 // handleUserTOTPEnroll mirrors `ovcp user totp`: generates+stores a fresh
 // secret immediately (no confirm step) and returns it with a QR code.
-func (s *Server) handleUserTOTPEnroll(w http.ResponseWriter, r *http.Request, u *store.User) {
-	act(w)(EnrollTOTP(s.Store, u.Username, r.PathValue("name"), s.DefaultRemote()))
+func (s *Server) handleUserTOTPEnroll(c call, in user) (TOTPEnrollment, error) {
+	return EnrollTOTP(s.Store, c.u.Username, in.Name, s.DefaultRemote())
 }
 
-func (s *Server) handleUserTOTPOff(w http.ResponseWriter, r *http.Request, u *store.User) {
-	act(w)(DisableTOTP(s.Store, u.Username, r.PathValue("name")))
+func (s *Server) handleUserTOTPOff(c call, in user) (Msg, error) {
+	return DisableTOTP(s.Store, c.u.Username, in.Name)
 }
 
-func (s *Server) handleDebugGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, map[string]bool{"debug": s.DebugLevel.Level() <= slog.LevelDebug})
+// Debug is the server's log level, as GET and POST /api/debug read and set it.
+type Debug struct {
+	Debug bool `json:"debug"`
+}
+
+func (s *Server) handleDebugGet(c call, _ none) (Debug, error) {
+	return Debug{s.DebugLevel.Level() <= slog.LevelDebug}, nil
 }
 
 // handleDebugSet mirrors `ovcp debug on|off`, flipping the same shared
 // *slog.LevelVar the control-socket handler uses — one source of truth.
-func (s *Server) handleDebugSet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ Debug bool }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
+func (s *Server) handleDebugSet(c call, in Debug) (Debug, error) {
 	action := "off"
 	if in.Debug {
 		s.DebugLevel.Set(slog.LevelDebug)
@@ -705,8 +662,8 @@ func (s *Server) handleDebugSet(w http.ResponseWriter, r *http.Request, u *store
 	} else {
 		s.DebugLevel.Set(slog.LevelInfo)
 	}
-	s.Store.Audit(u.Username, "debug_"+action, "")
-	jsonOK(w, map[string]bool{"debug": in.Debug})
+	s.Store.Audit(c.u.Username, "debug_"+action, "")
+	return in, nil
 }
 
 // DNSConfig is the admin-tunable dnsmasq policy, persisted under dnsConfigKey.
@@ -767,74 +724,64 @@ func DNSLeakWarning(vpn ovpnconf.Config, dns DNSConfig) string {
 	return ""
 }
 
-func (s *Server) handleDNSConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, ViewDNS(s.Store))
-}
+func (s *Server) handleDNSConfigGet(c call, _ none) (DNSView, error) { return ViewDNS(s.Store), nil }
 
 // handleDNSConfigSet toggles whether dnsmasq forwards to upstream resolvers;
 // PreStart picks it up on the next dnsmasq start/restart.
-func (s *Server) handleDNSConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	var in struct{ BlockInternet bool }
-	if !decode(r, &in) {
-		jsonErr(w, 400, "bad json")
-		return
-	}
-	act(w)(SetDNSConfig(s.Store, u.Username, DNSConfig{BlockInternet: in.BlockInternet}))
+func (s *Server) handleDNSConfigSet(c call, in DNSConfig) (DNSView, error) {
+	return SetDNSConfig(s.Store, c.u.Username, in)
 }
 
-func (s *Server) handleLogsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, LoadLogConfig(s.Store))
+func (s *Server) handleLogsConfigGet(c call, _ none) (controller.LogConfig, error) {
+	return LoadLogConfig(s.Store), nil
 }
 
-// handleLogsConfigSet merges the JSON body onto the current config — an
-// omitted field stays unchanged, same as PUT /api/vpn/config.
-func (s *Server) handleLogsConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cfg := LoadLogConfig(s.Store)
-	if !decode(r, &cfg) {
-		jsonErr(w, 400, "bad json")
-		return
+// handleLogsConfigSet applies the body onto the current config — an omitted
+// field stays unchanged, same as PUT /api/vpn/config.
+func (s *Server) handleLogsConfigSet(c call, p Patch[controller.LogConfig]) (controller.LogConfig, error) {
+	cfg, err := p.Onto(LoadLogConfig(s.Store))
+	if err != nil {
+		return cfg, err
 	}
-	act(w)(SaveLogConfig(s.Store, u.Username, cfg))
+	return SaveLogConfig(s.Store, c.u.Username, cfg)
 }
 
 // handleLogsRotate is `ovcp logs rotate`'s API twin — same RotateLogs call.
-func (s *Server) handleLogsRotate(w http.ResponseWriter, r *http.Request, u *store.User) {
-	act(w)(RotateLogs(s.Store, u.Username, s.DataDir))
+func (s *Server) handleLogsRotate(c call, _ none) (Msg, error) {
+	return RotateLogs(s.Store, c.u.Username, s.DataDir)
 }
 
-func (s *Server) handleStatsConfigGet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, s.StatsConfig())
+func (s *Server) handleStatsConfigGet(c call, _ none) (StatsConfig, error) {
+	return s.StatsConfig(), nil
 }
 
-// handleStatsConfigSet merges the JSON body onto the current config, same
-// idiom as handleLogsConfigSet.
-func (s *Server) handleStatsConfigSet(w http.ResponseWriter, r *http.Request, u *store.User) {
-	cfg := s.StatsConfig()
-	if !decode(r, &cfg) {
-		jsonErr(w, 400, "bad json")
-		return
+// handleStatsConfigSet applies the body onto the current config, same idiom
+// as handleLogsConfigSet.
+func (s *Server) handleStatsConfigSet(c call, p Patch[StatsConfig]) (StatsConfig, error) {
+	cfg, err := p.Onto(s.StatsConfig())
+	if err != nil {
+		return cfg, err
 	}
-	act(w)(SaveStatsConfig(s.Store, u.Username, cfg))
+	return SaveStatsConfig(s.Store, c.u.Username, cfg)
 }
 
-func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) handleAudit(c call, _ none) ([]store.AuditEntry, error) {
 	tail, err := s.Store.AuditTail(200)
 	if err != nil {
-		jsonErr(w, 500, err.Error())
-		return
+		return nil, httpError{500, err}
 	}
-	jsonOK(w, tail)
+	return tail, nil
 }
 
-func (s *Server) pkiErr(w http.ResponseWriter, err error) {
-	if err == pki.ErrBadPassphrase {
-		jsonErr(w, 403, "wrong CA passphrase")
-		return
+// pkiErr is a PKI action's error: a wrong passphrase 403, a refusal the
+// caller can fix 400, anything else the server's 500.
+func pkiErr(err error) error {
+	switch {
+	case err == pki.ErrBadPassphrase:
+		return fail(403, "wrong CA passphrase")
+	case errors.Is(err, store.ErrDuplicateCN), errors.Is(err, store.ErrNoActiveCert),
+		errors.Is(err, ovpnconf.ErrNoRedirect), errors.Is(err, ErrNoRemote), errors.Is(err, ErrNoServerCN):
+		return httpError{400, err}
 	}
-	if errors.Is(err, store.ErrDuplicateCN) || errors.Is(err, store.ErrNoActiveCert) ||
-		errors.Is(err, ovpnconf.ErrNoRedirect) || errors.Is(err, ErrNoRemote) || errors.Is(err, ErrNoServerCN) {
-		jsonErr(w, 400, err.Error())
-		return
-	}
-	jsonErr(w, 500, err.Error())
+	return httpError{500, err}
 }

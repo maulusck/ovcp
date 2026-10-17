@@ -4,24 +4,28 @@
   } from './api.js'
   import { vpn, fmtUptime } from './status.svelte.js'
   import Msg from './Msg.svelte'
+  /** @import { Sample, ClientSession } from './api.gen' */
+  /** @import { Sort } from './api.js' */
 
   // globalSamples backs "Connected clients" and is Rate/Volume's fallback for scope === '';
   // scopeSamples only diverges when a CN is picked, same /api/stats?cn= shape either way.
-  let globalSamples = $state([])
-  let scopeSamples = $state([])
-  let sessions = $state([])
-  let revokedCNs = $state(new Set())
+  let globalSamples = $state(/** @type {Sample[]} */ ([]))
+  let scopeSamples = $state(/** @type {Sample[]} */ ([]))
+  let sessions = $state(/** @type {ClientSession[]} */ ([]))
+  let revokedCNs = $state(new Set(/** @type {string[]} */ ([])))
   let search = $state({ open: false, query: '' })
   let err = $state('')
   let scope = $state('') // '' = Global
   let sampleIntervalSec = $state(60) // overwritten by /stats/config below; 60 is only the pre-load default
-  api('GET', '/stats/config').then(c => (sampleIntervalSec = c.SampleIntervalSec)).catch(() => {})
+  api('GET /api/stats/config').then(c => (sampleIntervalSec = c.SampleIntervalSec)).catch(() => {})
   const sampleLabel = $derived(`sampled every ${fmtUptime(sampleIntervalSec)}`)
 
-  let sort = $state({ key: null, desc: false })
+  const duration = (/** @type {ClientSession} */ s) => Date.parse(s.DisconnectedAt) - Date.parse(s.ConnectedAt)
+  let sort = $state(/** @type {Sort} */ ({ key: null, desc: false }))
+  /** @type {Record<string, (s: ClientSession) => string | number>} */
   const SORT_GETTERS = {
     cn: (s) => s.CN, real: (s) => s.RealAddress, disconnected: (s) => s.DisconnectedAt,
-    duration: (s) => new Date(s.DisconnectedAt) - new Date(s.ConnectedAt),
+    duration,
     recv: (s) => s.BytesRecv, sent: (s) => s.BytesSent,
   }
 
@@ -38,16 +42,16 @@
 
   async function loadGlobal() {
     try {
-      const [d, certs] = await Promise.all([api('GET', '/stats'), api('GET', '/certs')])
-      globalSamples = d.samples || []
-      sessions = d.sessions || []
+      const [d, certs] = await Promise.all([api('GET /api/stats'), api('GET /api/certs')])
+      globalSamples = d.samples
+      sessions = d.sessions
       revokedCNs = new Set(certs.filter(c => c.status === 'revoked').map(c => c.cn))
       err = ''
     } catch (x) { flash(v => err = v, x.error) }
   }
   async function loadScoped() {
     if (!scope) { scopeSamples = globalSamples; return }
-    try { scopeSamples = (await api('GET', '/stats?cn=' + encodeURIComponent(scope))).samples || []; err = '' }
+    try { scopeSamples = (await api('GET /api/stats', { cn: scope })).samples; err = '' }
     catch (x) { flash(v => err = v, x.error) }
   }
   loadGlobal()
@@ -60,7 +64,7 @@
   })
 
   $effect(() => {
-    localStorage.setItem(POLL_KEY, pollSec)
+    localStorage.setItem(POLL_KEY, String(pollSec))
     if (!pollSec) return
     const t = setInterval(refresh, pollSec * 1000)
     return () => clearInterval(t)
@@ -78,6 +82,7 @@
 
   // equal-spaced sparkline: samples are one per sampleIntervalSec so gaps (VPN down)
   // just compress visually rather than needing real time-axis math.
+  /** @param {number[]} vals */
   function points(vals, h = 30) {
     if (vals.length < 2) return ''
     const max = Math.max(...vals, 1)
@@ -118,7 +123,7 @@
       <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none">
         <polyline points={points(globalSamples.map(s => s.Clients))} />
       </svg>
-      <p class="muted">{globalSamples.at(-1).Clients} now · last {globalSamples.length} samples</p>
+      <p class="muted">{globalSamples[globalSamples.length - 1].Clients} now · last {globalSamples.length} samples</p>
     {/if}
   </div>
 
@@ -133,7 +138,7 @@
       </svg>
       <p class="muted">
         <span class="recv-label">rx</span> / <span class="sent-label">tx</span>
-        — {fmtRate(scopeSamples.at(-1).BytesRecvRate)} / {fmtRate(scopeSamples.at(-1).BytesSentRate)}
+        — {fmtRate(scopeSamples[scopeSamples.length - 1].BytesRecvRate)} / {fmtRate(scopeSamples[scopeSamples.length - 1].BytesSentRate)}
       </p>
     {/if}
   </div>
@@ -149,7 +154,7 @@
       </svg>
       <p class="muted">
         <span class="recv-label">received</span> / <span class="sent-label">sent</span>
-        — {fmtBytes(scopeSamples.at(-1).BytesRecv)} / {fmtBytes(scopeSamples.at(-1).BytesSent)} now
+        — {fmtBytes(scopeSamples[scopeSamples.length - 1].BytesRecv)} / {fmtBytes(scopeSamples[scopeSamples.length - 1].BytesSent)} now
       </p>
     {/if}
   </div>
@@ -180,7 +185,7 @@
               <td>{s.CN}{#if revokedCNs.has(s.CN)}<span class="revoked" title="Certificate revoked">revoked</span>{/if}</td>
               <td>{s.RealAddress}</td>
               <td>{fmtTimestamp(new Date(s.DisconnectedAt))}</td>
-              <td>{fmtUptime((new Date(s.DisconnectedAt) - new Date(s.ConnectedAt)) / 1000)}</td>
+              <td>{fmtUptime(duration(s) / 1000)}</td>
               <td>{fmtBytes(s.BytesRecv)}</td>
               <td>{fmtBytes(s.BytesSent)}</td>
             </tr>

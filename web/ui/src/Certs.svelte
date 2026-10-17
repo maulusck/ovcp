@@ -6,14 +6,17 @@
   } from './api.js'
   import { vpn } from './status.svelte.js'
   import Msg from './Msg.svelte'
+  /** @import { CertRow, UpstreamView } from './api.gen' */
+  /** @import { Sort } from './api.js' */
+  /** @type {{ canOperate: boolean, isAdmin: boolean, upstreamsAvailable: boolean, focusCN?: string }} */
   let { canOperate, isAdmin, upstreamsAvailable, focusCN = $bindable('') } = $props()
-  let certs = $state([])
+  let certs = $state(/** @type {CertRow[]} */ ([]))
   let err = $state('')
   let ok = $state('')
   let form = $state({ cn: '', remote: '', passphrase: '', days: 365, keypass: '', splitTunnel: false, customOpts: '' })
   let redirectGW = $state(false)
-  let upCfg = $state(null)
-  $effect(() => { if (upstreamsAvailable) api('GET', '/upstreams').then(c => (upCfg = c)).catch(() => {}) })
+  let upCfg = $state(/** @type {UpstreamView | null} */ (null))
+  $effect(() => { if (upstreamsAvailable) api('GET /api/upstreams').then(c => (upCfg = c)).catch(() => {}) })
 
   const STATUS_KEY = 'ovcp_certs_status'
   let statusFilter = $state(localStorage.getItem(STATUS_KEY) || 'all')
@@ -23,7 +26,8 @@
   $effect(() => localStorage.setItem(KIND_KEY, kindFilter))
 
   let search = $state({ open: false, query: '' })
-  let sort = $state({ key: null, desc: false })
+  let sort = $state(/** @type {Sort} */ ({ key: null, desc: false }))
+  /** @type {Record<string, (c: CertRow) => string | number | boolean>} */
   const SORT_GETTERS = {
     cn: (c) => c.cn, kind: (c) => c.kind, expiry: (c) => new Date(c.expires).getTime(),
     status: (c) => c.status, serial: (c) => c.serial, dns: (c) => c.includeDNS,
@@ -41,15 +45,15 @@
   // The one signal for "this submit renews instead of issuing": does the
   // typed/pre-filled CN already match a live client cert — no separate flag,
   // same rule AddCert enforces (one active row per CN+kind), so a revoked-only CN reissues, an active one renews.
-  const hasActiveClient = (cn) => certs.some((c) => c.cn === cn && c.kind === 'client' && c.status !== 'revoked')
+  const hasActiveClient = (/** @type {string} */ cn) => certs.some((c) => c.cn === cn && c.kind === 'client' && c.status !== 'revoked')
   const willRenew = $derived(hasActiveClient(form.cn))
 
   async function refresh() {
-    try { certs = await api('GET', '/certs'); err = '' }
+    try { certs = await api('GET /api/certs'); err = '' }
     catch (x) { flash(v => err = v, x.error) }
   }
   refresh()
-  api('GET', '/vpn/config').then(c => (redirectGW = c.RedirectGW)).catch(() => {})
+  api('GET /api/vpn/config').then(c => (redirectGW = c.RedirectGW)).catch(() => {})
 
   // arrival from Dashboard's "jump to this cert" click: clear whatever
   // filters might be hiding it, then scroll to and flash the matching row.
@@ -68,47 +72,49 @@
     focusCN = ''
   })
 
-  async function exportBundle(e) {
+  async function exportBundle(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     err = ''; ok = ''
     const renewing = willRenew
     try {
-      const { bundle } = await api('POST', '/certs/export', { CN: form.cn, Remote: form.remote,
+      const { bundle } = await api('POST /api/certs/export', { CN: form.cn, Remote: form.remote,
         Passphrase: form.passphrase, Days: +form.days, KeyPassphrase: form.keypass,
         SplitTunnel: form.splitTunnel, Extra: form.customOpts, Renew: renewing })
       downloadBlob(new Blob([bundle], { type: 'application/x-openvpn-profile' }), form.cn + '.ovpn')
       flash(v => ok = v, `${renewing ? 'Renewed' : 'Issued'} ${form.cn} and downloaded the profile.`)
       form.cn = ''; form.passphrase = ''; form.keypass = ''
       refresh()
-    } catch (x) { flash(v => err = v, x.error || 'export failed') }
+    } catch (x) { flash(v => err = v, x.error) }
   }
 
   let copied = $state('')
-  async function copySerial(serial) {
+  async function copySerial(/** @type {string} */ serial) {
     if (!(await copyToClipboard(serial, 'Serial'))) return
     flash(v => copied = v, serial, 1200)
   }
-  async function copyIP(ip) {
+  async function copyIP(/** @type {string} */ ip) {
     if (!(await copyToClipboard(ip, 'IP'))) return
     flash(v => copied = v, ip, 1200)
   }
-  const liveIP = (cn) => vpn.clientList.find((c) => c.CN === cn)?.VirtualAddress
+  const liveIP = (/** @type {string} */ cn) => vpn.clientList.find((c) => c.CN === cn)?.VirtualAddress
 
+  /** @param {string} serial @param {string} cn */
   async function revoke(serial, cn) {
     const passphrase = prompt(`CA passphrase to revoke ${cn}:`)
     if (!passphrase) return
     err = ''; ok = ''
     try {
-      await api('POST', '/certs/revoke', { Serial: serial, Passphrase: passphrase })
+      await api('POST /api/certs/revoke', { Serial: serial, Passphrase: passphrase })
       flash(v => ok = v, `Revoked ${cn}. CRL updated.`)
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
   }
 
+  /** @param {string} serial @param {boolean} include */
   async function toggleDNS(serial, include) {
     err = ''
     try {
-      await api('PATCH', `/certs/${serial}/dns`, { IncludeDNS: include })
+      await api('PATCH /api/certs/{serial}/dns', { serial, IncludeDNS: include })
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
   }
@@ -116,22 +122,24 @@
   // id === '' clears the override (Clear: true) — back to the tab-wide default.
   // Warning (first-ever per-CN override needs `vpn restart`) comes straight from
   // the API, same RestartWarning Settings' Upstreams card would show for add/del.
+  /** @param {string} cn @param {string} id */
   async function setUpstream(cn, id) {
     err = ''; ok = ''
     try {
-      const r = await api('PUT', '/upstreams/assign', { CN: cn, ID: id, Clear: !id })
+      const r = await api('PUT /api/upstreams/assign', { CN: cn, ID: id, Clear: !id })
       if (upCfg) upCfg.perCN = r.perCN
-      flash(v => ok = v, r.warning || `Upstream for ${cn}: ${id || 'default'}.`)
+      flash(v => ok = v, r.warning ?? `Upstream for ${cn}: ${id || 'default'}.`)
     } catch (x) { flash(v => err = v, x.error) }
   }
 
   // c.status is the API's classification (store.Cert.Status(), the one
   // place the expiry threshold lives) — this only turns it into display text.
+  /** @param {CertRow} c */
   function status(c) {
     if (c.status === 'revoked') return { text: 'revoked', cls: 'rv' }
     if (c.status === 'expired') return { text: 'expired', cls: 'rv' }
     if (c.status === 'expiring') {
-      const days = Math.ceil((new Date(c.expires) - Date.now()) / 86400000)
+      const days = Math.ceil((Date.parse(c.expires) - Date.now()) / 86400000)
       return { text: `expires in ${days}d`, cls: 'soon' }
     }
     return { text: 'valid', cls: '' }
@@ -140,7 +148,7 @@
   // Client renewal is just export, aimed at a CN with an active cert
   // (willRenew, above) — clicking a CN only ever pre-fills and scrolls;
   // nothing is revoked until the form is actually submitted.
-  function prefillRenew(cn) {
+  function prefillRenew(/** @type {string} */ cn) {
     form.cn = cn
     document.querySelector('.issue')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -148,12 +156,17 @@
   // Server renewal is the opposite of client: the key never leaves the
   // machine, so there's nothing to hand back — one call, done. Only ever
   // one server cert (this row), so this replaces it in place.
-  async function renewServer(cn) {
+  async function downloadCert(/** @type {CertRow} */ c) {
+    try { const { blob, filename } = await api('GET /api/certs/download', { serial: c.serial }); downloadBlob(blob, filename) }
+    catch (x) { flash(v => err = v, x.error) }
+  }
+
+  async function renewServer(/** @type {string} */ cn) {
     const passphrase = prompt(`CA passphrase to renew the server certificate (${cn}):`)
     if (!passphrase) return
     err = ''; ok = ''
     try {
-      const r = await api('POST', '/certs/renew', { Passphrase: passphrase })
+      const r = await api('POST /api/certs/renew', { Passphrase: passphrase })
       flash(v => ok = v, `Server cert renewed (serial ${r.serial.slice(0, 12)}…). Restart openvpn (Settings) to apply.`)
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
@@ -264,15 +277,14 @@
                 {copied === c.serial ? 'copied' : c.serial.slice(0, 12) + '…'}
               </button>
             </td>
-            <td><a class="dl" href={'/api/certs/download?serial=' + c.serial}
-              download={c.cn + '.crt'}>Download</a></td>
+            <td><button type="button" class="cn-link dl" onclick={() => downloadCert(c)}>Download</button></td>
             <td class="dns-col">
               {#if c.status !== 'revoked' && c.kind !== 'server'}
                 <span class="dns-cell">
                   <input type="checkbox" checked={c.includeDNS} disabled={!canOperate}
                     onchange={() => toggleDNS(c.serial, !c.includeDNS)} />
                   {#if c.includeDNS && liveIP(c.cn)}
-                    <button type="button" class="dns-live" onclick={() => copyIP(liveIP(c.cn))}
+                    <button type="button" class="dns-live" onclick={() => copyIP(liveIP(c.cn) ?? '')}
                       title={(copied === liveIP(c.cn) ? 'copied: ' : 'resolving at ') + liveIP(c.cn)}>
                       <span class="status-dot ok"></span>
                     </button>
@@ -284,9 +296,9 @@
               <td class="up-col">
                 {#if c.status !== 'revoked' && c.kind !== 'server'}
                   <select value={upCfg?.perCN?.[c.cn] || ''} disabled={!isAdmin}
-                    onchange={(e) => setUpstream(c.cn, e.target.value)}>
+                    onchange={(e) => setUpstream(c.cn, e.currentTarget.value)}>
                     <option value="">default{upCfg?.default ? ` (${upCfg.default})` : ''}</option>
-                    {#each upCfg?.upstreams || [] as u}<option value={u.id}>{u.id}</option>{/each}
+                    {#each upCfg?.upstreams ?? [] as u}<option value={u.id}>{u.id}</option>{/each}
                   </select>
                 {/if}
               </td>

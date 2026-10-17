@@ -69,6 +69,14 @@ socket, or the management connection `serve` holds; `api.StatusSource`,
 encode the result. A rule or a shape kept in one adapter is a bug: the
 other path skips it. Routes, roles and CLI twins: `man ovcp`, **WEB API**.
 
+The web API is one table, `Server.routes`: pattern, role and handler. A
+handler's signature, `func(call, In) (Out, error)`, is its contract: In
+comes from the JSON body (on GET, the query) with the pattern's
+`{wildcards}` set on top, and Out is encoded as JSON (a `Download` as a
+file). `api.TypeScript` renders the table and those types for the UI,
+whose `api()` takes a route pattern and is type-checked against them, so
+a Go shape change that the UI doesn't follow fails `make check`.
+
 `dns block-internet` is a stored setting, not a control-socket operation,
 and works without `serve`. Socket defaults and flags: `man ovcp`,
 **ENVIRONMENT**.

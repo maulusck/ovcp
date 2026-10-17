@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -183,21 +182,6 @@ func DisableTOTP(st *store.Store, actor, name string) (Msg, error) {
 	return Msg{"2FA disabled: " + name, true}, nil
 }
 
-// act encodes an action's result, or maps its error to a status: unknown
-// target 404, anything else a 400 the caller can fix.
-func act(w http.ResponseWriter) func(any, error) {
-	return func(v any, err error) {
-		switch {
-		case err == nil:
-			jsonOK(w, v)
-		case errors.Is(err, ErrNotConnected), errors.Is(err, store.ErrNoActiveCert), errors.Is(err, ErrNoUpstream):
-			jsonErr(w, 404, err.Error())
-		default:
-			jsonErr(w, 400, err.Error())
-		}
-	}
-}
-
 // Status is status and GET /api/status: the workers, their clients, cert
 // counts, the bot and the host routing ovcp doesn't own.
 type Status struct {
@@ -281,6 +265,6 @@ func (l liveSource) Telegram() (controller.TelegramStatus, error) {
 	return l.s.Telegram.Status(), nil
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request, u *store.User) {
-	jsonOK(w, BuildStatus(s.Store, s.PKI, liveSource{s}, s.UpstreamsEnabled))
+func (s *Server) handleStatus(c call, _ none) (Status, error) {
+	return BuildStatus(s.Store, s.PKI, liveSource{s}, s.UpstreamsEnabled), nil
 }

@@ -1,15 +1,18 @@
 <script>
   import { api, sortRows, matchesQuery, toggleSort, sortMark, toggleSearch, autofocus, fmtTimestamp, flash } from './api.js'
   import Msg from './Msg.svelte'
+  /** @import { UserSummary, TOTPEnrollment } from './api.gen' */
+  /** @import { Sort } from './api.js' */
+  /** @type {{ isAdmin: boolean, me: string, minLen: number, minClasses: number }} */
   let { isAdmin, me, minLen, minClasses } = $props()
-  let users = $state([])
+  let users = $state(/** @type {UserSummary[]} */ ([]))
   let err = $state('') // row actions (table below) — Msg lives in that card, not this form's
   let ok = $state('')
   let formErr = $state('')
   let formOk = $state('')
   let form = $state({ username: '', password: '', role: 'operator' })
-  let enrolled = $state(null) // {username, secret, url, qr}
-  let qrDialog = $state() // bind:this — imperative .showModal()/.close(), never read reactively
+  let enrolled = $state(/** @type {TOTPEnrollment & { username: string } | null} */ (null))
+  let qrDialog = $state(/** @type {HTMLDialogElement | undefined} */ (undefined)) // bind:this — imperative .showModal()/.close(), never read reactively
 
   const STATUS_KEY = 'ovcp_users_status'
   let statusFilter = $state(localStorage.getItem(STATUS_KEY) || 'all')
@@ -19,7 +22,8 @@
   $effect(() => localStorage.setItem(ROLE_KEY, roleFilter))
 
   let search = $state({ open: false, query: '' })
-  let sort = $state({ key: null, desc: false })
+  let sort = $state(/** @type {Sort} */ ({ key: null, desc: false }))
+  /** @type {Record<string, (u: UserSummary) => string | boolean>} */
   const SORT_GETTERS = {
     username: (u) => u.Username, role: (u) => u.Role, created: (u) => u.CreatedAt,
     status: (u) => u.Disabled, totp: (u) => u.TOTP,
@@ -34,65 +38,70 @@
   })
 
   async function refresh() {
-    try { users = await api('GET', '/users'); err = '' }
+    try { users = await api('GET /api/users'); err = '' }
     catch (x) { flash(v => err = v, x.error) }
   }
   $effect(() => { if (isAdmin) refresh() })
 
-  async function addUser(e) {
+  async function addUser(/** @type {SubmitEvent} */ e) {
     e.preventDefault()
     formErr = ''; formOk = ''
     try {
-      await api('POST', '/users', { Username: form.username, Password: form.password, Role: form.role })
+      await api('POST /api/users', { Username: form.username, Password: form.password, Role: form.role })
       flash(v => formOk = v, `Added ${form.username}.`)
       form = { username: '', password: '', role: 'operator' }
       refresh()
     } catch (x) { flash(v => formErr = v, x.error) }
   }
 
+  /** @param {UserSummary} u */
   async function toggleDisabled(u) {
     err = ''; ok = ''
     try {
-      await api('PATCH', `/users/${u.Username}`, { Disabled: !u.Disabled })
+      await api('PATCH /api/users/{name}', { name: u.Username, Disabled: !u.Disabled })
       flash(v => ok = v, `${u.Disabled ? 'Enabled' : 'Disabled'} ${u.Username}.`)
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
   }
 
+  /** @param {UserSummary} u */
   async function remove(u) {
     if (!confirm(`Delete user ${u.Username}? This cannot be undone.`)) return
     err = ''; ok = ''
     try {
-      await api('DELETE', `/users/${u.Username}`)
+      await api('DELETE /api/users/{name}', { name: u.Username })
       flash(v => ok = v, `Deleted ${u.Username}.`)
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
   }
 
+  /** @param {UserSummary} u */
   async function setPassword(u) {
     const pw = prompt(`New password for ${u.Username} (min ${minLen} chars, ${minClasses} of upper/lower/digit/symbol):`)
     if (!pw) return
     err = ''; ok = ''
     try {
-      await api('POST', `/users/${u.Username}/password`, { Password: pw })
+      await api('POST /api/users/{name}/password', { name: u.Username, Password: pw })
       flash(v => ok = v, `Password updated for ${u.Username}.`)
     } catch (x) { flash(v => err = v, x.error) }
   }
 
+  /** @param {UserSummary} u */
   async function enrollTOTP(u) {
     err = ''; ok = ''; enrolled = null
     try {
-      const r = await api('POST', `/users/${u.Username}/totp`)
+      const r = await api('POST /api/users/{name}/totp', { name: u.Username })
       enrolled = { username: u.Username, ...r }
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
   }
 
+  /** @param {UserSummary} u */
   async function disableTOTP(u) {
     if (!confirm(`Disable 2FA for ${u.Username}?`)) return
     err = ''; ok = ''
     try {
-      await api('DELETE', `/users/${u.Username}/totp`)
+      await api('DELETE /api/users/{name}/totp', { name: u.Username })
       flash(v => ok = v, `2FA disabled for ${u.Username}.`)
       refresh()
     } catch (x) { flash(v => err = v, x.error) }
@@ -131,7 +140,7 @@
         <button type="button" class="ghost" onclick={() => (enrolled = null)}>Done</button>
       </h2>
       <p class="muted small">Scan with an authenticator app, or enter the secret manually. This QR is shown once.</p>
-      <button type="button" class="qr-btn" onclick={() => qrDialog.showModal()} title="Click to enlarge">
+      <button type="button" class="qr-btn" onclick={() => qrDialog?.showModal()} title="Click to enlarge">
         <img class="qr" src={enrolled.qr} alt="TOTP QR code — click to enlarge" width="96" height="96" />
       </button>
       <p class="mono">secret: <code>{enrolled.secret}</code> · <a class="totp-link" href={enrolled.url}>open in authenticator app</a></p>
@@ -141,7 +150,7 @@
          button needed — a click landing on the dialog element itself (not its
          children) means it hit the backdrop area. -->
     <dialog class="card qr-dialog" bind:this={qrDialog}
-      onclick={(e) => e.target === qrDialog && qrDialog.close()}>
+      onclick={(e) => e.target === e.currentTarget && e.currentTarget.close()}>
       <img class="qr" src={enrolled.qr} alt="TOTP QR code" width="240" height="240" />
     </dialog>
   {/if}
