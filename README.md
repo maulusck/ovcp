@@ -17,7 +17,7 @@ the web UI covers all but setup, the CA and restore, which stay on the host.
 
 [Features](#features) · [Requirements](#requirements) ·
 [Install](#install) · [Quick start](#quick-start) · [CLI](#cli) ·
-[Documentation](#documentation) · [License](#license)
+[Documentation](#documentation)
 
 ## Features
 
@@ -119,7 +119,3 @@ sudo ovcp -json certificate list | jq -r '.[] | select(.status == "expired") | .
   container image, packages, running from a checkout and tests.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**: internal design and
   the rationale for cross-cutting decisions.
-
-## License
-
-[MIT](LICENSE)
