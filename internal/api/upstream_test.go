@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -83,9 +84,9 @@ func TestApplyAssignFirstActivationWarns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, true, false /* before */, cfg, "wan1")
+	warning, err := applyAssign(s, confPath, false /* before */, cfg, "wan1")
 	if err != nil {
-		t.Fatalf("ApplyAssign: %v", err)
+		t.Fatalf("applyAssign: %v", err)
 	}
 	if warning != RestartWarning {
 		t.Fatalf("warning = %q, want RestartWarning", warning)
@@ -114,9 +115,9 @@ func TestApplyAssignNoWarningWhenAlreadyActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, true, true /* before: bob already active */, cfg, "wan1")
+	warning, err := applyAssign(s, confPath, true /* before: bob already active */, cfg, "wan1")
 	if err != nil {
-		t.Fatalf("ApplyAssign: %v", err)
+		t.Fatalf("applyAssign: %v", err)
 	}
 	if warning != "" {
 		t.Fatalf("warning = %q, want none — auth was already active", warning)
@@ -136,9 +137,9 @@ func TestApplyAssignClearingLastOverrideFlipsOffSilently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, true, true /* before: alice was the only override */, cfg, "" /* clearing, no target */)
+	warning, err := applyAssign(s, confPath, true /* before: alice was the only override */, cfg, "" /* clearing, no target */)
 	if err != nil {
-		t.Fatalf("ApplyAssign: %v", err)
+		t.Fatalf("applyAssign: %v", err)
 	}
 	if warning != "" {
 		t.Fatalf("warning = %q, want none", warning)
@@ -172,32 +173,28 @@ func TestApplyAssignWarnsOnDownTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, true, true /* before: wan1 already active */, cfg, "wan2")
+	warning, err := applyAssign(s, confPath, true /* before: wan1 already active */, cfg, "wan2")
 	if err != nil {
-		t.Fatalf("ApplyAssign: %v", err)
+		t.Fatalf("applyAssign: %v", err)
 	}
 	if warning != "unreachable (iface down): wan2" {
 		t.Fatalf("warning = %q, want the down-target warning", warning)
 	}
 }
 
-// TestApplyAssignDisabledNeverFlips: enabled=false (upstreams turned off
-// entirely) must never touch ManagementClientAuth, even though the
-// persisted PerCN would otherwise call for it — matches
-// s.UpstreamsEnabled's REST-side gating exactly (enabled=false is what the
-// disabled case passes).
-func TestApplyAssignDisabledNeverFlips(t *testing.T) {
+// TestAssignUpstreamDisabled: with upstreams off, assign is refused before
+// anything persists, server.conf included.
+func TestAssignUpstreamDisabled(t *testing.T) {
 	s, confPath := testAssignFixture(t)
-	cfg, err := upstream.Config{Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}}}.Assign("alice", "wan1", false)
-	if err != nil {
+	if err := SaveUpstreamConfig(s, upstream.Config{Upstreams: []upstream.Upstream{{ID: "wan1", Iface: "eth1", Table: 100}}}); err != nil {
 		t.Fatal(err)
 	}
-	warning, err := ApplyAssign(s, confPath, false /* enabled */, false, cfg, "wan1")
-	if err != nil {
-		t.Fatalf("ApplyAssign: %v", err)
+	noRewrite := func(string) error { t.Fatal("rewrite must not run"); return nil }
+	if _, err := AssignUpstream(s, "admin", false, confPath, "alice", "wan1", false, noRewrite); !errors.Is(err, ErrUpstreamsDisabled) {
+		t.Fatalf("err = %v, want ErrUpstreamsDisabled", err)
 	}
-	if warning != "" {
-		t.Fatalf("warning = %q, want none — upstreams disabled, even though wan1 (eth1) is down", warning)
+	if UpstreamAuthActive(s) {
+		t.Fatal("a refused assign must not persist PerCN")
 	}
 	if _, err := os.Stat(confPath); err == nil {
 		t.Fatal("server.conf must not be written when upstreams are disabled")

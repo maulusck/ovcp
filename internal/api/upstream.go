@@ -112,29 +112,14 @@ func (s *Server) handleUpstreamsGet(w http.ResponseWriter, r *http.Request, u *s
 	jsonOK(w, ViewUpstreams(LoadUpstreamConfig(s.Store), ""))
 }
 
-// ApplyAssign persists an already-computed assign (cfg, from
-// Config.Assign) and flips ManagementClientAuth if that changed PerCN
-// empty<->non-empty, reporting RestartWarning if so — the save+flip tail
-// handleUpstreamAssign and cmdUpstreamAssign share, same shape as
-// saveAndApplyUpstreams/saveAndApplyUpstreamsCLI for add/del/set-default.
-// before is the caller's own pre-mutation UpstreamAuthActive snapshot;
-// enabled gates the flip the same way s.UpstreamsEnabled does for the REST
-// handler — the CLI, which already refuses to get here when upstreams are
-// disabled (upstreamsReady), always passes true. The mutation call itself
-// (Config.Assign) stays with each caller, same reason it does for
-// add/del/set-default: its error is a 400/die, distinct from this
-// function's save/persist failures. id is the just-assigned upstream, ""
-// when clearing — unlike add/del/set-default, assign never routes through
-// applyUpstreams, so this is the one place that warns the target is down
-// (cfg.Find("") on a clear is always a miss, so no warning fires then).
-// enabled also gates this warning, same as applyUpstreams gates its own:
-// disabled means no warnings at all, not just no auth flip.
-func ApplyAssign(s *store.Store, confPath string, enabled, before bool, cfg upstream.Config, id string) (warning string, err error) {
+// applyAssign persists an assign's cfg, flips ManagementClientAuth when PerCN
+// turns empty<->non-empty (RestartWarning), and warns if id's upstream is down.
+func applyAssign(s *store.Store, confPath string, before bool, cfg upstream.Config, id string) (warning string, err error) {
 	if err := SaveUpstreamConfig(s, cfg); err != nil {
 		return "", err
 	}
 	var warnings []string
-	if after := enabled && UpstreamAuthActive(s); before != after {
+	if after := UpstreamAuthActive(s); before != after {
 		if err := SetManagementClientAuth(s, confPath, after); err != nil {
 			return "", err
 		}
@@ -142,7 +127,7 @@ func ApplyAssign(s *store.Store, confPath string, enabled, before bool, cfg upst
 			warnings = append(warnings, RestartWarning)
 		}
 	}
-	if u, ok := cfg.Find(id); enabled && ok && !u.IsUp() {
+	if u, ok := cfg.Find(id); ok && !u.IsUp() {
 		warnings = append(warnings, upstream.Warning([]upstream.Upstream{u}))
 	}
 	return strings.Join(warnings, "; "), nil
@@ -263,7 +248,7 @@ func AssignUpstream(st *store.Store, actor string, enabled bool, confPath, cn, i
 	if err != nil {
 		return UpstreamView{}, err
 	}
-	warning, err := ApplyAssign(st, confPath, enabled, before, cfg, id)
+	warning, err := applyAssign(st, confPath, before, cfg, id)
 	if err != nil {
 		return UpstreamView{}, err
 	}
