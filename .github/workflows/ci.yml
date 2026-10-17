@@ -1,13 +1,13 @@
 name: ci
 
-# Every push and PR runs the gates in BUILD.md (any skipped test fails
-# them). A v* tag then builds every TARGET, publishes the GitHub release
-# and the ghcr.io image, only once the gates pass. See BUILD.md for each stage.
+# Every push and PR runs `make check` (BUILD.md, Tests). A v* tag then builds
+# every TARGET, publishes the GitHub release and the ghcr.io image, only once
+# the gates pass. See BUILD.md for each stage.
 on: [push, pull_request]
 
 defaults:
   run:
-    shell: bash # explicit shell: bash adds -o pipefail, so `go test | tee` can't mask a failure
+    shell: bash # explicit shell: bash adds -o pipefail, so no pipe can mask a failing command
 
 env: # the one place CI's toolchain versions live
   GO_VERSION: '1.27'
@@ -30,14 +30,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           # TestDropRoot maps subordinate ids (unshare --map-auto)
           grep -q "^$USER:" /etc/subuid || echo "$USER:100000:65536" | sudo tee -a /etc/subuid /etc/subgid
-      - run: make ui
-      - run: go vet ./cmd/... ./internal/...
-      - run: test -z "$(gofmt -l cmd internal web)"
-      - run: mandoc -T lint -W warning docs/ovcp.8
-      - name: every test, none skipped
-        run: |
-          go test -v ./cmd/... ./internal/... | tee test.log
-          ! grep -- '--- SKIP' test.log
+      - run: make check # BUILD.md, Tests: the same gate a commit runs
 
   build:
     if: startsWith(github.ref, 'refs/tags/v')

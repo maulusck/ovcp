@@ -339,7 +339,6 @@ func UpstreamReapply(sockPath string) error {
 	return err
 }
 
-
 // Debug switches a running serve's log level.
 func Debug(sockPath string, on bool) error {
 	op := "debug off"

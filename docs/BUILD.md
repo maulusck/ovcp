@@ -294,8 +294,7 @@ GNU Coding Standards.
 
 ```sh
 make help                  # every target and variable
-make test                  # go test ./... (builds the UI first, see below)
-make vet                   # go vet ./...
+make check                 # every gate, as CI runs it (builds the UI first, see below)
 make man                   # preview docs/ovcp.8 with man(1)
 cd web/ui && npm run dev   # UI dev server; proxy the API manually or run `ovcp serve` alongside
 ```
@@ -303,7 +302,7 @@ cd web/ui && npm run dev   # UI dev server; proxy the API manually or run `ovcp 
 `web/web.go` does `//go:embed all:dist`, so anything that imports it —
 `cmd/ovcp`, hence `go build`/`go test`/`go vet` on that package — fails on a
 fresh checkout with `pattern all:dist: no matching files found` until
-`web/dist` exists. `test` and `vet` depend on `ui` for this reason; running
+`web/dist` exists. `check` depends on `ui` for this reason; running
 `go test ./...`/`go vet ./...` directly only works once `make ui` (or any
 target that pulls it in) has populated `web/dist` at least once.
 
@@ -334,15 +333,12 @@ owned by `ovcp`; remove it with `sudo rmdir data`.
 
 ### Tests
 
-`make test` runs every suite. The gates, the same ones CI's `test` job
-runs, pass before every commit:
+`make check` runs every gate, the same target CI's `test` job runs:
+`go vet`, `gofmt`, `mandoc` lint and every test, failing on any failed or
+skipped test (full output in `dist/check.log`). Commit only behind it:
 
 ```sh
-make ui                                     # web/dist, which the binary embeds
-go vet ./cmd/... ./internal/...
-test -z "$(gofmt -l cmd internal web)"
-mandoc -T lint -W warning docs/ovcp.8
-go test -v ./cmd/... ./internal/... | grep -- '--- SKIP'   # must print nothing
+make check && git commit
 ```
 
 No test may skip. The privilege and network suites run rootless inside

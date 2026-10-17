@@ -49,7 +49,7 @@ else
 APK_TARGET := $(HOSTARCH)-musl
 endif
 
-.PHONY: build test vet clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
+.PHONY: build check clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
 
 release: build completions ## UI + binary + shell completions
 
@@ -122,11 +122,16 @@ completions: ui ## generate shell completion scripts into dist/completion
 	bin/.completions-helper completion fish > dist/completion/ovcp.fish
 	@rm -f bin/.completions-helper
 
-test: ui ## run all tests
-	go test ./cmd/... ./internal/...
-
-vet: ui ## go vet
+# check is every gate, the one list CI and a commit both run: fails on any
+# vet, gofmt or mandoc complaint, any failed test and any skipped test.
+check: SHELL := /bin/bash
+check: .SHELLFLAGS := -eo pipefail -c
+check: ui ## run every gate: vet, gofmt, mandoc lint, all tests, none skipped
 	go vet ./cmd/... ./internal/...
+	test -z "$$(gofmt -l cmd internal web)" || { gofmt -l cmd internal web; exit 1; }
+	mandoc -T lint -W warning docs/ovcp.8
+	mkdir -p dist && go test -count=1 -v ./cmd/... ./internal/... 2>&1 | tee dist/check.log | grep -E -- '^(--- FAIL|--- SKIP|FAIL|ok)'
+	! grep -- '--- SKIP' dist/check.log
 
 clean: ## remove build output (bin/, web/dist/, dist/)
 	rm -rf bin web/dist dist
