@@ -49,9 +49,10 @@ ARCH     := $(or $(word 4,$(t-$(TARGET))),$(HOSTARCH))
 GO_LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTarget=$(TARGET)
 # CFLAGS, CPPFLAGS, LDFLAGS (a distro's, say) are the C toolchain's: link hands
 # them to cgo, never to Go's linker, and appends full RELRO as a floor.
-# OCI platform string for TARGET (linux/arm/v<goarm> for arm variants); cross
-# builds need binfmt/QEMU registered on this host, like any buildx cross build.
-PLATFORM := linux/$(or $(GOARCH),$(HOSTARCH))$(if $(GOARM),/v$(GOARM))
+# platform(target): its OCI platform (linux/arm/v<goarm> for arm). A cross
+# image needs binfmt/QEMU registered on this host, like any buildx cross build.
+platform = linux/$(or $(word 1,$(t-$(1))),$(HOSTARCH))$(if $(filter-out -,$(word 2,$(t-$(1)))),/v$(word 2,$(t-$(1))))
+PLATFORM := $(call platform,$(TARGET))
 
 # apk (Alpine/OpenWrt) is musl-only: force it unless TARGET was actually
 # named on the command line - so `make deb rpm apk` in one call doesn't
@@ -63,7 +64,7 @@ else
 APK_TARGET := $(HOSTARCH)-musl
 endif
 
-.PHONY: build bin docs check versions image-args clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
+.PHONY: build bin docs check versions image-args platforms clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
 
 release: build completions ## UI + binary + shell completions
 
@@ -81,6 +82,9 @@ versions: ## print the toolchain versions as KEY=value
 
 image-args: ## print the Containerfile's toolchain --build-arg flags
 	@echo $(IMAGE_ARGS)
+
+platforms: ## print the image's platforms, one per -musl TARGET (CI's multi-arch build)
+	@echo $(foreach t,$(sort $(filter %-musl,$(CROSS_TARGETS))),$(call platform,$t)) | tr ' ' ,
 
 CTR := $(shell command -v podman || command -v docker)
 # id=ovcp-build-cache in the Containerfile's zig/go RUN mount; reused by
@@ -174,6 +178,7 @@ check: .SHELLFLAGS := -eo pipefail -c
 check: release ## run every gate: hardened build, vet, gofmt, UI types, mandoc lint, all tests, none skipped
 	! $(MAKE) -n install | grep -E '^(go|cd web)'
 	test $$({ $(foreach t,$(CROSS_TARGETS),$(MAKE) -n deb TARGET=$t;) } | grep -o 'dist/ovcp_[^ ]*' | sort -u | wc -l) = $(words $(CROSS_TARGETS))
+	test "$$(sed -n 's/^ *target: \[\(.*\)\]$$/\1/p' .github/workflows/ci.yml | tr -d ' ' | tr , '\n' | sort | xargs)" = "$(sort $(CROSS_TARGETS))"
 	go vet ./cmd/... ./internal/...
 	go run ./cmd/apits > web/ui/src/api.gen.d.ts
 	cd web/ui && npm run -s check

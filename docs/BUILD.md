@@ -50,18 +50,10 @@ Every build, packaging, and image target reads the `TARGET` variable
   packaging targets; it is required only for cross-architecture container
   **images** (see Container image, below).
 
-| TARGET | GOARCH | GOARM | libc | zig triple | nfpm arch |
-|---|---|---|---|---|---|
-| `arm64` | arm64 | — | glibc | `aarch64-linux-gnu` | `arm64` |
-| `arm64-musl` | arm64 | — | musl | `aarch64-linux-musl` | `arm64` |
-| `armv7` | arm | 7 | glibc | `arm-linux-gnueabihf` | `arm7` |
-| `armv7-musl` | arm | 7 | musl | `arm-linux-musleabihf` | `arm7` |
-| `armv6` | arm | 6 | glibc | `arm-linux-gnueabihf` | `arm6` |
-| `armv6-musl` | arm | 6 | musl | `arm-linux-musleabihf` | `arm6` |
-| `amd64` | amd64 | — | glibc | `x86_64-linux-gnu` | `amd64` |
-| `amd64-musl` | amd64 | — | musl | `x86_64-linux-musl` | `amd64` |
-| `riscv64` | riscv64 | — | glibc | `riscv64-linux-gnu` | `riscv64` |
-| `riscv64-musl` | riscv64 | — | musl | `riscv64-linux-musl` | `riscv64` |
+The targets are the Makefile's `t-<TARGET>` rows (GOARCH, GOARM, zig
+triple, nfpm arch), its one home: `make help` lists them, CI's build matrix
+is checked against them and the image's platforms are derived from the
+`-musl` rows.
 
 `TARGET=host` on an amd64 machine and `TARGET=amd64` produce the same
 architecture but are not equivalent: `TARGET=host` never invokes zig;
@@ -73,9 +65,6 @@ value is cross-compiled, without exception.
 make build                  # native, whatever this host is
 make build TARGET=arm64     # cross, glibc arm64
 ```
-
-`make help`'s `TARGET` line is generated from this table (`CROSS_TARGETS`
-in the Makefile) and stays in sync with it automatically.
 
 ### Hardening
 
