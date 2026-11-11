@@ -303,11 +303,11 @@ Void Linux packages (xbps) are built from a template contributed to
 by this repository — that is how Void distributes packages generally.
 [`deploy/void/template`](../deploy/void/template) and
 [`deploy/void/files/ovcp/run`](../deploy/void/files/ovcp/run) (a runit
-service) are the starting point. `make install DESTDIR="$DESTDIR"
-prefix=/usr`, invoked via `build_style=gnu-makefile`, is what the
-template's `do_install` hook uses. Any packaging system that calls plain
-`make install` already works; `DESTDIR` and `prefix` are honored per the
-GNU Coding Standards.
+service) are the starting point. `build_style=gnu-makefile` runs `make`
+with Void's `CC` and hardening flags (see Hardening), then
+`make install DESTDIR="$DESTDIR" prefix=/usr`; the template passes
+`VERSION`, since a release tarball has no `.git` to read it from. Any
+packaging system that runs `make` then `make install` works the same way.
 
 ## Development workflow
 

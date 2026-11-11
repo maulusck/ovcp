@@ -1,6 +1,7 @@
 #!/bin/sh
 # OVCP — OpenVPN control plane: started as root, ovcp drops to its own
 # account; foreground, runit respawns.
+exec 2>&1 # stderr too goes to the log service (vlogger)
 # shellcheck disable=SC1091  # optional, doesn't exist unless an operator adds it
 [ -r conf ] && . ./conf
 : "${OVCP_DATA:=/var/lib/ovcp}"

@@ -4,12 +4,15 @@ pkgname=ovcp
 version=0.0.0
 revision=1
 build_style=gnu-makefile
-make_install_args="prefix=/usr"
-hostmakedepends="go gcc nodejs mandoc"
+# a release tarball has no .git for the Makefile to read its version from
+make_build_args="VERSION=${version}"
+hostmakedepends="go gcc nodejs mdocml"
+# ponytail: native only; map XBPS_TARGET_MACHINE to a TARGET when cross builds are wanted
+nocross="no XBPS_TARGET_MACHINE to TARGET mapping yet"
 depends="openvpn"
 system_accounts="ovcp"
 short_desc="OpenVPN Control Plane — web UI and native PKI for OpenVPN"
-maintainer="YOUR NAME <YOUR EMAIL>"
+maintainer="Maulusck <maulusck@pm.me>"
 license="MIT"
 homepage="https://goldrake.bot.nu/c/maulusck/ovcp"
 distfiles="${homepage}/archive/v${version}.tar.gz"
