@@ -1,6 +1,8 @@
+# check=skip=InvalidDefaultArgInFrom
 # OVCP all-in-one image: ovcp runs as the image's ovcp account (man ovcp, PRIVILEGES). Run
 # examples: README.md "Container"; TARGET=/cross-build/cache details: docs/BUILD.md.
-# Toolchain versions come from `make versions` (make image, CI's image job).
+# Toolchain versions come from `make versions` (make image, CI's image job), never
+# defaults: a missing one fails at FROM, so BuildKit's check for them is skipped.
 ARG GO_VERSION NODE_VERSION ZIG_VERSION ALPINE_VERSION
 FROM --platform=$BUILDPLATFORM docker.io/library/node:${NODE_VERSION}-alpine${ALPINE_VERSION} AS ui
 WORKDIR /src/web/ui
