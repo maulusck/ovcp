@@ -100,10 +100,13 @@ check-nfpm:
 	@$(call require,nfpm,nfpm (packaging))
 	@$(call want,nfpm --version,$(NFPM_VERSION),nfpm)
 
-# Packages are named by TARGET, unique in the table above: two TARGETs sharing a
-# distro arch (armv6, armv7: armhf) never write, or release, the same file.
+# package(format,target): what `make install` stages in dist/root plus nfpm.yaml's own files,
+# named by TARGET (unique in the table above, so armv6 and armv7, both armhf, never collide).
+package = rm -rf dist/root && $(MAKE) --no-print-directory install DESTDIR=$(CURDIR)/dist/root prefix=/usr && \
+	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $(1) -t dist/ovcp_$(VERSION)_$(2).$(subst archlinux,pkg.tar.zst,$(1))
+
 deb rpm archlinux: check-nfpm release ## build package (needs nfpm; TARGET= to cross-build first, see build)
-	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/ovcp_$(VERSION)_$(TARGET).$(subst archlinux,pkg.tar.zst,$@)
+	$(call package,$@,$(TARGET))
 
 apk: check-nfpm ## build Alpine/OpenWrt package (needs nfpm; forces TARGET to musl unless you set one yourself)
 	@case "$(APK_TARGET)" in \
@@ -111,7 +114,7 @@ apk: check-nfpm ## build Alpine/OpenWrt package (needs nfpm; forces TARGET to mu
 	  *) echo "warning: TARGET=$(APK_TARGET) is not -musl; Alpine/OpenWrt are musl-only, this .apk likely won't run there" >&2 ;; \
 	esac
 	$(MAKE) TARGET=$(APK_TARGET) release
-	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/ovcp_$(VERSION)_$(APK_TARGET).apk
+	$(call package,$@,$(APK_TARGET))
 
 help: ## show targets and variables
 	@echo "targets:"
