@@ -77,6 +77,20 @@ make build TARGET=arm64     # cross, glibc arm64
 `make help`'s `TARGET` line is generated from this table (`CROSS_TARGETS`
 in the Makefile) and stays in sync with it automatically.
 
+### Hardening
+
+Every `build`, for every `TARGET`, links a position-independent executable
+(`-buildmode=pie`; static-PIE on musl) with full RELRO and `-trimpath`, then
+refuses its own output unless it is one: `cmd/elfcheck` wants ELF type DYN
+flagged PIE, a `GNU_RELRO` segment and `BIND_NOW`.
+
+`CFLAGS`, `CPPFLAGS` and `LDFLAGS` are the C toolchain's, as in any GNU
+build: they reach cgo (the SQLite driver) as `CGO_CFLAGS`, `CGO_CPPFLAGS`
+and `CGO_LDFLAGS`, never Go's linker, whose flags are the Makefile's own
+`GO_LDFLAGS`. A distro's hardening flags (`xbps-src`, `dpkg-buildflags`)
+therefore apply to the C code as given; `-Wl,-z,relro,-z,now` is always
+appended after them as a floor.
+
 ### Install
 
 Install a native build directly, without packaging it — binary, man page,

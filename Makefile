@@ -45,8 +45,10 @@ CC     := $(if $(word 3,$(t-$(TARGET))),zig cc -target $(word 3,$(t-$(TARGET))))
 # host arch from `go env`, the one source nfpm's ARCH and --platform both read (a hardcoded guess is only ever right on amd64).
 HOSTARCH := $(shell go env GOARCH)
 ARCH     := $(or $(word 4,$(t-$(TARGET))),$(HOSTARCH))
-# main.buildTarget mirrors main.version: baked in at compile time so `ovcp version` reports its actual TARGET, never guessed.
-LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.buildTarget=$(TARGET)
+# Go's linker flags. main.buildTarget mirrors main.version: baked in so `ovcp version` reports its actual TARGET.
+GO_LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTarget=$(TARGET)
+# CFLAGS, CPPFLAGS, LDFLAGS (a distro's, say) are the C toolchain's: build hands
+# them to cgo, never to Go's linker, and appends full RELRO as a floor.
 # OCI platform string for TARGET (linux/arm/v<goarm> for arm variants); cross
 # builds need binfmt/QEMU registered on this host, like any buildx cross build.
 PLATFORM := linux/$(or $(GOARCH),$(HOSTARCH))$(if $(GOARM),/v$(GOARM))
@@ -131,24 +133,26 @@ check-target:
 check-cross: check-target
 	@test -z '$(CC)' || { $(call require,zig,zig (cross-compiler for TARGET=$(TARGET))); $(call want,zig version,$(ZIG_VERSION),zig); }
 
-build: check-cross ui ## build bin/ovcp (CGO for sqlite; see help for TARGET= to cross-build via zig)
-	GOOS=$(if $(GOARCH),linux) GOARCH=$(GOARCH) GOARM=$(GOARM) CC='$(CC)' \
-		CGO_ENABLED=1 go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
+build: check-cross ui ## build bin/ovcp, a hardened PIE (CGO for sqlite; see help for TARGET= to cross-build via zig)
+	GOOS=$(if $(GOARCH),linux) GOARCH=$(GOARCH) GOARM=$(GOARM) CC='$(CC)' CGO_ENABLED=1 \
+		CGO_CFLAGS='$(CFLAGS)' CGO_CPPFLAGS='$(CPPFLAGS)' CGO_LDFLAGS='$(LDFLAGS) -Wl,-z,relro,-z,now' \
+		go build -buildmode=pie -trimpath -ldflags '$(GO_LDFLAGS)' -o bin/$(BINARY) ./cmd/ovcp
+	go run ./cmd/elfcheck bin/$(BINARY)
 
 completions: ui ## generate shell completion scripts into dist/completion
 	@mkdir -p dist/completion
-	go build -ldflags '$(LDFLAGS)' -o bin/.completions-helper ./cmd/ovcp
+	go build -ldflags '$(GO_LDFLAGS)' -o bin/.completions-helper ./cmd/ovcp
 	bin/.completions-helper completion bash > dist/completion/ovcp.bash
 	bin/.completions-helper completion zsh  > dist/completion/ovcp.zsh
 	bin/.completions-helper completion fish > dist/completion/ovcp.fish
 	@rm -f bin/.completions-helper
 
 # check is every gate, the one list CI and a commit both run: fails on any
-# vet, gofmt, web UI type or mandoc complaint, any failed test and any skipped
-# test. The UI is type-checked against the web API's types, generated from Go.
+# vet, gofmt, web UI type or mandoc complaint, an unhardened build, any failed
+# or skipped test. The UI is type-checked against the web API's types, from Go.
 check: SHELL := /bin/bash
 check: .SHELLFLAGS := -eo pipefail -c
-check: ui ## run every gate: vet, gofmt, UI types, mandoc lint, all tests, none skipped
+check: build ## run every gate: hardened build, vet, gofmt, UI types, mandoc lint, all tests, none skipped
 	go vet ./cmd/... ./internal/...
 	go run ./cmd/apits > web/ui/src/api.gen.d.ts
 	cd web/ui && npm run -s check
