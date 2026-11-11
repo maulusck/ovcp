@@ -1,8 +1,7 @@
 name: ci
 
-# Every push and PR runs `make check` (BUILD.md, Tests). A v* tag then builds
-# every TARGET, publishes the GitHub release and the ghcr.io image, only once
-# the gates pass. See BUILD.md for each stage.
+# Every push and PR runs make check; a v* tag then builds every TARGET and publishes
+# the release and the ghcr.io image, once the gate passes (BUILD.md, CI).
 on: [push, pull_request]
 
 defaults:

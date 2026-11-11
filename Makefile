@@ -22,9 +22,8 @@ VERSION := $(shell v=$$(git describe --tags --dirty 2>/dev/null) && echo $${v#v}
 prefix  ?= /usr
 DESTDIR ?=
 
-# TARGET: "host" (default) builds native; every other value cross-compiles via zig cc
-# (one tool, real non-emulated, glibc+musl). Row: GOARCH, GOARM (- if native), zig
-# target triple, nfpm arch spelling.
+# TARGET rows: GOARCH, GOARM (- if none), zig triple, nfpm arch. "host" (default)
+# builds natively; every row cross-compiles through zig cc, glibc and musl alike.
 t-arm64        = arm64   - aarch64-linux-gnu     arm64
 t-arm64-musl   = arm64   - aarch64-linux-musl    arm64
 t-armv7        = arm     7 arm-linux-gnueabihf   arm7
@@ -42,22 +41,18 @@ TARGET ?= host
 GOARCH := $(word 1,$(t-$(TARGET)))
 GOARM  := $(filter-out -,$(word 2,$(t-$(TARGET))))
 CC     := $(if $(word 3,$(t-$(TARGET))),zig cc -target $(word 3,$(t-$(TARGET))))
-# host arch from `go env`, the one source nfpm's ARCH and --platform both read (a hardcoded guess is only ever right on amd64).
+# This host's arch, from go env: nfpm's ARCH and the image platform for TARGET=host.
 HOSTARCH := $(shell go env GOARCH)
 ARCH     := $(or $(word 4,$(t-$(TARGET))),$(HOSTARCH))
-# Go's linker flags. main.buildTarget mirrors main.version: baked in so `ovcp version` reports its actual TARGET.
+# Go's linker flags; `ovcp version` reports main.version and main.buildTarget.
 GO_LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTarget=$(TARGET)
-# CFLAGS, CPPFLAGS, LDFLAGS (a distro's, say) are the C toolchain's: link hands
-# them to cgo, never to Go's linker, and appends full RELRO as a floor.
 # platform(target): its OCI platform (linux/arm/v<goarm> for arm). A cross
 # image needs binfmt/QEMU registered on this host, like any buildx cross build.
 platform = linux/$(or $(word 1,$(t-$(1))),$(HOSTARCH))$(if $(filter-out -,$(word 2,$(t-$(1)))),/v$(word 2,$(t-$(1))))
 PLATFORM := $(call platform,$(TARGET))
 
-# apk (Alpine/OpenWrt) is musl-only: force it unless TARGET was actually
-# named on the command line - so `make deb rpm apk` in one call doesn't
-# silently ship a glibc .apk just because TARGET defaulted to host for the
-# other formats. An explicit TARGET (even a non-musl one) is still honored.
+# apk is musl-only: unless TARGET is given on the command line it builds
+# <hostarch>-musl, so `make deb apk` never ships a glibc .apk.
 ifeq ($(origin TARGET),command line)
 APK_TARGET := $(TARGET)
 else
@@ -102,8 +97,8 @@ check-nfpm:
 	@$(call require,nfpm,nfpm (packaging))
 	@$(call want,nfpm --version,$(NFPM_VERSION),nfpm)
 
-# package(format,target): what `make install` stages in dist/root plus nfpm.yaml's own files,
-# named by TARGET (unique in the table above, so armv6 and armv7, both armhf, never collide).
+# package(format,target): what `make install` stages in dist/root plus nfpm.yaml's
+# own files, named by TARGET, which is unique, so no two packages share a name.
 package = rm -rf dist/root && $(MAKE) --no-print-directory install DESTDIR=$(CURDIR)/dist/root prefix=/usr && \
 	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $(1) -t dist/ovcp_$(VERSION)_$(2).$(subst archlinux,pkg.tar.zst,$(1))
 
@@ -146,7 +141,8 @@ check-target:
 check-cross: check-target
 	@test -z '$(CC)' || { $(call require,zig,zig (cross-compiler for TARGET=$(TARGET))); $(call want,zig version,$(ZIG_VERSION),zig); }
 
-# The one link step, for build and bin: CGO for sqlite, a hardened PIE checked as such.
+# The one link step (build, bin): a cgo PIE that elfcheck verifies. CFLAGS, CPPFLAGS and
+# LDFLAGS (a distro's) reach cgo, never Go's linker; full RELRO is always appended.
 define link
 GOOS=$(if $(GOARCH),linux) GOARCH=$(GOARCH) GOARM=$(GOARM) CC='$(CC)' CGO_ENABLED=1 \
 	CGO_CFLAGS='$(CFLAGS)' CGO_CPPFLAGS='$(CPPFLAGS)' CGO_LDFLAGS='$(LDFLAGS) -Wl,-z,relro,-z,now' \
@@ -167,10 +163,8 @@ completions: ui ## generate shell completion scripts into dist/completion
 	go run ./cmd/ovcp completion zsh  > dist/completion/ovcp.zsh
 	go run ./cmd/ovcp completion fish > dist/completion/ovcp.fish
 
-# check is every gate, the one list CI and a commit both run: fails on any
-# vet, gofmt, web UI type or mandoc complaint, an unhardened build, an install
-# that compiles, two TARGETs' packages sharing a name, any failed or skipped test. The UI is type-checked against
-# the web API's types, generated from Go.
+# Every gate, run by CI and before each commit: a hardened build, an install that never compiles,
+# unique package names, CI's matrix, vet, the UI against Go's API types, gofmt, mandoc, all tests.
 check: SHELL := /bin/bash
 check: .SHELLFLAGS := -eo pipefail -c
 check: release ## run every gate: hardened build, vet, gofmt, UI types, mandoc lint, all tests, none skipped

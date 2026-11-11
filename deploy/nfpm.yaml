@@ -6,9 +6,8 @@ maintainer: &maintainer Maulusck <maulusck@pm.me>
 description: OpenVPN Control Plane — web UI and native PKI for OpenVPN
 license: MIT
 depends: [openvpn]
-# optional: dnsmasq gates the Records tab, nftables gates the Upstreams tab —
-# both advisory at runtime, ovcp works fully without either. apk/archlinux
-# have no such concept and just drop this field; deb/rpm get real Suggests:.
+# optional at runtime: dnsmasq gates the Records tab, nftables the Upstreams tab;
+# deb and rpm suggest them, apk and Arch have no such field.
 suggests: [dnsmasq, nftables]
 scripts:
   postinstall: &postinstall deploy/postinstall.sh
@@ -37,9 +36,7 @@ contents:
     packager: apk
     file_info:
       mode: 0755
-  # OpenWrt also installs .apk (apk-tools replaced opkg there), but runs
-  # procd, not OpenRC — postinstall.sh swaps this in over the OpenRC
-  # script above when /etc/rc.common (procd's marker) is present.
+  # OpenWrt's procd script; postinstall puts it in place there
   - src: deploy/openwrt/ovcp.init
     dst: /usr/lib/ovcp/ovcp.procd-init
     packager: apk

@@ -1,6 +1,5 @@
 #!/sbin/openrc-run
-# shellcheck disable=SC2034  # name/description/command/... are read by openrc-run itself, not unused.
-# OVCP — OpenVPN control plane: started as root, ovcp drops to its own account; supervised/respawned.
+# Started as root, ovcp drops to its own account; supervise-daemon respawns it.
 
 name="ovcp"
 description="OVCP — OpenVPN control plane"
@@ -9,7 +8,6 @@ command_args="serve"
 supervisor="supervise-daemon"
 
 depend() {
-	# soft, not need: matches the systemd unit's Wants= (not Requires=) —
-	# start even if networking never comes up, same as there.
+	# soft, like the unit's Wants=: start even if networking never comes up
 	use net dns
 }

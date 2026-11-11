@@ -1,6 +1,6 @@
 #!/bin/sh
-# ovcp owns the data dir outright; `init -skeleton` is the one place that
-# knows its layout/permissions. Honors OVCP_DATA if the installer set it.
+# Every package's install and upgrade, and the image build: idempotent; honors
+# OVCP_DATA. init -skeleton is the one owner of the data tree's layout.
 set -e
 DATA="${OVCP_DATA:-/var/lib/ovcp}"
 # the account ovcp drops to (see dropRoot): useradd (deb/rpm) or adduser (apk/OpenWrt).
@@ -18,8 +18,8 @@ ovcp init -skeleton
 /usr/lib/ovcp/selinux.sh || true
 # logrotate/log-shippers expect /var/log; symlink instead of duplicating files.
 ln -sfn "$DATA/logs" /var/log/ovcp
-# apk package is shared with Alpine (OpenRC) but OpenWrt runs procd — swap
-# in the procd script when present (see deploy/nfpm.yaml's apk override).
+# One .apk serves Alpine (OpenRC) and OpenWrt, which runs procd (/etc/rc.common):
+# there the procd script replaces the OpenRC one.
 if [ -f /etc/rc.common ] && [ -f /usr/lib/ovcp/ovcp.procd-init ]; then
 	mv /usr/lib/ovcp/ovcp.procd-init /etc/init.d/ovcp
 fi
