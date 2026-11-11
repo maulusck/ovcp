@@ -1,23 +1,19 @@
 # Template file for 'ovcp'
-# shellcheck disable=SC2034  # every var here is read by xbps-src itself
 pkgname=ovcp
-version=0.0.0
+version=0.1.1
 revision=1
 build_style=gnu-makefile
-# a release tarball has no .git for the Makefile to read its version from
 make_build_args="VERSION=${version}"
 hostmakedepends="go gcc nodejs mdocml"
-# ponytail: native only; map XBPS_TARGET_MACHINE to a TARGET when cross builds are wanted
-nocross="no XBPS_TARGET_MACHINE to TARGET mapping yet"
 depends="openvpn"
-system_accounts="ovcp"
 short_desc="OpenVPN Control Plane — web UI and native PKI for OpenVPN"
 maintainer="Maulusck <maulusck@pm.me>"
 license="MIT"
 homepage="https://goldrake.bot.nu/c/maulusck/ovcp"
 distfiles="${homepage}/archive/v${version}.tar.gz"
-# fill in after tagging: sha256sum the tarball at $distfiles
-checksum=REPLACE_ME
+checksum=27244d6ca6d38e664afe2a9d603d0c55011f0f3eee334590678662796778b91c
+nocross="no XBPS_TARGET_MACHINE to TARGET mapping yet"
+system_accounts="_ovcp"
 
 post_install() {
 	vsv ovcp
