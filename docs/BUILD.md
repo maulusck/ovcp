@@ -94,9 +94,12 @@ appended after them as a floor.
 ### Install
 
 Install a native build directly, without packaging it — binary, man page,
-and shell completions, `DESTDIR`/`prefix` honored (GNU Coding Standards):
+and shell completions, `DESTDIR`/`prefix` honored (GNU Coding Standards).
+`install` only copies what `make` built and never compiles, so the root step
+runs no toolchain and installs exactly the binary that was built:
 
 ```sh
+make
 sudo make install
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin ovcp   # the account ovcp runs as; packages create it
 ```
