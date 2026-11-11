@@ -5,7 +5,7 @@ require = command -v $(firstword $(1)) >/dev/null 2>&1 $(patsubst %,|| command -
 # rest here. `make versions` prints them; CI and the image build read that.
 GO_VERSION     := $(shell sed -n 's/^go //p' go.mod)
 NODE_VERSION   := $(shell cat web/ui/.nvmrc)
-ZIG_VERSION    := 0.17.0
+ZIG_VERSION    := 0.17.1
 NFPM_VERSION   := 2.48.0
 ALPINE_VERSION := 3.24
 TOOLCHAIN      := GO_VERSION NODE_VERSION ZIG_VERSION NFPM_VERSION ALPINE_VERSION
