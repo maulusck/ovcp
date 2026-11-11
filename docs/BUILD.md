@@ -292,9 +292,12 @@ Install a built package:
 
 ```sh
 sudo apt install ./dist/ovcp_*.deb              # Debian/Ubuntu
-sudo rpm -i dist/ovcp-*.rpm                      # Fedora/RHEL
-sudo apk add --allow-untrusted dist/ovcp-*.apk   # Alpine/OpenWrt
+sudo rpm -i dist/ovcp_*.rpm                      # Fedora/RHEL
+sudo apk add --allow-untrusted dist/ovcp_*.apk   # Alpine/OpenWrt
 ```
+
+Every package is named `ovcp_<version>_<TARGET>.<ext>`: `TARGET`s that share
+a distro arch (`armv6` and `armv7` are both Debian `armhf`) never collide.
 
 ### Void Linux
 
@@ -381,7 +384,9 @@ Its `test` job runs `make check` on every push and pull request. A `v*` tag
 push also runs three release stages, each only after `test` passes, all on
 the toolchain versions `make versions` prints (see Requirements):
 
-1. **`build`** — every `TARGET` row above, as a separate matrix job:
+1. **`build`** — every `TARGET` row above, as a separate matrix job, all
+   through zig, so every glibc row has one glibc floor, zig's (a `host`
+   build would need the runner's):
    binary, shell completions, and (`.deb`/`.rpm`/`.zst` for glibc targets,
    `.apk` for musl targets) the matching package, uploaded as a build
    artifact.

@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [host, arm64, armv7, armv6, riscv64, amd64-musl, arm64-musl, armv7-musl, armv6-musl, riscv64-musl]
+        target: [amd64, arm64, armv7, armv6, riscv64, amd64-musl, arm64-musl, armv7-musl, armv6-musl, riscv64-musl]
     steps:
       - *checkout
       - run: make -s versions >> "$GITHUB_ENV"
@@ -52,8 +52,7 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq mandoc
           curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" | tar -xz -C "$RUNNER_TEMP" nfpm
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-      - name: install zig
-        if: matrix.target != 'host' # only the cross-compile targets need it
+      - name: install zig # every row is a zig build: one glibc floor for all, not the runner's
         run: |
           curl -fsSL "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/zig-x86_64-linux-$ZIG_VERSION" >> "$GITHUB_PATH"

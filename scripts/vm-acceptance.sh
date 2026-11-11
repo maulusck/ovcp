@@ -114,7 +114,7 @@ fi
 echo "== build"
 cd $SRC && rm -f dist/*.deb && make deb >$T/deb.log 2>&1
 DEB=$(ls dist/ovcp_*.deb 2>/dev/null)
-t "deb built, untagged version 0.0.0~<hash>, not dirty" "echo '$DEB' | grep -qE 'ovcp_0\.0\.0~[0-9a-f]+_amd64\.deb$'"
+t "deb built, named by version and TARGET, not dirty" "echo '$DEB' | grep -qE '^dist/ovcp_[0-9][^_]*_host\.deb$' && ! echo '$DEB' | grep -q dirty"
 
 echo "== install (.deb, systemd)"
 t "apt install" "sudo -n apt-get install -y ./$DEB"

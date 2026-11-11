@@ -100,8 +100,10 @@ check-nfpm:
 	@$(call require,nfpm,nfpm (packaging))
 	@$(call want,nfpm --version,$(NFPM_VERSION),nfpm)
 
+# Packages are named by TARGET, unique in the table above: two TARGETs sharing a
+# distro arch (armv6, armv7: armhf) never write, or release, the same file.
 deb rpm archlinux: check-nfpm release ## build package (needs nfpm; TARGET= to cross-build first, see build)
-	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
+	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/ovcp_$(VERSION)_$(TARGET).$(subst archlinux,pkg.tar.zst,$@)
 
 apk: check-nfpm ## build Alpine/OpenWrt package (needs nfpm; forces TARGET to musl unless you set one yourself)
 	@case "$(APK_TARGET)" in \
@@ -109,7 +111,7 @@ apk: check-nfpm ## build Alpine/OpenWrt package (needs nfpm; forces TARGET to mu
 	  *) echo "warning: TARGET=$(APK_TARGET) is not -musl; Alpine/OpenWrt are musl-only, this .apk likely won't run there" >&2 ;; \
 	esac
 	$(MAKE) TARGET=$(APK_TARGET) release
-	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/
+	VERSION=$(VERSION) ARCH=$(ARCH) nfpm package -f deploy/nfpm.yaml -p $@ -t dist/ovcp_$(VERSION)_$(APK_TARGET).apk
 
 help: ## show targets and variables
 	@echo "targets:"
@@ -156,12 +158,13 @@ completions: ui ## generate shell completion scripts into dist/completion
 
 # check is every gate, the one list CI and a commit both run: fails on any
 # vet, gofmt, web UI type or mandoc complaint, an unhardened build, an install
-# that compiles, any failed or skipped test. The UI is type-checked against
+# that compiles, two TARGETs' packages sharing a name, any failed or skipped test. The UI is type-checked against
 # the web API's types, generated from Go.
 check: SHELL := /bin/bash
 check: .SHELLFLAGS := -eo pipefail -c
 check: release ## run every gate: hardened build, vet, gofmt, UI types, mandoc lint, all tests, none skipped
 	! $(MAKE) -n install | grep -E '^(go|cd web)'
+	test $$({ $(foreach t,$(CROSS_TARGETS),$(MAKE) -n deb TARGET=$t;) } | grep -o 'dist/ovcp_[^ ]*' | sort -u | wc -l) = $(words $(CROSS_TARGETS))
 	go vet ./cmd/... ./internal/...
 	go run ./cmd/apits > web/ui/src/api.gen.d.ts
 	cd web/ui && npm run -s check
