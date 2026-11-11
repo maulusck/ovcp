@@ -16,7 +16,7 @@ RUN npm run build
 # Runs on the builder's own platform (not emulated), cross-compiling through the Makefile's own
 # `bin` (zig, hardening, the TARGET table). Always musl (final stage is Alpine).
 FROM --platform=$BUILDPLATFORM docker.io/library/golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS build
-ARG VERSION=dev
+ARG VERSION
 ARG TARGETARCH TARGETVARIANT ZIG_VERSION
 # zig at ZIG_VERSION from ziglang.org, as CI: Alpine packages an older one.
 # This stage runs natively, so uname -m is zig's arch name (x86_64, aarch64).
@@ -33,11 +33,10 @@ COPY internal ./internal
 COPY web/web.go ./web/
 COPY --from=ui /src/web/dist ./web/dist
 COPY docs/ovcp.8 ./docs/
-RUN mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
 # cache mount, not a layer: without it, any source change forces a from-scratch zig/go rebuild.
 # See docs/BUILD.md, "The persistent build cache". TARGET is e.g. armv7-musl (arm + v7).
 RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
-    make bin TARGET="$TARGETARCH$TARGETVARIANT-musl" VERSION="$VERSION"
+    make docs bin TARGET="$TARGETARCH$TARGETVARIANT-musl" VERSION="$VERSION"
 
 FROM docker.io/library/alpine:${ALPINE_VERSION}
 # refresh base packages at build time, not just whatever the base image last

@@ -63,7 +63,7 @@ else
 APK_TARGET := $(HOSTARCH)-musl
 endif
 
-.PHONY: build bin check versions image-args clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
+.PHONY: build bin docs check versions image-args clean install help ui release man image deb rpm apk archlinux deps completions check-target check-cross check-nfpm check-image
 
 release: build completions ## UI + binary + shell completions
 
@@ -128,9 +128,15 @@ web/ui/node_modules: web/ui/package.json web/ui/package-lock.json
 	cd web/ui && npm ci --no-fund
 	@touch $@
 
+# The UI's Docs tab; after the UI build, which empties web/dist.
+render_docs = mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
+
 ui: web/ui/node_modules ## build svelte UI into web/dist (needs mandoc, for the in-app Docs tab)
 	cd web/ui && npm run build
-	mandoc -T html -O fragment docs/ovcp.8 > web/dist/docs.html
+	$(render_docs)
+
+docs: ## render docs/ovcp.8 into a built web/dist (the image's UI comes from its own stage)
+	$(render_docs)
 
 check-target:
 	@test "$(TARGET)" = host -o -n "$(t-$(TARGET))" || { echo "unknown TARGET=$(TARGET) (see: make help)"; exit 1; }
