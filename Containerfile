@@ -42,15 +42,13 @@ RUN --mount=type=cache,id=ovcp-build-cache,target=/root/.cache \
 FROM docker.io/library/alpine:${ALPINE_VERSION}
 # refresh base packages at build time, not just whatever the base image last
 # baked in — this ships a VPN/PKI tool, worth the extra seconds.
-RUN apk upgrade --no-cache && apk add --no-cache openvpn dnsmasq nftables \
-    && adduser -S -D -H ovcp && install -d -o ovcp -m 0700 /var/lib/ovcp
+RUN apk upgrade --no-cache && apk add --no-cache openvpn dnsmasq nftables
 COPY --from=build /src/bin/ovcp /usr/bin/ovcp
+COPY deploy/selinux.sh /usr/lib/ovcp/selinux.sh
+# the packages' own postinstall: account, data tree, /var/log/ovcp
+RUN --mount=type=bind,source=deploy/postinstall.sh,target=/tmp/postinstall.sh sh /tmp/postinstall.sh
 # no secret defaults: init prompts (-it) or takes -e OVCP_CA_PASSPHRASE/OVCP_USER_PASSWORD
-ENV OVCP_DATA=/var/lib/ovcp \
-    OVCP_LISTEN=0.0.0.0:8443
-# logrotate/log-shippers expect /var/log; symlink into the data volume
-# instead of duplicating files.
-RUN ln -s /var/lib/ovcp/logs /var/log/ovcp
+ENV OVCP_LISTEN=0.0.0.0:8443
 VOLUME /var/lib/ovcp
 EXPOSE 1194/udp 8443/tcp
 ENTRYPOINT ["ovcp"]

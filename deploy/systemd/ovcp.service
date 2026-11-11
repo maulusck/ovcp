@@ -7,7 +7,6 @@ Wants=network-online.target
 # systemd drops privileges itself: ovcp never starts as root, and it and its
 # openvpn/dnsmasq/nft children hold only these two capabilities.
 ExecStart=/usr/bin/ovcp serve
-Environment=OVCP_DATA=/var/lib/ovcp
 User=ovcp
 Group=ovcp
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE

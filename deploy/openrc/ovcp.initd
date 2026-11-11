@@ -7,15 +7,9 @@ description="OVCP — OpenVPN control plane"
 command="/usr/bin/ovcp"
 command_args="serve"
 supervisor="supervise-daemon"
-: "${OVCP_DATA:=/var/lib/ovcp}"
-export OVCP_DATA
 
 depend() {
 	# soft, not need: matches the systemd unit's Wants= (not Requires=) —
 	# start even if networking never comes up, same as there.
 	use net dns
-}
-
-start_pre() {
-	/usr/bin/ovcp init -skeleton
 }

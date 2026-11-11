@@ -6,14 +6,9 @@ START=95
 STOP=05
 USE_PROCD=1
 
-OVCP_DATA="${OVCP_DATA:-/var/lib/ovcp}"
-
 start_service() {
-	/usr/bin/ovcp init -skeleton
-
 	procd_open_instance
 	procd_set_param command /usr/bin/ovcp serve
-	procd_set_param env OVCP_DATA="$OVCP_DATA"
 	procd_set_param respawn
 	procd_close_instance
 }
