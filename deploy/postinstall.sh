@@ -22,5 +22,4 @@ ln -sfn "$DATA/logs" /var/log/ovcp
 # in the procd script when present (see deploy/nfpm.yaml's apk override).
 if [ -f /etc/rc.common ] && [ -f /usr/lib/ovcp/ovcp.procd-init ]; then
 	mv /usr/lib/ovcp/ovcp.procd-init /etc/init.d/ovcp
-	chmod 755 /etc/init.d/ovcp
 fi

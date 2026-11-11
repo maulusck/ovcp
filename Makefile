@@ -87,8 +87,7 @@ platforms: ## print the image's platforms, one per -musl TARGET (CI's multi-arch
 	@echo $(foreach t,$(sort $(filter %-musl,$(CROSS_TARGETS))),$(call platform,$t)) | tr ' ' ,
 
 CTR := $(shell command -v podman || command -v docker)
-# id=ovcp-build-cache in the Containerfile's zig/go RUN mount; reused by
-# image (says it's using this) and clean (reminds it isn't touched by rm -rf).
+# id=ovcp-build-cache in the Containerfile's zig/go RUN mount, which clean leaves alone.
 CACHE_HINT := podman/docker builder prune reclaims the persistent build cache (id=ovcp-build-cache)
 
 check-image: check-target
@@ -97,7 +96,6 @@ check-image: check-target
 	  { echo "error: this host can't run $(PLATFORM) containers (no working QEMU/binfmt for it) - see docs/BUILD.md, 'Cross-building an image needs QEMU/binfmt'"; exit 1; }
 
 image: check-image ## build all-in-one container image for TARGET's arch (default: this host's own); podman, else docker
-	@echo "using persistent zig/go build cache - $(CACHE_HINT)"
 	$(CTR) build --platform $(PLATFORM) -t ovcp -t ovcp:$(VERSION) --build-arg VERSION=$(VERSION) $(IMAGE_ARGS) -f Containerfile .
 
 check-nfpm:
