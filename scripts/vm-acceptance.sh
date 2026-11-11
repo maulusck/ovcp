@@ -105,6 +105,7 @@ if [ "${1:-}" = apk ]; then # the .apk on the Alpine client (OpenRC) instead of 
 	t "account ovcp in its own group" "[ \"\$(C id -gn ovcp)\" = ovcp ]"
 	t "init, rc-service start" "C 'OVCP_CA_PASSPHRASE=$CA OVCP_USER_PASSWORD=$ADM ovcp init -server-cn vm3.example && rc-service ovcp start' && sleep 6"
 	t "serve + workers: ovcp, CapEff 0x1400, NoNewPrivs 0 (OpenRC)" "C \"\$(declare -f creds); creds 0\""
+	t "apk upgrade re-runs postinstall (/var/log/ovcp restored)" "C 'rm /var/log/ovcp' && make apk VERSION=999.0.0 >$T/up.log 2>&1 && scp -q dist/ovcp_999.0.0_*.apk $VM:/root/ovcp-up.apk && C 'apk add -q --allow-untrusted /root/ovcp-up.apk && test -L /var/log/ovcp'"
 	echo "== RESULT: $PASSES passed, $FAILS failed"; rm -rf "$T"; [ $FAILS -eq 0 ]; exit
 fi
 

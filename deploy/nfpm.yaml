@@ -10,9 +10,11 @@ depends: [openvpn]
 # both advisory at runtime, ovcp works fully without either. apk/archlinux
 # have no such concept and just drop this field; deb/rpm get real Suggests:.
 suggests: [dnsmasq, nftables]
-archlinux: { packager: *maintainer }
 scripts:
-  postinstall: deploy/postinstall.sh
+  postinstall: &postinstall deploy/postinstall.sh
+# deb and rpm re-run postinstall on upgrade; apk and pacman run a separate hook
+apk: { scripts: { postupgrade: *postinstall } }
+archlinux: { packager: *maintainer, scripts: { postupgrade: *postinstall } }
 contents:
   - src: dist/root/
     dst: /
